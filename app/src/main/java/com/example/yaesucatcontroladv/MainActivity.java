@@ -215,6 +215,8 @@ public class MainActivity extends AppCompatActivity {
         // Pornim aplicația direct pe ecranul principal (Commands)
         comutăEcranMaster(1);
         setContentView(drawerLayout);
+        // Permitem tastaturii sa ajusteze fereastra pentru a pastra campul de editare vizibil
+        getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN);
     }
 
     private Button creeazăButonMeniu(String text, View.OnClickListener cl) {

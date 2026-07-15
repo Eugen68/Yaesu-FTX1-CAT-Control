@@ -473,16 +473,31 @@ public class EcranRttyDroid {
         llRttyMain.addView(rAndFiltru);
 
         // CAMP EDITARE FSK (latime maxima)
+        // CAMP EDITARE FSK (multi-line cu wrap)
         etRttyInputLive = new EditText(context);
         etRttyInputLive.setHint("Type live FSK text...");
         etRttyInputLive.setHintTextColor(Color.GRAY);
         etRttyInputLive.setTextColor(Color.WHITE);
         etRttyInputLive.setTextSize(14);
+        etRttyInputLive.setSingleLine(false);
+        etRttyInputLive.setMinLines(2);
+        etRttyInputLive.setMaxLines(4);
+        etRttyInputLive.setGravity(Gravity.TOP | Gravity.START);
+        etRttyInputLive.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         LinearLayout.LayoutParams pEtInput = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 130);
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         pEtInput.setMargins(0, 5, 0, 10);
         etRttyInputLive.setLayoutParams(pEtInput);
         llRttyMain.addView(etRttyInputLive);
+
+        // Auto-scroll la campul de editare cand primeste focus
+        etRttyInputLive.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus && svRttyScroll != null) {
+                svRttyScroll.postDelayed(() -> {
+                    svRttyScroll.smoothScrollTo(0, etRttyInputLive.getTop());
+                }, 200);
+            }
+        });
 
         // BUTOANE SEND SI PTT (aliniate la dreapta)
         LinearLayout rAndSendPtt = new LinearLayout(context);
