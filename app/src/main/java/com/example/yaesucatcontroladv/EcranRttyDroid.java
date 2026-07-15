@@ -10,11 +10,6 @@ import android.graphics.Typeface;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
-import android.text.SpannableString;
-import android.text.Spanned;
-import android.text.TextPaint;
-import android.text.method.LinkMovementMethod;
-import android.text.style.ClickableSpan;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -44,9 +39,11 @@ public class EcranRttyDroid {
     private Button btnDecoderToggle, btnTrackToggle;
     private EditText etRttyInputLive;
     private Button btnRttySendLive, btnRttyPttToggle;
-    private Button[] btnMacrosRtty = new Button[8];
 
-    // NOU: Interfață pentru comunicare cu Logger (click pe indicativ)
+    // Lista macro-uri stil terminal
+    private LinearLayout llMacroListContainer;
+
+    // Interfata pentru comunicare cu Logger (click pe indicativ)
     public interface OnCallsignTappedListener {
         void onCallsignTapped(String callsign);
     }
@@ -57,13 +54,13 @@ public class EcranRttyDroid {
         this.callsignListener = listener;
     }
 
-    // Stări recepție
+    // Stari receptie
     private boolean decodareRttyActiva = false;
     private boolean regimReverseSoftware = false;
     private char currentRttyShift = 'L';
     private short[] miniBufferFft = new short[512];
 
-    // Coeficienți
+    // Coeficienti
     private double frecventaTunedBaza = 2125.0;
     private double qMarkA, qSpaceA;
     private double sampleRateFiltre = 48000.0;
@@ -176,27 +173,60 @@ public class EcranRttyDroid {
     }
 
     public ScrollView getView() {
-        actualizeazaEticheteButoaneMacro();
+        actualizeazaListaMacro();
         return viewPrincipal;
     }
 
-    private void actualizeazaEticheteButoaneMacro() {
+    // ============================================================
+    // Construire lista macro-uri stil terminal
+    // ============================================================
+    private void actualizeazaListaMacro() {
+        if (llMacroListContainer == null) return;
+        llMacroListContainer.removeAllViews();
+
         SharedPreferences prefs = context.getSharedPreferences("RTTY_MACROS", Context.MODE_PRIVATE);
+
+        String[] implicite = {
+                "CQ CQ CQ DE YO9VA YO9VA K",
+                "UR RST 599 599 = BTU DE YO9VA K",
+                "73 GL SK DE YO9VA SK",
+                "NAME IS EUGENE QTH ALEXANDRIA = BTU DE YO9VA K",
+                "MY RIG IS YAESU FTX1 FIELD = BTU DE YO9VA K",
+                "WEATHER HERE IS SUNNY TEMP 25C K",
+                "PSE QSL ON LOTW K",
+                "TNX FOR QSO BI BI DE YO9VA SK"
+        };
+
         for (int i = 0; i < 8; i++) {
-            if (btnMacrosRtty[i] != null) {
-                String titluSalvat = prefs.getString("rtty_title_" + i, "").trim();
-                if (!titluSalvat.isEmpty()) {
-                    btnMacrosRtty[i].setText(titluSalvat.toUpperCase());
-                } else {
-                    String continut = prefs.getString("rtty_content_" + i, "");
-                    if (continut.isEmpty()) {
-                        btnMacrosRtty[i].setText("M" + (i + 1));
-                    } else {
-                        String preview = continut.trim().replaceAll("\\s+", " ");
-                        if (preview.length() > 5) preview = preview.substring(0, 5).trim();
-                        btnMacrosRtty[i].setText(preview.toUpperCase());
+            String continut = prefs.getString("rtty_content_" + i, "");
+            if (continut.isEmpty() && i < implicite.length) {
+                continut = implicite[i];
+            }
+
+            if (!continut.isEmpty()) {
+                final String textFinal = continut.replace("\n", " ").trim();
+
+                TextView tvMacro = new TextView(context);
+                tvMacro.setText(textFinal);
+                tvMacro.setTextColor(Color.parseColor("#00FF00"));
+                tvMacro.setTextSize(13);
+                tvMacro.setTypeface(Typeface.MONOSPACE);
+                tvMacro.setPadding(10, 8, 10, 8);
+                tvMacro.setBackgroundColor(Color.TRANSPARENT);
+
+                tvMacro.setOnClickListener(v -> {
+                    if (etRttyInputLive != null) {
+                        etRttyInputLive.setText(textFinal);
+                        etRttyInputLive.setSelection(etRttyInputLive.getText().length());
                     }
-                }
+                    tvMacro.setBackgroundColor(Color.parseColor("#33FFFFFF"));
+                    tvMacro.postDelayed(() -> tvMacro.setBackgroundColor(Color.TRANSPARENT), 150);
+                });
+
+                LinearLayout.LayoutParams pTv = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                tvMacro.setLayoutParams(pTv);
+                llMacroListContainer.addView(tvMacro);
             }
         }
     }
@@ -233,7 +263,7 @@ public class EcranRttyDroid {
         });
         llRttyMain.addView(waterfall);
 
-        // TERMINAL
+        // TERMINAL RX
         svRttyScroll = new ScrollView(context);
         LinearLayout.LayoutParams pSv = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 480);
@@ -246,13 +276,10 @@ public class EcranRttyDroid {
         tvRttyTerminal.setTextColor(Color.parseColor("#00FF00"));
         tvRttyTerminal.setTextSize(14);
         tvRttyTerminal.setTypeface(Typeface.MONOSPACE);
-        // NOU: Activăm click-urile pe SpannableString
-        tvRttyTerminal.setMovementMethod(LinkMovementMethod.getInstance());
-        tvRttyTerminal.setHighlightColor(Color.TRANSPARENT);
         svRttyScroll.addView(tvRttyTerminal);
         llRttyMain.addView(svRttyScroll);
 
-        // RÂND 1: START | CLEAR | NORM/REV | A-TUNE
+        // RAND 1: START | CLEAR | NORM/REV | A-TUNE
         LinearLayout rAndControaleRtty = new LinearLayout(context);
         rAndControaleRtty.setOrientation(LinearLayout.HORIZONTAL);
         LinearLayout.LayoutParams pBtn = new LinearLayout.LayoutParams(0, 120, 1f);
@@ -307,7 +334,7 @@ public class EcranRttyDroid {
         rAndControaleRtty.addView(btnAutoTune);
         llRttyMain.addView(rAndControaleRtty);
 
-        // RÂND 2: TOGGLE DECODER & TRACK
+        // RAND 2: TOGGLE DECODER & TRACK
         LinearLayout rAndDecoderToggle = new LinearLayout(context);
         rAndDecoderToggle.setOrientation(LinearLayout.HORIZONTAL);
         rAndDecoderToggle.setGravity(Gravity.CENTER);
@@ -402,7 +429,7 @@ public class EcranRttyDroid {
         });
         llRttyMain.addView(rAndSensibilitate);
 
-        // SLIDER LĂȚIME FILTRU
+        // SLIDER LATIME FILTRU
         LinearLayout rAndFiltru = new LinearLayout(context);
         rAndFiltru.setOrientation(LinearLayout.HORIZONTAL);
         rAndFiltru.setGravity(Gravity.CENTER_VERTICAL);
@@ -412,7 +439,7 @@ public class EcranRttyDroid {
         rAndFiltru.setLayoutParams(pRandFiltru);
 
         TextView tvFiltruLabel = new TextView(context);
-        tvFiltruLabel.setText("Lățime Filtru:");
+        tvFiltruLabel.setText("Latime Filtru:");
         tvFiltruLabel.setTextColor(Color.WHITE);
         tvFiltruLabel.setTextSize(13);
         rAndFiltru.addView(tvFiltruLabel);
@@ -444,22 +471,26 @@ public class EcranRttyDroid {
         });
         llRttyMain.addView(rAndFiltru);
 
-        // TX LIVE
-        LinearLayout rAndTxLive = new LinearLayout(context);
-        rAndTxLive.setOrientation(LinearLayout.HORIZONTAL);
-        rAndTxLive.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams pRandTx = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pRandTx.setMargins(0, 5, 0, 15);
-        rAndTxLive.setLayoutParams(pRandTx);
-
+        // CAMP EDITARE FSK (latime maxima)
         etRttyInputLive = new EditText(context);
         etRttyInputLive.setHint("Type live FSK text...");
         etRttyInputLive.setHintTextColor(Color.GRAY);
         etRttyInputLive.setTextColor(Color.WHITE);
         etRttyInputLive.setTextSize(14);
-        etRttyInputLive.setLayoutParams(new LinearLayout.LayoutParams(0, 130, 2.2f));
-        rAndTxLive.addView(etRttyInputLive);
+        LinearLayout.LayoutParams pEtInput = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 130);
+        pEtInput.setMargins(0, 5, 0, 10);
+        etRttyInputLive.setLayoutParams(pEtInput);
+        llRttyMain.addView(etRttyInputLive);
+
+        // BUTOANE SEND SI PTT (aliniate la dreapta)
+        LinearLayout rAndSendPtt = new LinearLayout(context);
+        rAndSendPtt.setOrientation(LinearLayout.HORIZONTAL);
+        rAndSendPtt.setGravity(Gravity.END);
+        LinearLayout.LayoutParams pRandSend = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pRandSend.setMargins(0, 0, 0, 15);
+        rAndSendPtt.setLayoutParams(pRandSend);
 
         btnRttySendLive = new Button(context);
         btnRttySendLive.setText("SEND");
@@ -475,7 +506,7 @@ public class EcranRttyDroid {
                 etRttyInputLive.setText("");
             }
         });
-        rAndTxLive.addView(btnRttySendLive);
+        rAndSendPtt.addView(btnRttySendLive);
 
         btnRttyPttToggle = new Button(context);
         btnRttyPttToggle.setText("PTT");
@@ -483,56 +514,33 @@ public class EcranRttyDroid {
         btnRttyPttToggle.setTextColor(Color.WHITE);
         btnRttyPttToggle.setLayoutParams(new LinearLayout.LayoutParams(0, 130, 0.9f));
         btnRttyPttToggle.setOnClickListener(v -> comutaStarePttManual());
-        rAndTxLive.addView(btnRttyPttToggle);
-        llRttyMain.addView(rAndTxLive);
+        rAndSendPtt.addView(btnRttyPttToggle);
+        llRttyMain.addView(rAndSendPtt);
 
-        // MACRO-URI
-        LinearLayout.LayoutParams pMacro = new LinearLayout.LayoutParams(0, 120, 1f);
-        pMacro.setMargins(4, 5, 4, 10);
+        // FEREASTRA LISTA MACRO-URI (stil terminal)
+        ScrollView svMacroList = new ScrollView(context);
+        LinearLayout.LayoutParams pSvMacro = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 250);
+        pSvMacro.setMargins(0, 0, 0, 10);
+        svMacroList.setLayoutParams(pSvMacro);
+        svMacroList.setBackgroundColor(Color.BLACK);
+        svMacroList.setPadding(10, 10, 10, 10);
 
-        LinearLayout rAndMacros1 = new LinearLayout(context);
-        rAndMacros1.setOrientation(LinearLayout.HORIZONTAL);
-        rAndMacros1.setLayoutParams(new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        for (int i = 0; i < 4; i++) {
-            final int indexMacro = i;
-            btnMacrosRtty[i] = new Button(context);
-            btnMacrosRtty[i].setText("M" + (i + 1));
-            btnMacrosRtty[i].setBackgroundColor(Color.parseColor("#607D8B"));
-            btnMacrosRtty[i].setTextColor(Color.WHITE);
-            btnMacrosRtty[i].setLayoutParams(pMacro);
-            btnMacrosRtty[i].setOnClickListener(v -> executaMacroRttyPeCanal(indexMacro));
-            rAndMacros1.addView(btnMacrosRtty[i]);
-        }
-        llRttyMain.addView(rAndMacros1);
-
-        LinearLayout rAndMacros2 = new LinearLayout(context);
-        rAndMacros2.setOrientation(LinearLayout.HORIZONTAL);
-        rAndMacros2.setLayoutParams(new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-        for (int i = 4; i < 8; i++) {
-            final int indexMacro = i;
-            btnMacrosRtty[i] = new Button(context);
-            btnMacrosRtty[i].setText("M" + (i + 1));
-            btnMacrosRtty[i].setBackgroundColor(Color.parseColor("#455A64"));
-            btnMacrosRtty[i].setTextColor(Color.WHITE);
-            btnMacrosRtty[i].setLayoutParams(pMacro);
-            btnMacrosRtty[i].setOnClickListener(v -> executaMacroRttyPeCanal(indexMacro));
-            rAndMacros2.addView(btnMacrosRtty[i]);
-        }
-        llRttyMain.addView(rAndMacros2);
+        llMacroListContainer = new LinearLayout(context);
+        llMacroListContainer.setOrientation(LinearLayout.VERTICAL);
+        svMacroList.addView(llMacroListContainer);
+        llRttyMain.addView(svMacroList);
 
         viewPrincipal.addView(llRttyMain);
     }
 
     // ============================================================
-    // CLICK PE INDICATIVE (Callsign → Logger)
+    // Click pe indicative (Callsign -> Logger)
     // ============================================================
     private boolean esteIndicativValid(String text) {
         if (text == null) return false;
         text = text.trim().toUpperCase();
         if (text.length() < 3 || text.length() > 10) return false;
-        // Regex: prefix + număr zonă + sufix (1-4 litere)
         return text.matches("^(?:[A-Z]{1,2}|[0-9][A-Z]|[A-Z][0-9])[0-9][A-Z]{1,4}$");
     }
 
@@ -540,8 +548,8 @@ public class EcranRttyDroid {
         if (tvRttyTerminal == null) return;
         final String callFinal = callsign.toUpperCase().trim();
 
-        SpannableString spannable = new SpannableString(callFinal);
-        ClickableSpan clickableSpan = new ClickableSpan() {
+        android.text.SpannableString spannable = new android.text.SpannableString(callFinal);
+        android.text.style.ClickableSpan clickableSpan = new android.text.style.ClickableSpan() {
             @Override
             public void onClick(View widget) {
                 if (callsignListener != null) {
@@ -550,13 +558,13 @@ public class EcranRttyDroid {
             }
 
             @Override
-            public void updateDrawState(TextPaint ds) {
+            public void updateDrawState(android.text.TextPaint ds) {
                 super.updateDrawState(ds);
-                ds.setColor(Color.parseColor("#FFD700")); // Auriu
+                ds.setColor(Color.parseColor("#FFD700"));
                 ds.setUnderlineText(true);
             }
         };
-        spannable.setSpan(clickableSpan, 0, callFinal.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        spannable.setSpan(clickableSpan, 0, callFinal.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         tvRttyTerminal.append(spannable);
     }
 
@@ -625,7 +633,6 @@ public class EcranRttyDroid {
             int bitCounter = 0;
             int currentByte = 0;
 
-            // Variabile AFC/PLL
             double fazaAFC = 0;
             double I_acc = 0, Q_acc = 0;
             double last_phase = 0;
@@ -662,7 +669,6 @@ public class EcranRttyDroid {
                     solicitaResetFiltre = false;
                 }
 
-                // FFT pentru Waterfall (decimare 48k -> 8k)
                 if (waterfall != null && read >= 3072) {
                     synchronized (vectorIstoricPeak) {
                         for (int j = 0; j < 512; j++) {
@@ -837,7 +843,7 @@ public class EcranRttyDroid {
 
     private void executaAutoTuneMecanic() {
         if (!decodareRttyActiva) {
-            Toast.makeText(context, "Pornește recepția (START) înainte de Auto-Tune.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "Porneste receptia (START) inainte de Auto-Tune.", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -887,7 +893,7 @@ public class EcranRttyDroid {
                 });
             } else {
                 activity.runOnUiThread(() ->
-                        Toast.makeText(context, "Semnal slab. Faceți acordul manual.", Toast.LENGTH_SHORT).show());
+                        Toast.makeText(context, "Semnal slab. Faceti acordul manual.", Toast.LENGTH_SHORT).show());
             }
         }, "AutoTune-Frecventa").start();
     }
@@ -902,7 +908,7 @@ public class EcranRttyDroid {
             activity.runOnUiThread(() -> {
                 if (tvRttyTerminal != null) {
                     if (decoded == '\u0007') {
-                        // Bell - ignorăm
+                        // Bell - ignoram
                     } else {
                         proceseazaCaracterPentruClick(decoded);
                     }
@@ -1002,27 +1008,5 @@ public class EcranRttyDroid {
         n += (long) (d * 1.5);
         while (System.nanoTime() < n);
         return n;
-    }
-
-    private void executaMacroRttyPeCanal(int indexCanal) {
-        SharedPreferences prefs = context.getSharedPreferences("RTTY_MACROS", Context.MODE_PRIVATE);
-        String textMacro = prefs.getString("rtty_content_" + indexCanal, "");
-        if (!textMacro.isEmpty()) {
-            transmiteMesajTextRttyBaudot(textMacro);
-        } else {
-            String[] implicite = {
-                    "CQ CQ CQ DE YO9VA YO9VA K\n",
-                    "UR RST 599 599 = BTU DE YO9VA K\n",
-                    "73 GL SK DE YO9VA SK\n",
-                    "NAME IS EUGENE QTH ALEXANDRIA = BTU DE YO9VA K\n",
-                    "MY RIG IS YAESU FTX1 FIELD = BTU DE YO9VA K\n",
-                    "WEATHER HERE IS SUNNY TEMP 25C K\n",
-                    "PSE QSL ON LOTW K\n",
-                    "TNX FOR QSO BI BI DE YO9VA SK\n"
-            };
-            if (indexCanal >= 0 && indexCanal < implicite.length) {
-                transmiteMesajTextRttyBaudot(implicite[indexCanal]);
-            }
-        }
     }
 }
