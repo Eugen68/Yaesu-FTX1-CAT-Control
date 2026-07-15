@@ -123,12 +123,12 @@ public class MainActivity extends AppCompatActivity {
         // =============================================================
         // NOU: CONECTARE RTTY → LOGGER (Click pe indicativ)
         // =============================================================
-        if (managerEcranRtty != null && managerEcranLogger != null) {
+        if (managerEcranRtty != null) {
             managerEcranRtty.setOnCallsignTappedListener(callsign -> {
-                // 1. Schimbăm ecranul la Logger (index 5 în comutăEcranMaster)
-                runOnUiThread(() -> comutăEcranMaster(5));
-                // 2. Pasăm indicativul către Logger pentru pre-completare și QRZ
-                managerEcranLogger.preiaIndicativDinRtty(callsign);
+                // Stocam indicativul in variabila statica
+                EcranRttyDroid.callsignBuffer = callsign;
+                // Confirmam vizual utilizatorului ca s-a memorat
+                runOnUiThread(() -> Toast.makeText(this, "📋 " + callsign + " memorat", Toast.LENGTH_SHORT).show());
             });
         }
 

@@ -27,6 +27,7 @@ public class EcranRttyDroid {
     private final Context context;
     private final RadioManager radioManager;
     private ScrollView viewPrincipal;
+    public static String callsignBuffer = "";
 
     // Elemente UI
     private Waterfall waterfall;
