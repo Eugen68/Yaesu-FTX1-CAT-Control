@@ -183,21 +183,22 @@ public class QsoDbHelper extends SQLiteOpenHelper {
         return v != null ? v : "";
     }
 
-    // Adaugă această metodă în clasa QsoDbHelper
+    // REPARAT (bug #1): folosește constanta TABLE_QSO în loc de string hard-coded "qsos"
+    // care cauza SQLiteException "no such table: qsos" la orice import ADIF.
+    // Migrați la db.query() cu try-with-resources pentru închidere automată cursor.
     public boolean existaQso(String call, String qsoDate, String timeOn) {
         SQLiteDatabase db = this.getReadableDatabase();
-        Cursor cursor = null;
-        try {
-            cursor = db.rawQuery(
-                    "SELECT COUNT(*) FROM qsos WHERE call = ? AND qso_date = ? AND time_on = ?",
-                    new String[]{call, qsoDate, timeOn}
-            );
-            if (cursor.moveToFirst()) {
+        try (Cursor cursor = db.query(
+                TABLE_QSO,
+                new String[]{"COUNT(*)"},
+                "call = ? AND qso_date = ? AND time_on = ?",
+                new String[]{call, qsoDate, timeOn},
+                null, null, null
+        )) {
+            if (cursor != null && cursor.moveToFirst()) {
                 return cursor.getInt(0) > 0;
             }
             return false;
-        } finally {
-            if (cursor != null) cursor.close();
         }
     }
 }
