@@ -105,7 +105,7 @@ public class BackupHelper {
     private static String nullSafe(String s) {
         return s == null ? "" : s;
     }
-
+    @androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.Q)
     private static void salveazaViaMediaStore(Context context, String numeFisier, String continut) throws Exception {
         ContentResolver resolver = context.getContentResolver();
         ContentValues values = new ContentValues();

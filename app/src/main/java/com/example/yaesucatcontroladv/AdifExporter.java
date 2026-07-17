@@ -80,7 +80,7 @@ public class AdifExporter {
             sb.append("<").append(tag).append(":").append(value.length()).append(">").append(value).append("\n");
         }
     }
-
+    @androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.Q)
     private static void salveazaAdifMediaStore(Context context, String numeFisier, String continut) throws Exception {
         ContentResolver resolver = context.getContentResolver();
         ContentValues values = new ContentValues();

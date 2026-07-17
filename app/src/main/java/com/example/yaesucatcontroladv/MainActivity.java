@@ -27,10 +27,8 @@ import androidx.core.view.GravityCompat;
 import androidx.drawerlayout.widget.DrawerLayout;
 
 public class MainActivity extends AppCompatActivity {
-
     private static final String ACTION_USB_PERMISSION = "com.example.yaesucatcontroladv.USB_PERMISSION";
 
-    // --- LOGICA DE BACKEND ȘI COMANDE MODULARĂ ---
     private RadioManager radioManager;
     private EcranComenzi managerEcranComenzi;
     private EcranRttyDroid managerEcranRtty;
@@ -39,12 +37,10 @@ public class MainActivity extends AppCompatActivity {
     private EcranLogger managerEcranLogger;
     private EcranSetariProprii managerEcranSetariProprii;
 
-    // --- ELEMENTE GRAFICE INITIALE ---
     private DrawerLayout drawerLayout;
     private FrameLayout containerPrincipal;
     private Button btnMeniuCAT, btnMeniuSettings, btnMeniuRtty, btnMeniuRttyPy, btnMeniuLogger, btnMeniuMySettings;
 
-    // --- BROADCAST RECEIVER PENTRU PERMISIUNEA USB FĂRĂ CRASH ---
     private final BroadcastReceiver usbReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -69,18 +65,14 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         if (getSupportActionBar() != null) getSupportActionBar().hide();
 
-        // 0. Cerem permisiunea de afișare peste alte aplicații și activăm modul Fullscreen
         verificaPermisiuneOverlay();
         ascundeButoaneNavigare();
 
-        // 1. Înregistrăm receptorul USB în sistem
         IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
         registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
 
-        // 2. Instanțiem creierul de comunicație serială (RadioManager)
         radioManager = new RadioManager(this);
 
-        // 3. Conectăm parserul global CAT asincron în MainActivity.java
         radioManager.setCatDataListener(cmd -> {
             runOnUiThread(() -> {
                 if (cmd.startsWith("TX ->")) {
@@ -97,8 +89,7 @@ public class MainActivity extends AppCompatActivity {
                             if (!cifre.isEmpty()) {
                                 StareRadio.setFrecventaHz(Long.parseLong(cifre));
                             }
-                        } catch (Exception ignored) {
-                        }
+                        } catch (Exception ignored) {}
                     } else if (prefix.equals("MD")) {
                         StareRadio.setModText(cmd.substring(2));
                     }
@@ -112,7 +103,6 @@ public class MainActivity extends AppCompatActivity {
             });
         });
 
-        // 4. Pre-încărcăm modulele grafice
         managerEcranComenzi = new EcranComenzi(this, radioManager);
         managerEcranRtty = new EcranRttyDroid(this, radioManager);
         managerEcranSetari = new EcranSetari(this, radioManager);
@@ -120,21 +110,14 @@ public class MainActivity extends AppCompatActivity {
         managerEcranLogger = new EcranLogger(this, radioManager);
         managerEcranSetariProprii = new EcranSetariProprii(this);
 
-        // =============================================================
-        // NOU: CONECTARE RTTY → LOGGER (Click pe indicativ)
-        // =============================================================
+        // CONEXIUNE BUFFER STATIC RTTY -> LOGGER
         if (managerEcranRtty != null) {
             managerEcranRtty.setOnCallsignTappedListener(callsign -> {
-                // Stocam indicativul in variabila statica
                 EcranRttyDroid.callsignBuffer = callsign;
-                // Confirmam vizual utilizatorului ca s-a memorat
                 runOnUiThread(() -> Toast.makeText(this, "📋 " + callsign + " memorat", Toast.LENGTH_SHORT).show());
             });
         }
 
-        // =============================================================
-        // CONSTRUIRE STRUCTURĂ GRAFICĂ CU MENIU HAMBURGER (≡)
-        // =============================================================
         drawerLayout = new DrawerLayout(this);
         drawerLayout.setLayoutParams(new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -144,7 +127,6 @@ public class MainActivity extends AppCompatActivity {
         panouCentral.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
 
-        // TOOLBAR
         LinearLayout toolbar = new LinearLayout(this);
         toolbar.setOrientation(LinearLayout.HORIZONTAL);
         toolbar.setBackgroundColor(Color.parseColor("#007ACC"));
@@ -170,13 +152,11 @@ public class MainActivity extends AppCompatActivity {
         toolbar.addView(tvTitluApp);
         panouCentral.addView(toolbar);
 
-        // CONTAINER CENTRAL FLUID
         containerPrincipal = new FrameLayout(this);
         containerPrincipal.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
         panouCentral.addView(containerPrincipal);
 
-        // MENIUL LATERAL NAVIGATION DRAWER
         LinearLayout meniuLateral = new LinearLayout(this);
         meniuLateral.setOrientation(LinearLayout.VERTICAL);
         meniuLateral.setBackgroundColor(Color.parseColor("#F5F5F5"));
@@ -195,12 +175,12 @@ public class MainActivity extends AppCompatActivity {
         tvEtichetaMeniu.setPadding(10, 0, 0, 50);
         meniuLateral.addView(tvEtichetaMeniu);
 
-        btnMeniuCAT = creeazăButonMeniu("COMMANDS", v -> comutăEcranMaster(1));
-        btnMeniuSettings = creeazăButonMeniu("STATION SETTINGS", v -> comutăEcranMaster(2));
-        btnMeniuRtty = creeazăButonMeniu("RTTY DROID", v -> comutăEcranMaster(3));
-        btnMeniuRttyPy = creeazăButonMeniu("MACROS EDITOR", v -> comutăEcranMaster(4));
-        btnMeniuLogger = creeazăButonMeniu("LOGGER", v -> comutăEcranMaster(5));
-        btnMeniuMySettings = creeazăButonMeniu("MY SETTINGS", v -> comutăEcranMaster(6));
+        btnMeniuCAT = creeazaButonMeniu("COMMANDS", v -> comutaEcranMaster(1));
+        btnMeniuSettings = creeazaButonMeniu("STATION SETTINGS", v -> comutaEcranMaster(2));
+        btnMeniuRtty = creeazaButonMeniu("RTTY DROID", v -> comutaEcranMaster(3));
+        btnMeniuRttyPy = creeazaButonMeniu("MACROS EDITOR", v -> comutaEcranMaster(4));
+        btnMeniuLogger = creeazaButonMeniu("LOGGER", v -> comutaEcranMaster(5));
+        btnMeniuMySettings = creeazaButonMeniu("MY SETTINGS", v -> comutaEcranMaster(6));
 
         meniuLateral.addView(btnMeniuCAT);
         meniuLateral.addView(btnMeniuSettings);
@@ -212,14 +192,13 @@ public class MainActivity extends AppCompatActivity {
         drawerLayout.addView(panouCentral);
         drawerLayout.addView(meniuLateral, paramsMeniu);
 
-        // Pornim aplicația direct pe ecranul principal (Commands)
-        comutăEcranMaster(1);
+        comutaEcranMaster(1);
         setContentView(drawerLayout);
-        // Permitem tastaturii sa ajusteze fereastra pentru a pastra campul de editare vizibil
+
         getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN);
     }
 
-    private Button creeazăButonMeniu(String text, View.OnClickListener cl) {
+    private Button creeazaButonMeniu(String text, View.OnClickListener cl) {
         Button b = new Button(this);
         b.setText(text);
         b.setBackgroundColor(Color.parseColor("#E0E0E0"));
@@ -233,30 +212,18 @@ public class MainActivity extends AppCompatActivity {
         return b;
     }
 
-    private void comutăEcranMaster(int indexEcran) {
+    private void comutaEcranMaster(int indexEcran) {
         if (containerPrincipal == null) return;
         containerPrincipal.removeAllViews();
 
         View viewDeAfisat = null;
         switch (indexEcran) {
-            case 1:
-                if (managerEcranComenzi != null) viewDeAfisat = managerEcranComenzi.getView();
-                break;
-            case 2:
-                if (managerEcranSetari != null) viewDeAfisat = managerEcranSetari.getView();
-                break;
-            case 3:
-                if (managerEcranRtty != null) viewDeAfisat = managerEcranRtty.getView();
-                break;
-            case 4:
-                if (managerEcranEditorMacro != null) viewDeAfisat = managerEcranEditorMacro.getView();
-                break;
-            case 5:
-                if (managerEcranLogger != null) viewDeAfisat = managerEcranLogger.getView();
-                break;
-            case 6:
-                if (managerEcranSetariProprii != null) viewDeAfisat = managerEcranSetariProprii.getView();
-                break;
+            case 1: if (managerEcranComenzi != null) viewDeAfisat = managerEcranComenzi.getView(); break;
+            case 2: if (managerEcranSetari != null) viewDeAfisat = managerEcranSetari.getView(); break;
+            case 3: if (managerEcranRtty != null) viewDeAfisat = managerEcranRtty.getView(); break;
+            case 4: if (managerEcranEditorMacro != null) viewDeAfisat = managerEcranEditorMacro.getView(); break;
+            case 5: if (managerEcranLogger != null) viewDeAfisat = managerEcranLogger.getView(); break;
+            case 6: if (managerEcranSetariProprii != null) viewDeAfisat = managerEcranSetariProprii.getView(); break;
         }
 
         if (viewDeAfisat != null) {
@@ -276,9 +243,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) {
-            ascundeButoaneNavigare();
-        }
+        if (hasFocus) ascundeButoaneNavigare();
     }
 
     private void ascundeButoaneNavigare() {
@@ -326,7 +291,6 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        // Pasăm orice rezultat către managerul de setări, care decide intern ce să facă
         if (managerEcranSetariProprii != null) {
             managerEcranSetariProprii.handleActivityResult(requestCode, resultCode, data);
         }

@@ -65,28 +65,22 @@ public class EcranLogger {
     }
 
     public LinearLayout getView() {
-        // ============================================================
-        // NOU: Verificam buffer-ul static de indicative din RTTY
-        // ============================================================
+        // LOGICA BUFFER STATIC: Preia indicativul din RTTY
         if (EcranRttyDroid.callsignBuffer != null && !EcranRttyDroid.callsignBuffer.isEmpty()) {
             String call = EcranRttyDroid.callsignBuffer;
-            EcranRttyDroid.callsignBuffer = ""; // Golim buffer-ul dupa consumare
+            EcranRttyDroid.callsignBuffer = ""; // Golim buffer-ul
 
             etCall.setText(call.toUpperCase());
             etCall.setSelection(etCall.getText().length());
 
-            // Setam ora UTC curenta
             SimpleDateFormat sdfOraAcum = new SimpleDateFormat("HH:mm", Locale.US);
             sdfOraAcum.setTimeZone(TimeZone.getTimeZone("UTC"));
             etTimeOn.setText(sdfOraAcum.format(Calendar.getInstance(TimeZone.getTimeZone("UTC")).getTime()));
 
-            // Preluam frecventa/modul de la radio
             solicitaFrecventaSiModDinRadio();
-
-            // Pornim automat cautarea QRZ + HamQTH fallback
             executaCautareQrz(call);
         } else {
-            // Comportamentul original cand nu exista nimic in buffer
+            // Comportamentul normal cand nu avem nimic in buffer
             refreshListaQso();
             solicitaFrecventaSiModDinRadio();
             if (idQsoInEditare == null) {
@@ -124,8 +118,7 @@ public class EcranLogger {
         btnCautaQrz.setText("CAUTA PE QRZ.COM");
         btnCautaQrz.setBackgroundColor(Color.parseColor("#5D4037"));
         btnCautaQrz.setTextColor(Color.WHITE);
-        LinearLayout.LayoutParams pBtnQrz = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams pBtnQrz = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         pBtnQrz.setMargins(0, 0, 0, 15);
         btnCautaQrz.setLayoutParams(pBtnQrz);
         btnCautaQrz.setOnClickListener(v -> initiazaCautareQrz());
@@ -193,8 +186,7 @@ public class EcranLogger {
         btnPreiaDinRadio.setText("PREIA FRECVENTA/MOD DIN RADIO");
         btnPreiaDinRadio.setBackgroundColor(Color.parseColor("#007ACC"));
         btnPreiaDinRadio.setTextColor(Color.WHITE);
-        LinearLayout.LayoutParams pBtnPreia = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams pBtnPreia = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         pBtnPreia.setMargins(0, 0, 0, 15);
         btnPreiaDinRadio.setLayoutParams(pBtnPreia);
         btnPreiaDinRadio.setOnClickListener(v -> solicitaFrecventaSiModDinRadio());
@@ -249,8 +241,7 @@ public class EcranLogger {
         btnAdaugaQso.setBackgroundColor(Color.parseColor("#2E7D32"));
         btnAdaugaQso.setTextColor(Color.WHITE);
         btnAdaugaQso.setTypeface(null, Typeface.BOLD);
-        LinearLayout.LayoutParams pBtnAdauga = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams pBtnAdauga = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         pBtnAdauga.setMargins(0, 5, 0, 5);
         btnAdaugaQso.setLayoutParams(pBtnAdauga);
         btnAdaugaQso.setOnClickListener(v -> salveazaQso());
@@ -260,8 +251,7 @@ public class EcranLogger {
         btnAnuleazaEditare.setText("ANULEAZA EDITAREA / QSO NOU");
         btnAnuleazaEditare.setBackgroundColor(Color.parseColor("#757575"));
         btnAnuleazaEditare.setTextColor(Color.WHITE);
-        LinearLayout.LayoutParams pBtnAnuleaza = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams pBtnAnuleaza = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         pBtnAnuleaza.setMargins(0, 0, 0, 15);
         btnAnuleazaEditare.setLayoutParams(pBtnAnuleaza);
         btnAnuleazaEditare.setVisibility(View.GONE);
@@ -276,8 +266,7 @@ public class EcranLogger {
         viewPrincipal.addView(tvIstoricLabel);
 
         lvIstoricQso = new ListView(context);
-        LinearLayout.LayoutParams pLista = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+        LinearLayout.LayoutParams pLista = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
         lvIstoricQso.setLayoutParams(pLista);
         viewPrincipal.addView(lvIstoricQso);
     }
@@ -288,8 +277,7 @@ public class EcranLogger {
         et.setHintTextColor(Color.GRAY);
         et.setTextColor(Color.WHITE);
         et.setInputType(inputType);
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         p.setMargins(0, 0, 0, 12);
         et.setLayoutParams(p);
         return et;
@@ -301,8 +289,7 @@ public class EcranLogger {
         et.setHintTextColor(Color.GRAY);
         et.setTextColor(Color.WHITE);
         et.setInputType(inputType);
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         et.setLayoutParams(p);
         return et;
     }
@@ -606,9 +593,9 @@ public class EcranLogger {
         etCall.setText(callsign.toUpperCase());
         etCall.setSelection(etCall.getText().length());
         if (etTimeOn.getText().toString().isEmpty()) {
-            SimpleDateFormat sdf = new SimpleDateFormat("HH:mm", Locale.US);
-            sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
-            etTimeOn.setText(sdf.format(Calendar.getInstance(TimeZone.getTimeZone("UTC")).getTime()));
+            java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("HH:mm", java.util.Locale.US);
+            sdf.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            etTimeOn.setText(sdf.format(java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).getTime()));
         }
         solicitaFrecventaSiModDinRadio();
         executaCautareQrz(callsign);

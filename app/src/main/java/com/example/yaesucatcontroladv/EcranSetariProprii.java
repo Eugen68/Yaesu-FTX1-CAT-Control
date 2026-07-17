@@ -197,7 +197,7 @@ public class EcranSetariProprii {
         pBtnBackup.setMargins(4, 0, 4, 10);
 
         Button btnExportBackup = new Button(context);
-        btnExportBackup.setText("📤 EXPORT\nBACKUP");
+        btnExportBackup.setText("EXPORT BACKUP");
         btnExportBackup.setBackgroundColor(Color.parseColor("#2E7D32"));
         btnExportBackup.setTextColor(Color.WHITE);
         btnExportBackup.setTextSize(11);
@@ -205,7 +205,7 @@ public class EcranSetariProprii {
         btnExportBackup.setOnClickListener(v -> executaExportBackup());
 
         Button btnImportBackup = new Button(context);
-        btnImportBackup.setText("📥 IMPORT\nBACKUP");
+        btnImportBackup.setText("IMPORT BACKUP");
         btnImportBackup.setBackgroundColor(Color.parseColor("#00695C"));
         btnImportBackup.setTextColor(Color.WHITE);
         btnImportBackup.setTextSize(11);
@@ -232,7 +232,7 @@ public class EcranSetariProprii {
         pBtnAdif.setMargins(4, 0, 4, 15);
 
         Button btnExportAdif = new Button(context);
-        btnExportAdif.setText("📜 EXPORT\nADIF LOG");
+        btnExportAdif.setText("EXPORT ADIF LOG");
         btnExportAdif.setBackgroundColor(Color.parseColor("#1565C0"));
         btnExportAdif.setTextColor(Color.WHITE);
         btnExportAdif.setTextSize(11);
@@ -240,7 +240,7 @@ public class EcranSetariProprii {
         btnExportAdif.setOnClickListener(v -> executaExportAdif());
 
         Button btnImportAdif = new Button(context);
-        btnImportAdif.setText("📥 IMPORT\nADIF LOG");
+        btnImportAdif.setText("IMPORT ADIF LOG");
         btnImportAdif.setBackgroundColor(Color.parseColor("#4527A0"));
         btnImportAdif.setTextColor(Color.WHITE);
         btnImportAdif.setTextSize(11);

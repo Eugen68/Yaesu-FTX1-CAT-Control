@@ -6,8 +6,6 @@ public class SimpleFFT {
     private final double[] cos;
     private final double[] sin;
     private final double[] window;
-
-    // Vectori de lucru alocați O SINGURĂ DATĂ (Zero GC Pressure)
     private final double[] x;
     private final double[] y;
 
@@ -24,7 +22,6 @@ public class SimpleFFT {
             sin[i] = Math.sin(-2 * Math.PI * i / n);
         }
 
-        // Fereastră Hamming
         this.window = new double[n];
         for (int i = 0; i < n; i++) {
             window[i] = 0.54 - 0.46 * Math.cos(2 * Math.PI * i / (n - 1));
@@ -87,20 +84,14 @@ public class SimpleFFT {
         }
     }
 
-
-    // ============================================================
-    // WRAPPER STATIC (SOLUȚIA FINALĂ: FFT 512 PUNCTE)
-    // Produce natural 256 de bin-uri pentru 0-4000 Hz.
-    // Fără oglindiri, fără stretching. Aliniere perfectă cu Waterfall!
-    // ============================================================
     private static SimpleFFT instantaStatica;
 
     public static float[] magnitudeSpectrum(short[] audioIn) {
         if (instantaStatica == null) {
-            instantaStatica = new SimpleFFT(512); // FFT de 512 puncte
+            instantaStatica = new SimpleFFT(512);
         }
 
-        double[] magOut = new double[256]; // 512 / 2 = 256 bin-uri reale
+        double[] magOut = new double[256];
         instantaStatica.calculeazaMagnitudine(audioIn, 0, magOut);
 
         float[] rezultat = new float[256];

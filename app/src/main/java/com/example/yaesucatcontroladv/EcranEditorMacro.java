@@ -4,6 +4,8 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.text.InputFilter;
+import android.text.InputType;
 import android.view.Gravity;
 import android.widget.Button;
 import android.widget.EditText;
@@ -13,14 +15,12 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 public class EcranEditorMacro {
-
     private final Context context;
     private ScrollView viewPrincipal;
-    // Câmpuri pentru conținutul macroului și pentru titlul butonului
+
     private final EditText[] editTextsMacros = new EditText[8];
     private final EditText[] editTitlesMacros = new EditText[8];
 
-    // Texte implicite corelate 100% cu cele din EcranRttyDroid
     private final String[] macrouriImplicite = {
             "CQ CQ CQ DE YO9VA YO9VA K\n",
             "UR RST 599 599 = BTU DE YO9VA K\n",
@@ -44,7 +44,7 @@ public class EcranEditorMacro {
 
     private void construiesteInterfata() {
         viewPrincipal = new ScrollView(context);
-        viewPrincipal.setBackgroundColor(Color.parseColor("#121212")); // Fundal închis
+        viewPrincipal.setBackgroundColor(Color.parseColor("#121212"));
 
         LinearLayout llMain = new LinearLayout(context);
         llMain.setOrientation(LinearLayout.VERTICAL);
@@ -59,7 +59,6 @@ public class EcranEditorMacro {
         tvTitlu.setPadding(0, 10, 0, 40);
         llMain.addView(tvTitlu);
 
-        // Generăm dinamic cele 8 căsuțe și butoane de salvare individuală
         for (int i = 0; i < 8; i++) {
             final int index = i;
 
@@ -78,27 +77,36 @@ public class EcranEditorMacro {
             pRand.setMargins(0, 0, 0, 15);
             randMacro.setLayoutParams(pRand);
 
-            // Câmp pentru TITLU (scurt, max 6-7 caractere recomandat)
+            // Camp pentru TITLU
             editTitlesMacros[i] = new EditText(context);
             editTitlesMacros[i].setHint("Title");
             editTitlesMacros[i].setHintTextColor(Color.GRAY);
             editTitlesMacros[i].setTextColor(Color.parseColor("#00E5FF"));
             editTitlesMacros[i].setTextSize(14);
             editTitlesMacros[i].setSingleLine(true);
-            editTitlesMacros[i].setFilters(new android.text.InputFilter[] { new android.text.InputFilter.LengthFilter(8) });
+            editTitlesMacros[i].setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+            editTitlesMacros[i].setFilters(new InputFilter[] {
+                    new InputFilter.LengthFilter(8),
+                    new InputFilter.AllCaps()
+            });
             editTitlesMacros[i].setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.8f));
             randMacro.addView(editTitlesMacros[i]);
 
-            // Câmp pentru CONȚINUT
+            // Camp pentru CONTINUT
             editTextsMacros[i] = new EditText(context);
             editTextsMacros[i].setHint("Macro content...");
             editTextsMacros[i].setHintTextColor(Color.GRAY);
             editTextsMacros[i].setTextColor(Color.WHITE);
             editTextsMacros[i].setTextSize(14);
             editTextsMacros[i].setSingleLine(false);
+            editTextsMacros[i].setInputType(InputType.TYPE_CLASS_TEXT |
+                    InputType.TYPE_TEXT_FLAG_MULTI_LINE |
+                    InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+            editTextsMacros[i].setFilters(new InputFilter[] { new InputFilter.AllCaps() });
             editTextsMacros[i].setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2.2f));
             randMacro.addView(editTextsMacros[i]);
 
+            // Buton SAVE individual
             Button btnSaveRow = new Button(context);
             btnSaveRow.setText("SAVE");
             btnSaveRow.setBackgroundColor(Color.parseColor("#007ACC"));
@@ -110,7 +118,6 @@ public class EcranEditorMacro {
             btnSaveRow.setOnClickListener(v -> {
                 String titlu = editTitlesMacros[index].getText().toString();
                 String text = editTextsMacros[index].getText().toString();
-                
                 SharedPreferences prefs = context.getSharedPreferences("RTTY_MACROS", Context.MODE_PRIVATE);
                 SharedPreferences.Editor editor = prefs.edit();
                 editor.putString("rtty_title_" + index, titlu);
@@ -123,10 +130,10 @@ public class EcranEditorMacro {
             llMain.addView(randMacro);
         }
 
-        // BUTON MASTER: SALVEAZĂ TOT
+        // BUTON MASTER: SALVEAZA TOT
         Button btnSaveAll = new Button(context);
         btnSaveAll.setText("SAVE ALL 8 MACROS");
-        btnSaveAll.setBackgroundColor(Color.parseColor("#2E7D32")); // Verde emisie
+        btnSaveAll.setBackgroundColor(Color.parseColor("#2E7D32"));
         btnSaveAll.setTextColor(Color.WHITE);
         btnSaveAll.setTypeface(null, Typeface.BOLD);
         LinearLayout.LayoutParams pSaveAll = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 140);
@@ -154,7 +161,6 @@ public class EcranEditorMacro {
         for (int i = 0; i < 8; i++) {
             String titluIncarcat = prefs.getString("rtty_title_" + i, "M" + (i + 1));
             String textIncarcat = prefs.getString("rtty_content_" + i, macrouriImplicite[i]);
-            
             if (editTitlesMacros[i] != null) {
                 editTitlesMacros[i].setText(titluIncarcat);
             }
