@@ -110,11 +110,12 @@ public class MainActivity extends AppCompatActivity {
         managerEcranLogger = new EcranLogger(this, radioManager);
         managerEcranSetariProprii = new EcranSetariProprii(this);
 
-        // CONEXIUNE BUFFER STATIC RTTY -> LOGGER
+        // CONEXIUNE RTTY -> LOGGER (Listener păstrat pentru compatibilitate,
+        // dar logica principală este acum în EcranRttyDroid.adaugaIndicativCuClick)
         if (managerEcranRtty != null) {
             managerEcranRtty.setOnCallsignTappedListener(callsign -> {
-                EcranRttyDroid.callsignBuffer = callsign;
-                runOnUiThread(() -> Toast.makeText(this, "📋 " + callsign + " memorat", Toast.LENGTH_SHORT).show());
+                // Listener-ul este acum redundant, dar îl păstrăm pentru eventuale extensii viitoare
+                // Logica de populare buffer + toast + inserare FSK este deja în EcranRttyDroid
             });
         }
 

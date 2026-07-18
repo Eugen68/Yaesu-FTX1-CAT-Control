@@ -277,6 +277,13 @@ public class EcranRttyDroid {
         tvRttyTerminal.setTextColor(Color.parseColor("#00FF00"));
         tvRttyTerminal.setTextSize(14);
         tvRttyTerminal.setTypeface(Typeface.MONOSPACE);
+
+        // ============================================================
+        // CRITIC: Activează răspunsul la click pentru ClickableSpan
+        // ============================================================
+        tvRttyTerminal.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
+        tvRttyTerminal.setHighlightColor(Color.TRANSPARENT); // Elimină fundalul gri la apăsare
+
         svRttyScroll.addView(tvRttyTerminal);
         llRttyMain.addView(svRttyScroll);
 
@@ -560,7 +567,43 @@ public class EcranRttyDroid {
         return text.matches("^(?:[A-Z]{1,2}|[0-9][A-Z]|[A-Z][0-9])[0-9][A-Z]{1,4}$");
     }
 
-    private void adaugaIndicativCuClick(String callsign) {
+    // ============================================================
+    // 1. LOGICA COMUNA (Fara cozi de asteptare, executie IMEDIATA)
+    // ============================================================
+    private void executaActiuneCallsign(String callsign) {
+        final String callFinal = callsign.toUpperCase().trim();
+
+        // PASUL 1: Stocăm MEREU în buffer-ul static pentru Logger
+        EcranRttyDroid.callsignBuffer = callFinal;
+
+        // Toast IMEDIAT (fara runOnUiThread)
+        Toast.makeText(context, "📋 " + callFinal + " memorat", Toast.LENGTH_SHORT).show();
+
+        // PASUL 2: Verificăm focusul în FSK
+        if (etRttyInputLive != null && etRttyInputLive.hasFocus()) {
+            SharedPreferences prefs = context.getSharedPreferences(
+                    EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
+            String myCall = prefs.getString(EcranSetariProprii.PREF_MY_CALL, "").trim().toUpperCase();
+
+            if (!myCall.isEmpty()) {
+                String textDeInserat = callFinal + " DE " + myCall + " KN";
+                int cursorPos = etRttyInputLive.getSelectionStart();
+                if (cursorPos < 0) cursorPos = etRttyInputLive.getText().length();
+
+                // Inserare IMEDIATA la cursor
+                etRttyInputLive.getText().insert(cursorPos, textDeInserat);
+                etRttyInputLive.setSelection(cursorPos + textDeInserat.length());
+            } else {
+                Toast.makeText(context, "⚠️ Configurează MY CALL în MY SETTINGS",
+                        Toast.LENGTH_LONG).show();
+            }
+        }
+    }
+
+    // ============================================================
+    // 2. AFISARE IN TERMINAL (Doar creeaza textul auriu clicabil)
+    // ============================================================
+    private void afiseazaIndicativColorat(String callsign) {
         if (tvRttyTerminal == null) return;
         final String callFinal = callsign.toUpperCase().trim();
 
@@ -568,11 +611,10 @@ public class EcranRttyDroid {
         android.text.style.ClickableSpan clickableSpan = new android.text.style.ClickableSpan() {
             @Override
             public void onClick(View widget) {
-                if (callsignListener != null) {
-                    callsignListener.onCallsignTapped(callFinal);
-                }
+                // Cand dai tap pe un indicativ deja afisat, doar executi actiunea
+                // (NU il mai afiseaza a doua oara in terminal)
+                onIndicativClick(callFinal);
             }
-
             @Override
             public void updateDrawState(android.text.TextPaint ds) {
                 super.updateDrawState(ds);
@@ -584,6 +626,13 @@ public class EcranRttyDroid {
         tvRttyTerminal.append(spannable);
     }
 
+    // ============================================================
+    // 3. HANDLER PENTRU CLICK PE INDICATIV EXISTENT
+    // ============================================================
+    private void onIndicativClick(String callsign) {
+        executaActiuneCallsign(callsign);
+    }
+
     private void proceseazaCaracterPentruClick(char c) {
         if (tvRttyTerminal == null) return;
 
@@ -593,7 +642,8 @@ public class EcranRttyDroid {
 
             if (!cuvant.isEmpty()) {
                 if (esteIndicativValid(cuvant)) {
-                    adaugaIndicativCuClick(cuvant);
+                    // DOAR afișare colorată (fără buffer, fără toast, fără FSK)
+                    afiseazaIndicativColorat(cuvant);
                 } else {
                     tvRttyTerminal.append(cuvant);
                 }
