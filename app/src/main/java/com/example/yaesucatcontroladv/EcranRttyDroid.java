@@ -498,8 +498,15 @@ public class EcranRttyDroid {
         etRttyInputLive.setMinLines(2);
         etRttyInputLive.setMaxLines(4);
         etRttyInputLive.setGravity(Gravity.TOP | Gravity.START);
-        etRttyInputLive.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        //etRttyInputLive.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        // Vechiul cod (doar o linie):
+        // NOUL COD (înlocuiește cu acesta):
+        etRttyInputLive.setInputType(android.text.InputType.TYPE_CLASS_TEXT |
+                android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE |
+                android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
 
+        // Filtrul AllCaps forțează majuscule chiar și la textul lipit (Paste) din clipboard
+        etRttyInputLive.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.AllCaps()});
         // ============================================================
         // BUTON X NATIV (apare doar când există text)
         // ============================================================
