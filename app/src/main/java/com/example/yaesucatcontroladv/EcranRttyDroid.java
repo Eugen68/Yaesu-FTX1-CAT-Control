@@ -479,7 +479,15 @@ public class EcranRttyDroid {
         });
         llRttyMain.addView(rAndFiltru);
 
-        // CAMP EDITARE FSK (latime maxima)
+        // CONTAINER PENTRU CAMPUL FSK + BUTON CLEAR (X)
+        LinearLayout rFskContainer = new LinearLayout(context);
+        rFskContainer.setOrientation(LinearLayout.HORIZONTAL);
+        rFskContainer.setGravity(Gravity.TOP); // Aliniem sus pentru a arata bine cand textul are mai multe randuri
+        LinearLayout.LayoutParams pFskContainer = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pFskContainer.setMargins(0, 5, 0, 10);
+        rFskContainer.setLayoutParams(pFskContainer);
+
         // CAMP EDITARE FSK (multi-line cu wrap)
         etRttyInputLive = new EditText(context);
         etRttyInputLive.setHint("Type live FSK text...");
@@ -491,11 +499,30 @@ public class EcranRttyDroid {
         etRttyInputLive.setMaxLines(4);
         etRttyInputLive.setGravity(Gravity.TOP | Gravity.START);
         etRttyInputLive.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        // Ocupa tot spatiul ramas (weight = 1f)
         LinearLayout.LayoutParams pEtInput = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pEtInput.setMargins(0, 5, 0, 10);
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         etRttyInputLive.setLayoutParams(pEtInput);
-        llRttyMain.addView(etRttyInputLive);
+        rFskContainer.addView(etRttyInputLive);
+
+        // BUTON CLEAR (X) - Sterge instant textul
+        Button btnClearFsk = new Button(context);
+        btnClearFsk.setText("✖");
+        btnClearFsk.setTextSize(18);
+        btnClearFsk.setTextColor(Color.WHITE);
+        btnClearFsk.setBackgroundColor(Color.parseColor("#B71C1C")); // Rosu inchis
+        btnClearFsk.setPadding(0, 0, 0, 0);
+        LinearLayout.LayoutParams pBtnClear = new LinearLayout.LayoutParams(130, 130);
+        pBtnClear.setMargins(10, 0, 0, 0);
+        btnClearFsk.setLayoutParams(pBtnClear);
+        btnClearFsk.setOnClickListener(v -> {
+            if (etRttyInputLive != null) {
+                etRttyInputLive.setText("");
+            }
+        });
+        rFskContainer.addView(btnClearFsk);
+
+        llRttyMain.addView(rFskContainer);
 
         // Auto-scroll la campul de editare cand primeste focus
         etRttyInputLive.setOnFocusChangeListener((v, hasFocus) -> {
