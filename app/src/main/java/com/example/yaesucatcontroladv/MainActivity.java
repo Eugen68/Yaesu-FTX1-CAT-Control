@@ -42,7 +42,7 @@ public class MainActivity extends AppCompatActivity {
     // --- ELEMENTE GRAFICE INITIALE ---
     private DrawerLayout drawerLayout;
     private FrameLayout containerPrincipal;
-    private Button btnMeniuCAT, btnMeniuSettings, btnMeniuRtty, btnMeniuRttyPy, btnMeniuLogger, btnMeniuMySettings;
+    private Button btnMeniuCAT, btnMeniuSettings, btnMeniuRtty, btnMeniuRttyPy, btnMeniuLogger, btnMeniuMySettings, btnMeniuExit;
 
     // --- BROADCAST RECEIVER PENTRU PERMISIUNEA USB FĂRĂ CRASH ---
     private final BroadcastReceiver usbReceiver = new BroadcastReceiver() {
@@ -202,12 +202,25 @@ public class MainActivity extends AppCompatActivity {
         btnMeniuLogger = creeazăButonMeniu("LOGGER", v -> comutăEcranMaster(5));
         btnMeniuMySettings = creeazăButonMeniu("MY SETTINGS", v -> comutăEcranMaster(6));
 
+// BUTON EXIT - Închidere completă cu eliberare resurse
+        btnMeniuExit = new Button(this);
+        btnMeniuExit.setText("❌ EXIT APPLICATION");
+        btnMeniuExit.setBackgroundColor(Color.parseColor("#B71C1C"));
+        btnMeniuExit.setTextColor(Color.WHITE);
+        btnMeniuExit.setTypeface(null, Typeface.BOLD);
+        LinearLayout.LayoutParams pExit = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 130);
+        pExit.setMargins(0, 30, 0, 15);
+        btnMeniuExit.setLayoutParams(pExit);
+        btnMeniuExit.setOnClickListener(v -> exitAplicatie());
+
         meniuLateral.addView(btnMeniuCAT);
         meniuLateral.addView(btnMeniuSettings);
         meniuLateral.addView(btnMeniuRtty);
         meniuLateral.addView(btnMeniuRttyPy);
         meniuLateral.addView(btnMeniuLogger);
         meniuLateral.addView(btnMeniuMySettings);
+        meniuLateral.addView(btnMeniuExit); // ← Adăugat la final
 
         drawerLayout.addView(panouCentral);
         drawerLayout.addView(meniuLateral, paramsMeniu);
@@ -273,6 +286,41 @@ public class MainActivity extends AppCompatActivity {
         drawerLayout.closeDrawer(GravityCompat.START);
     }
 
+    // ============================================================
+    // EXIT APLICATIE - Eliberare completa resurse + inchidere fortata
+    // ============================================================
+    private void exitAplicatie() {
+        new AlertDialog.Builder(this)
+                .setTitle("Confirmare Iesire")
+                .setMessage("Sigur doriti sa inchideti aplicatia?\n\nToate resursele USB si audio vor fi eliberate.")
+                .setPositiveButton("DA, INCHIDE", (dialog, which) -> {
+                    // 1. Oprim resursele RTTY (AudioRecord, thread decodare, bitmap-uri)
+                    if (managerEcranRtty != null) {
+                        managerEcranRtty.eliberareResurse();
+                    }
+
+                    // 2. Dezactivam receiver-ul USB
+                    try {
+                        unregisterReceiver(usbReceiver);
+                    } catch (Exception e) {
+                        android.util.Log.e("MAIN", "Receiver deja dezactivat", e);
+                    }
+
+                    // 3. Oprim porturile seriale si conexiunile USB
+                    if (radioManager != null) {
+                        radioManager.opresteToat();
+                    }
+
+                    // 4. Inchidem Activity-ul curent
+                    finish();
+
+                    // 5. Fortam terminarea procesului (garanteaza eliberarea completa)
+                    System.exit(0);
+                })
+                .setNegativeButton("Anuleaza", null)
+                .show();
+    }
+
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
@@ -313,11 +361,20 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+
+        // Oprim resursele RTTY (dacă nu au fost deja oprite prin EXIT)
+        if (managerEcranRtty != null) {
+            managerEcranRtty.eliberareResurse();
+        }
+
+        // Dezactivam receiver-ul USB
         try {
             unregisterReceiver(usbReceiver);
         } catch (Exception e) {
             android.util.Log.e("MAIN", "Receiver deja dezactivat", e);
         }
+
+        // Oprim porturile seriale
         if (radioManager != null) {
             radioManager.opresteToat();
         }

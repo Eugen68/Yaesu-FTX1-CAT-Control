@@ -803,7 +803,9 @@ public class EcranRttyDroid {
                         final String snrFinal = snrTextLive;
                         final int freqFinal = (int) frecventaTunedBaza;
                         Activity activity = (Activity) context;
+                        if (activity.isFinishing() || activity.isDestroyed()) return;
                         activity.runOnUiThread(() -> {
+                            if (activity.isFinishing() || activity.isDestroyed()) return;
                             if (tvFrecventaCurenta != null) {
                                 tvFrecventaCurenta.setText(String.format("MARK: %d Hz | Shift: 170 Hz | SNR: %s",
                                         freqFinal, snrFinal));
@@ -847,7 +849,14 @@ public class EcranRttyDroid {
                     }
                 }
             }
-            try { recorder.stop(); recorder.release(); } catch (Exception e) {}
+            try {
+                if (recorder.getState() == AudioRecord.STATE_INITIALIZED) {
+                    recorder.stop();
+                }
+                recorder.release();
+            } catch (Exception e) {
+                android.util.Log.e("RTTY_DECODER", "Eroare oprire AudioRecord", e);
+            }
         }).start();
     }
 
@@ -902,7 +911,9 @@ public class EcranRttyDroid {
                 double freqBinDeSus = (lowerBin + shiftBins) * (8000.0 / 512.0);
                 frecventaTunedBaza = regimReverseSoftware ? freqBinDeSus : freqBinDeJos;
 
+                if (activity.isFinishing() || activity.isDestroyed()) return;
                 activity.runOnUiThread(() -> {
+                    if (activity.isFinishing() || activity.isDestroyed()) return;
                     sincronizeazaSetariReceptie();
                     Toast.makeText(context, "Auto-Tune: " + (int) frecventaTunedBaza + " Hz",
                             Toast.LENGTH_SHORT).show();
@@ -921,7 +932,9 @@ public class EcranRttyDroid {
         char decoded = (currentRttyShift == 'L') ? ITA2_LTRS_MAP[code] : ITA2_FIGS_MAP[code];
         if (decoded != '\0') {
             Activity activity = (Activity) context;
+            if (activity.isFinishing() || activity.isDestroyed()) return;
             activity.runOnUiThread(() -> {
+                if (activity.isFinishing() || activity.isDestroyed()) return;
                 if (tvRttyTerminal != null) {
                     if (decoded == '\u0007') {
                         // Bell - ignoram
@@ -951,7 +964,9 @@ public class EcranRttyDroid {
             return;
         }
         Activity activity = (Activity) context;
+        if (activity.isFinishing() || activity.isDestroyed()) return;
         activity.runOnUiThread(() -> {
+            if (activity.isFinishing() || activity.isDestroyed()) return;
             if (tvRttyTerminal != null) {
                 tvRttyTerminal.append(android.text.Html.fromHtml(
                         "<br><font color='#FFFF00' face='monospace'>TX: " + text.trim() + "</font><br>",
@@ -963,7 +978,9 @@ public class EcranRttyDroid {
         new Thread(() -> {
             try {
                 isTransmittingRtty = true;
+                if (activity.isFinishing() || activity.isDestroyed()) return;
                 activity.runOnUiThread(() -> {
+                    if (activity.isFinishing() || activity.isDestroyed()) return;
                     btnRttyPttToggle.setBackgroundColor(Color.parseColor("#B71C1C"));
                     btnRttyPttToggle.setText("TX");
                 });
@@ -996,7 +1013,9 @@ public class EcranRttyDroid {
                 }
                 Thread.sleep(150);
                 isTransmittingRtty = false;
+                if (activity.isFinishing() || activity.isDestroyed()) return;
                 activity.runOnUiThread(() -> {
+                    if (activity.isFinishing() || activity.isDestroyed()) return;
                     btnRttyPttToggle.setBackgroundColor(Color.parseColor("#424242"));
                     btnRttyPttToggle.setText("PTT");
                 });
@@ -1024,5 +1043,31 @@ public class EcranRttyDroid {
         n += (long) (d * 1.5);
         while (System.nanoTime() < n);
         return n;
+    }
+
+    // ============================================================
+    // CURATARE RESURSE LA INCHIDEREA APLICATIEI
+    // Apelata din MainActivity.onDestroy()
+    // ============================================================
+    public void eliberareResurse() {
+        // 1. Oprim decodarea (flag-ul opreste bucla while din thread)
+        decodareRttyActiva = false;
+
+        // 2. Oprim transmisia FSK daca e activa
+        isTransmittingRtty = false;
+        if (radioManager != null && radioManager.getDataPort() != null) {
+            try {
+                radioManager.getDataPort().setDTR(false);
+                radioManager.getDataPort().setRTS(false);
+            } catch (Exception ignored) {}
+        }
+
+        // 3. Reciclam bitmap-urile Waterfall
+        if (waterfall != null) {
+            waterfall.eliberareBitmap();
+        }
+
+        // 4. Golim buffer-ul de cuvinte
+        bufferCuvantCurent.setLength(0);
     }
 }
