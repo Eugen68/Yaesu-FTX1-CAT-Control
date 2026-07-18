@@ -488,7 +488,7 @@ public class EcranRttyDroid {
         pFskContainer.setMargins(0, 5, 0, 10);
         rFskContainer.setLayoutParams(pFskContainer);
 
-        // CAMP EDITARE FSK (multi-line cu wrap)
+        // CAMP EDITARE FSK (multi-line cu wrap + buton X nativ)
         etRttyInputLive = new EditText(context);
         etRttyInputLive.setHint("Type live FSK text...");
         etRttyInputLive.setHintTextColor(Color.GRAY);
@@ -499,30 +499,52 @@ public class EcranRttyDroid {
         etRttyInputLive.setMaxLines(4);
         etRttyInputLive.setGravity(Gravity.TOP | Gravity.START);
         etRttyInputLive.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        // Ocupa tot spatiul ramas (weight = 1f)
-        LinearLayout.LayoutParams pEtInput = new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        etRttyInputLive.setLayoutParams(pEtInput);
-        rFskContainer.addView(etRttyInputLive);
 
-        // BUTON CLEAR (X) - Sterge instant textul
-        Button btnClearFsk = new Button(context);
-        btnClearFsk.setText("✖");
-        btnClearFsk.setTextSize(18);
-        btnClearFsk.setTextColor(Color.WHITE);
-        btnClearFsk.setBackgroundColor(Color.parseColor("#B71C1C")); // Rosu inchis
-        btnClearFsk.setPadding(0, 0, 0, 0);
-        LinearLayout.LayoutParams pBtnClear = new LinearLayout.LayoutParams(130, 130);
-        pBtnClear.setMargins(10, 0, 0, 0);
-        btnClearFsk.setLayoutParams(pBtnClear);
-        btnClearFsk.setOnClickListener(v -> {
-            if (etRttyInputLive != null) {
-                etRttyInputLive.setText("");
+        // ============================================================
+        // BUTON X NATIV (apare doar când există text)
+        // ============================================================
+        // Iconița X (folosim un caracter Unicode simplu, dar poți înlocui cu o iconiță drawable)
+        final android.graphics.drawable.Drawable clearIcon = new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT);
+        etRttyInputLive.setCompoundDrawablesWithIntrinsicBounds(null, null, clearIcon, null);
+        etRttyInputLive.setCompoundDrawablePadding(10);
+
+        // TextWatcher pentru a afișa/ascunde iconița X
+        etRttyInputLive.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {}
+
+            @Override
+            public void afterTextChanged(android.text.Editable s) {
+                if (s.length() > 0) {
+                    // Arătăm iconița X (roșu aprins)
+                    android.graphics.drawable.Drawable xIcon = createXIcon();
+                    etRttyInputLive.setCompoundDrawablesWithIntrinsicBounds(null, null, xIcon, null);
+                } else {
+                    // Ascundem iconița X
+                    etRttyInputLive.setCompoundDrawablesWithIntrinsicBounds(null, null, null, null);
+                }
             }
         });
-        rFskContainer.addView(btnClearFsk);
 
-        llRttyMain.addView(rFskContainer);
+        // Click pe iconița X pentru a goli câmpul
+        etRttyInputLive.setOnTouchListener((v, event) -> {
+            if (event.getAction() == android.view.MotionEvent.ACTION_UP) {
+                if (event.getRawX() >= (etRttyInputLive.getRight() - etRttyInputLive.getCompoundPaddingRight())) {
+                    etRttyInputLive.setText("");
+                    return true;
+                }
+            }
+            return false;
+        });
+
+        LinearLayout.LayoutParams pEtInput = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pEtInput.setMargins(0, 5, 0, 10);
+        etRttyInputLive.setLayoutParams(pEtInput);
+        llRttyMain.addView(etRttyInputLive);
 
         // Auto-scroll la campul de editare cand primeste focus
         etRttyInputLive.setOnFocusChangeListener((v, hasFocus) -> {
@@ -1146,5 +1168,33 @@ public class EcranRttyDroid {
 
         // 4. Golim buffer-ul de cuvinte
         bufferCuvantCurent.setLength(0);
+    }
+
+    // ============================================================
+    // Creează iconița X dinamic (fără resurse externe)
+    // ============================================================
+    private android.graphics.drawable.Drawable createXIcon() {
+        int size = 64; // dimensiune în pixeli
+        android.graphics.Bitmap bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
+
+        // Fundal roșu circular
+        android.graphics.Paint bgPaint = new android.graphics.Paint();
+        bgPaint.setColor(Color.parseColor("#B71C1C"));
+        bgPaint.setAntiAlias(true);
+        canvas.drawCircle(size / 2f, size / 2f, size / 2f, bgPaint);
+
+        // X alb în centru
+        android.graphics.Paint xPaint = new android.graphics.Paint();
+        xPaint.setColor(Color.WHITE);
+        xPaint.setStrokeWidth(6f);
+        xPaint.setAntiAlias(true);
+        xPaint.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+
+        float margin = size * 0.3f;
+        canvas.drawLine(margin, margin, size - margin, size - margin, xPaint);
+        canvas.drawLine(size - margin, margin, margin, size - margin, xPaint);
+
+        return new android.graphics.drawable.BitmapDrawable(context.getResources(), bitmap);
     }
 }
