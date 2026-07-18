@@ -14,8 +14,8 @@ public class Waterfall extends View {
         void onFrequencyTapped(int frequencyHz);
     }
 
-    private static final int SAMPLE_RATE = 8000; // Calibrat pe rata de eșantionare din DroidRTTY
-    private static final int MAX_DISPLAY_FREQUENCY = SAMPLE_RATE / 2; // 4000 Hz
+    private static final int SAMPLE_RATE = 8000;
+    private static final int MAX_DISPLAY_FREQUENCY = SAMPLE_RATE / 2;
 
     private Bitmap waterfallBitmap;
     private Canvas bitmapCanvas;
@@ -26,7 +26,6 @@ public class Waterfall extends View {
     private int shiftHz = 170;
     private OnFrequencyTappedListener listener;
 
-    // --- CORECTAT PENTRU INJECTARE DINAMICĂ: Constructor nativ pur ---
     public Waterfall(Context context) {
         super(context);
         markerPaint.setColor(Color.RED);
@@ -59,7 +58,6 @@ public class Waterfall extends View {
 
     public void pushSamples(short[] samples) {
         if (waterfallBitmap == null) return;
-        // Calculăm asincron spectrul prin noua noastră clasă matematică
         float[] magnitude = SimpleFFT.magnitudeSpectrum(samples);
         post(() -> drawNewRow(magnitude));
     }
@@ -70,13 +68,11 @@ public class Waterfall extends View {
         int height = waterfallBitmap.getHeight();
         if (height < 2) return;
 
-        // Derulăm conținutul existent cu un rând în sus (Efectul DroidRTTY original)
         Bitmap shifted = Bitmap.createBitmap(waterfallBitmap, 0, 1, width, height - 1);
         bitmapCanvas.drawColor(Color.BLACK);
         bitmapCanvas.drawBitmap(shifted, 0, 0, null);
         shifted.recycle();
 
-        // --- AUTO-SCALARE INTELIGENTĂ PE RÂNDUL CURENT (STINGE ROȘUL ARS!) ---
         float maxVal = 0f;
         float minVal = Float.MAX_VALUE;
         for (float m : magnitude) {
@@ -91,14 +87,13 @@ public class Waterfall extends View {
             pixelPaint.setColor(magnitudeToColor(magnitude[bin], minVal, range));
             bitmapCanvas.drawPoint(x, height - 1, pixelPaint);
         }
-
         invalidate();
     }
 
     private int magnitudeToColor(float magnitude, float minVal, float range) {
         double normalized = (magnitude - minVal) / range;
         normalized = Math.max(0.0, Math.min(1.0, normalized));
-        normalized = Math.sqrt(normalized); // Filtru Gamma integrat pentru contur clar
+        normalized = Math.sqrt(normalized);
 
         int blue = (int) (255 * Math.min(1.0, normalized * 3));
         int green = (int) (255 * Math.max(0.0, Math.min(1.0, (normalized - 0.33) * 3)));
@@ -112,14 +107,10 @@ public class Waterfall extends View {
         if (waterfallBitmap != null) {
             canvas.drawBitmap(waterfallBitmap, 0, 0, null);
         }
-
         int width = getWidth();
-
-        // Linia roșie 1: tonul de bază (MARK)
         float markX = ((float) tunedFrequencyHz / MAX_DISPLAY_FREQUENCY) * width;
         canvas.drawLine(markX, 0, markX, getHeight(), markerPaint);
 
-        // Linia roșie 2: tonul al doilea (SPACE), poziționat dinamic la +shiftHz
         float spaceX = (((float) tunedFrequencyHz + shiftHz) / MAX_DISPLAY_FREQUENCY) * width;
         canvas.drawLine(spaceX, 0, spaceX, getHeight(), markerPaint);
     }
@@ -127,27 +118,31 @@ public class Waterfall extends View {
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         int action = event.getAction();
-
-        // --- CORECTAT DEFINITIV: Acceptăm atât atingerea simplă (DOWN), cât și glisarea continuă (MOVE) ---
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {
             int width = getWidth();
             if (width <= 0) return true;
-
             float x = event.getX();
-            // Calculăm frecvența corespunzătoare coordonatei X curente a degetului
             int frequencyHz = (int) ((x / width) * MAX_DISPLAY_FREQUENCY);
             frequencyHz = Math.max(0, Math.min(frequencyHz, MAX_DISPLAY_FREQUENCY));
-
-            // Actualizăm poziția vizuală a celor două linii roșii pe ecran
             tunedFrequencyHz = frequencyHz;
-            invalidate(); // Cere re-desenarea imediată a liniilor roșii sub deget
-
-            // Anunțăm MainActivity / EcranRttyDroid pentru a re-acorda filtrele Chebyshev în mers
+            invalidate();
             if (listener != null) {
                 listener.onFrequencyTapped(frequencyHz);
             }
             return true;
         }
         return super.onTouchEvent(event);
+    }
+
+    // ============================================================
+    // ELIBERARE RESURSE LA INCHIDEREA APLICATIEI
+    // Apelata din EcranRttyDroid.eliberareResurse()
+    // ============================================================
+    public void eliberareBitmap() {
+        if (waterfallBitmap != null && !waterfallBitmap.isRecycled()) {
+            waterfallBitmap.recycle();
+            waterfallBitmap = null;
+            bitmapCanvas = null;
+        }
     }
 }

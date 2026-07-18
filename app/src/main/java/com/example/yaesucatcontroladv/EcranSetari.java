@@ -30,12 +30,30 @@ public class EcranSetari {
     private TextView tvLogTerminal;
     private Button btnScrollLock;
     private boolean autoScrollLogActiv = true;
-
     // Stări interne
     private boolean stareDnrOn = false;
     private int nivelDnrCurent = 1;
     private char prefixPutereStatie = '1';
     private boolean isScreenWakeLocked = false;
+
+    // ============================================================
+// BUFFER CIRCULAR PENTRU LOG CAT (previne OOM dupa ore de functionare)
+// ============================================================
+// 💡 POTI MODIFICA ACEASTA VALOARE: Numarul maxim de linii pastrate in log.
+//    200 linii ≈ 10KB memorie, suficient pentru debugging in timp real.
+//    Daca doresti un istoric mai lung, creste la 500 sau 1000.
+    private static final int MAX_LINII_LOG = 200;
+    private final java.util.LinkedList<LinieLog> bufferLog = new java.util.LinkedList<>();
+
+    // Clasa interna pentru stocarea liniilor cu informatia de culoare
+    private static class LinieLog {
+        final String text;
+        final boolean isTx;
+        LinieLog(String text, boolean isTx) {
+            this.text = text;
+            this.isTx = isTx;
+        }
+    }
 
     public EcranSetari(Context context, RadioManager radioManager) {
         this.context = context;
@@ -309,18 +327,43 @@ public class EcranSetari {
             if (tvLogTerminal != null) {
                 String textCurat = textLog.trim();
                 if (!textCurat.isEmpty()) {
-                    if (textCurat.contains("TX ->")) {
-                        // Albastru Cyan pentru emisie
-                        tvLogTerminal.append(android.text.Html.fromHtml("<font color='#00B0FF' face='monospace'>" + textCurat + "</font><br>", android.text.Html.FROM_HTML_MODE_LEGACY));
-                    } else {
-                        // REVIZIUNE DEFINITIVĂ: Pentru că sistemul ignora fontul verde, scriem direct textul simplu.
-                        // Forțăm întreaga componentă TextView să aibă culoarea Verde Fosforos (#00FF00) nativ din proprietăți!
-                        tvLogTerminal.setTextColor(Color.parseColor("#00FF00"));
-                        tvLogTerminal.append(textCurat + "\n");
+                    boolean isTx = textCurat.contains("TX ->");
+
+                    // 1. Adăugăm linia nouă în buffer-ul circular
+                    bufferLog.addLast(new LinieLog(textCurat, isTx));
+
+                    // 2. Dacă am depășit limita, eliminăm cele mai vechi linii
+                    while (bufferLog.size() > MAX_LINII_LOG) {
+                        bufferLog.removeFirst();
                     }
-                }
-                if (autoScrollLogActiv && svLogScroll != null) {
-                    svLogScroll.post(() -> svLogScroll.fullScroll(View.FOCUS_DOWN));
+
+                    // 3. Reconstruim TextView-ul folosind SpannableStringBuilder (mult mai fiabil decât HTML)
+                    android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
+
+                    for (LinieLog linie : bufferLog) {
+                        int start = sb.length();
+                        sb.append(linie.text);
+                        sb.append("\n");
+                        int end = sb.length() - 1; // -1 pentru a exclude newline-ul din colorare
+
+                        if (linie.isTx) {
+                            // TX = Albastru Cyan (#00B0FF)
+                            sb.setSpan(new android.text.style.ForegroundColorSpan(Color.parseColor("#00B0FF")),
+                                    start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                        } else {
+                            // RX = Verde Fosforos (#00FF00)
+                            sb.setSpan(new android.text.style.ForegroundColorSpan(Color.parseColor("#00FF00")),
+                                    start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                        }
+                    }
+
+                    // 4. Aplicăm conținutul colorat
+                    tvLogTerminal.setText(sb);
+
+                    // 5. Scroll automat la final
+                    if (autoScrollLogActiv && svLogScroll != null) {
+                        svLogScroll.post(() -> svLogScroll.fullScroll(View.FOCUS_DOWN));
+                    }
                 }
             }
         });
