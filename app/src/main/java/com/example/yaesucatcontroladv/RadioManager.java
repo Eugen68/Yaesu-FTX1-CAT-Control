@@ -127,11 +127,18 @@ public class RadioManager {
 
             Toast.makeText(context, "Connected to Yaesu!", Toast.LENGTH_SHORT).show();
 
-            // PORNIM IoManager-ele (inlocuiesc thread-urile manuale de dinainte)
+            // CORECTIE (regresie descoperita dupa test pe hardware real): FTX1 expune CAT
+            // si DATA ca doua UART-uri ale ACELUIASI chip fizic (Silicon Labs Dual CP210x),
+            // multiplexate pe o singura conexiune USB. Pornind DOI SerialInputOutputManager
+            // simultan (CAT + DATA), fiecare cu thread-uri proprii de citire+scriere (asa
+            // cum functioneaza biblioteca din v3.9+), am creat contentie pe conexiunea USB
+            // fizica partajata - portul CAT nu mai primea date de la statie.
+            // In plus, dataIoManager nu are NICIUN rol functional acum: setDataListener()
+            // nu e apelat nicaieri in aplicatie - portul DATA e folosit doar pentru
+            // setDTR()/setRTS() (keying FSK), nu pentru citire. Deci il eliminam complet:
+            // portul ramane deschis (setDTR/setRTS tot functioneaza), dar nu mai lansam
+            // un thread de citire inutil care concura cu cel de CAT pentru aceeasi conexiune.
             porneteIoManagerCAT();
-            if (dataPort != null) {
-                porneteIoManagerDATA();
-            }
 
             interogheazaStareStatie();
         } catch (Exception e) {
@@ -177,7 +184,13 @@ public class RadioManager {
         catIoManager.start();
     }
 
-    // OPTIMIZARE: inlocuieste vechiul pornesteThreadAscultareDATA().
+    // NEFOLOSITA MOMENTAN (vezi comentariul din deschidePorturi): pornirea acestui
+    // manager pe portul DATA a cauzat contentie pe conexiunea USB fizica partajata cu
+    // portul CAT (Dual CP210x), stricand fiabilitatea citirii CAT. O las definita, pentru
+    // eventualitatea in care se va dori procesarea reala a datelor DATA in viitor - dar
+    // atunci ar trebui gasita o solutie care sa serializeze accesul intre cele doua
+    // porturi (ex. un singur thread care le citeste alternativ), nu doi manageri
+    // independenti concurenti ca acum.
     private void porneteIoManagerDATA() {
         SerialInputOutputManager.Listener listener = new SerialInputOutputManager.Listener() {
             @Override
