@@ -788,8 +788,29 @@ public class EcranRttyDroid {
             // eroare suplimentara in estimarea de frecventa (mai ales pe semnal slab).
             // Vechea valoare fixa (960 esantioane = 20ms) nu se alinia cu perioada reala
             // de simbol (~1056 esantioane = 22ms la 45.45 baud).
-            final int ferestreAFC = 1; // cate perioade de simbol acumulam intre 2 corectii AFC
+            // OPTIMIZARE: am marit de la 1 la 2 perioade de simbol intre corectii - mai
+            // putina reactivitate, dar discriminatorul de frecventa mediaza zgomotul pe o
+            // fereastra mai mare, deci variaza mult mai putin pe semnal slab/QRM.
+            final int ferestreAFC = 2; // cate perioade de simbol acumulam intre 2 corectii AFC
             final int fereastraAFCSamples = Math.max(1, (int) Math.round(samplesPerBit)) * ferestreAFC;
+
+            // OPTIMIZARE: bucla AFC veche era proportionala pura (fara filtru de bucla) -
+            // orice zgomot din masuratoarea de eroare de frecventa se transmitea direct si
+            // integral in frecventaTunedBaza. Adaugam:
+            //  - freqErrorFiltrat: o medie exponentiala (EMA) care neteze masuratorile brute
+            //    intre ferestre succesive, in loc sa lase fiecare masuratoare bruta sa miste
+            //    direct frecventa urmarita (echivalent unui filtru de bucla simplu);
+            //  - AFC_MAX_CORECTIE_HZ: plafon pe marimea corectiei aplicate per fereastra -
+            //    un semnal RTTY normal nu deriva brusc cu zeci de Hz intre doua ferestre
+            //    consecutive (~44ms), deci limitam corectia la o valoare fizic plauzibila;
+            //  - AFC_PRAG_OUTLIER_HZ: daca masuratoarea bruta e nefiziologic de mare (fereastra
+            //    "murdara" - de ex. o tranzitie mark/space cade in mijlocul ei - sau zgomot),
+            //    o ignoram complet in loc s-o aplicam (fie si trunchiata).
+            double freqErrorFiltrat = 0;
+            final double AFC_EMA_ALPHA = 0.25;
+            final double AFC_MAX_CORECTIE_HZ = 5.0;
+            final double AFC_PRAG_OUTLIER_HZ = 20.0;
+
 
             noiseFloor = 1e-9;
 
@@ -898,19 +919,33 @@ public class EcranRttyDroid {
                         double freq_error = (delta_phase * sampleRate) / (2.0 * Math.PI * samplesSinceLastAFC);
 
                         if (magMark > magSpace * 1.2 && magMark > nivelZgomotMediu * 2.0) {
-                            if (modUrmarireFrecventa == 1) {
-                                frecventaTunedBaza += freq_error * 0.05;
-                            } else if (modUrmarireFrecventa == 2) {
-                                frecventaTunedBaza += freq_error * 0.25;
-                            }
+                            // OPTIMIZARE 3: respingere outlieri - o masuratoare nefiziologic
+                            // de mare e ignorata complet (nu doar trunchiata), tratata ca
+                            // fereastra "murdara"/zgomot, nu ca informatie partiala valida.
+                            if (Math.abs(freq_error) <= AFC_PRAG_OUTLIER_HZ) {
 
-                            if (modUrmarireFrecventa > 0) {
-                                qMarkA = 2.0 * Math.cos(2.0 * Math.PI * frecventaTunedBaza / sampleRate);
-                                double fSpace = frecventaTunedBaza + (regimReverseSoftware ? -170.0 : 170.0);
-                                qSpaceA = 2.0 * Math.cos(2.0 * Math.PI * fSpace / sampleRate);
+                                // OPTIMIZARE 1: filtru de bucla (EMA) - amortizeaza zgomotul
+                                // dintre ferestre succesive inainte de a aplica corectia.
+                                freqErrorFiltrat = freqErrorFiltrat * (1.0 - AFC_EMA_ALPHA) + freq_error * AFC_EMA_ALPHA;
 
-                                if (folosesteMatchedFilter && Math.abs(freq_error) > 0.5) {
-                                    recalculeazaShabloaneMF();
+                                // OPTIMIZARE 2: plafon pe marimea corectiei aplicate per fereastra.
+                                double freqErrorLimitat = Math.max(-AFC_MAX_CORECTIE_HZ,
+                                        Math.min(AFC_MAX_CORECTIE_HZ, freqErrorFiltrat));
+
+                                if (modUrmarireFrecventa == 1) {
+                                    frecventaTunedBaza += freqErrorLimitat * 0.05;
+                                } else if (modUrmarireFrecventa == 2) {
+                                    frecventaTunedBaza += freqErrorLimitat * 0.25;
+                                }
+
+                                if (modUrmarireFrecventa > 0) {
+                                    qMarkA = 2.0 * Math.cos(2.0 * Math.PI * frecventaTunedBaza / sampleRate);
+                                    double fSpace = frecventaTunedBaza + (regimReverseSoftware ? -170.0 : 170.0);
+                                    qSpaceA = 2.0 * Math.cos(2.0 * Math.PI * fSpace / sampleRate);
+
+                                    if (folosesteMatchedFilter && Math.abs(freq_error) > 0.5) {
+                                        recalculeazaShabloaneMF();
+                                    }
                                 }
                             }
                         }
