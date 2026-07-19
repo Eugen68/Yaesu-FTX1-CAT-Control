@@ -69,6 +69,12 @@ public class EcranRttyDroid {
     private volatile double pragSensibilitate = 0.05;
     private int modUrmarireFrecventa = 0;
 
+    // OPTIMIZARE: constanta de clasa (nu doar variabila locala in threadul de decodare),
+    // ca sa poata fi folosita si de slider-ul "Latime Filtru" pentru a lega podeaua
+    // minima de banda de rata reala de simbol (evitarea ISI la benzi prea inguste).
+    private static final double BAUD_RTTY = 45.45;
+    private static final double RCHEB_MIN = 0.985; // capatul larg al slider-ului (~115 Hz)
+
     // Matched Filter & SNR
     // OPTIMIZARE: nu mai pastram sabloanele sin/cos pe toata fereastra (O(N) per esantion),
     // ci doar constantele de rotatie pentru o corelatie glisanta recursiva O(1) per esantion
@@ -147,6 +153,25 @@ public class EcranRttyDroid {
      * la fel cum bufferul audio (mfBuffer) nu e resetat la o simpla derivare de frecventa
      * din AFC (se reseteaza doar explicit, la solicitaResetFiltre).
      */
+    /**
+     * OPTIMIZARE 1 (Varianta A): slider-ul "Latime Filtru" controleaza rCheb, folosit
+     * doar de rezonatorul Chebyshev. In modul Matched Filter, rCheb nu are niciun efect
+     * asupra decodarii - il dezactivam vizual, ca sa nu para ca ajusteaza ceva ce de
+     * fapt nu face nimic in acel mod.
+     */
+    private void actualizeazaStareSliderLatime() {
+        if (sbLatimeFiltru == null || tvFiltruValoare == null) return;
+        boolean activ = !folosesteMatchedFilter;
+        sbLatimeFiltru.setEnabled(activ);
+        sbLatimeFiltru.setAlpha(activ ? 1.0f : 0.4f);
+        if (activ) {
+            int bwHz = (int) Math.round((1.0 - rCheb) * sampleRateFiltre / (2 * Math.PI));
+            tvFiltruValoare.setText("~" + bwHz + " Hz");
+        } else {
+            tvFiltruValoare.setText("N/A (Matched Filter)");
+        }
+    }
+
     private void recalculeazaShabloaneMF() {
         if (mfBuffer != null) {
             double fMark = frecventaTunedBaza;
@@ -387,10 +412,11 @@ public class EcranRttyDroid {
             btnDecoderToggle.setText(folosesteMatchedFilter ? "DECODER: MATCHED FILTER" : "DECODER: CHEBYSHEV");
             btnDecoderToggle.setBackgroundColor(Color.parseColor(folosesteMatchedFilter ? "#6A1B9A" : "#00695C"));
             if (folosesteMatchedFilter && mfBuffer == null) {
-                initMatchedFilterTemplates(48000, 45.45);
+                initMatchedFilterTemplates(48000, BAUD_RTTY);
             }
             recalculeazaShabloaneMF();
             solicitaResetFiltre = true;
+            actualizeazaStareSliderLatime();
             Toast.makeText(context, "Decoder: " + (folosesteMatchedFilter ? "Matched Filter" : "Chebyshev"),
                     Toast.LENGTH_SHORT).show();
         });
@@ -492,15 +518,34 @@ public class EcranRttyDroid {
 
         sbLatimeFiltru.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                rCheb = 0.985 + (progress * 0.00065);
-                int bwHz = (int) Math.round((1.0 - rCheb) * 48000.0 / (2 * Math.PI));
+                // OPTIMIZARE 2: podeaua ingusta a slider-ului nu mai e fixa (~15 Hz), ci
+                // legata dinamic de rata reala de baud - sub ~1.2x rata de baud, filtrul
+                // devine mai lent decat ritmul simbolurilor si introduce ISI (distorsiune
+                // intre biti) in loc sa "curete" semnalul.
+                double bwMinHz = Math.max(20.0, BAUD_RTTY * 1.2);
+                double rChebMax = 1.0 - (bwMinHz * 2.0 * Math.PI / sampleRateFiltre);
+                rCheb = RCHEB_MIN + progress * ((rChebMax - RCHEB_MIN) / 20.0);
+
+                int bwHz = (int) Math.round((1.0 - rCheb) * sampleRateFiltre / (2 * Math.PI));
                 tvFiltruValoare.setText("~" + bwHz + " Hz");
-                solicitaResetFiltre = true;
+                // OPTIMIZARE 3: NU mai resetam filtrele la fiecare tick de drag (doar
+                // actualizam rCheb si afisajul) - resetul complet se intampla o singura
+                // data, la eliberarea degetului (onStopTrackingTouch), ca sa nu sacadam
+                // decodarea live cat utilizatorul cauta valoarea potrivita.
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) { }
-            @Override public void onStopTrackingTouch(SeekBar seekBar) { }
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                solicitaResetFiltre = true;
+            }
         });
         llRttyMain.addView(rAndFiltru);
+
+        // OPTIMIZARE 1 (Varianta A): slider-ul "Latime Filtru" controleaza doar rCheb,
+        // folosit exclusiv de decodorul Chebyshev - matched filter-ul isi are propria
+        // "latime" fixa, determinata de durata ferestrei legata de rata de baud, nu de
+        // acest control. Il dezactivam vizual in modul Matched Filter, ca sa nu para ca
+        // ajusteaza ceva ce de fapt nu are niciun efect in acel mod.
+        actualizeazaStareSliderLatime();
 
         // CONTAINER PENTRU CAMPUL FSK + BUTON CLEAR (X)
         LinearLayout rFskContainer = new LinearLayout(context);
@@ -756,7 +801,7 @@ public class EcranRttyDroid {
         new Thread(() -> {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
             int sampleRate = 48000;
-            double baudRTTY = 45.45;
+            double baudRTTY = BAUD_RTTY;
             double samplesPerBit = (double) sampleRate / baudRTTY;
             int bufferSize = AudioRecord.getMinBufferSize(sampleRate,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
