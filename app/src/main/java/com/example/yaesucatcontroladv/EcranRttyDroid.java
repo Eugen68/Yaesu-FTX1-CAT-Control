@@ -70,12 +70,23 @@ public class EcranRttyDroid {
     private int modUrmarireFrecventa = 0;
 
     // Matched Filter & SNR
+    // OPTIMIZARE: nu mai pastram sabloanele sin/cos pe toata fereastra (O(N) per esantion),
+    // ci doar constantele de rotatie pentru o corelatie glisanta recursiva O(1) per esantion
+    // (echivalent matematic cu corelatia completa pe fereastra, actualizat incremental).
     private volatile boolean folosesteMatchedFilter = false;
-    private double[] mfBuffer;
+    private double[] mfBuffer; // buffer circular cu ultimele mfSamplesPerBit esantioane (pt. x_iesit)
     private int mfBufferPos = 0;
-    private double[] mfMarkTemplateSin, mfMarkTemplateCos;
-    private double[] mfSpaceTemplateSin, mfSpaceTemplateCos;
     private int mfSamplesPerBit = 1056;
+
+    // psi = e^{-j*w} (rotatia aplicata la fiecare pas nou)
+    private double mfMarkRotRe, mfMarkRotIm;
+    private double mfSpaceRotRe, mfSpaceRotIm;
+    // PsiN = e^{+j*w*N} (constanta legata de lungimea ferestrei N = mfSamplesPerBit)
+    private double mfMarkPowNRe, mfMarkPowNIm;
+    private double mfSpacePowNRe, mfSpacePowNIm;
+    // Acumulatorul complex curent al corelatiei glisante (echivalentul sumei S(n))
+    private double mfMarkAccRe, mfMarkAccIm;
+    private double mfSpaceAccRe, mfSpaceAccIm;
     private String snrTextLive = "--.- dB";
     private double noiseFloor = 1e-9;
 
@@ -119,36 +130,48 @@ public class EcranRttyDroid {
     private void initMatchedFilterTemplates(int sampleRate, double baud) {
         mfSamplesPerBit = (int) Math.round(sampleRate / baud);
         mfBuffer = new double[mfSamplesPerBit];
-        mfMarkTemplateSin = new double[mfSamplesPerBit];
-        mfMarkTemplateCos = new double[mfSamplesPerBit];
-        mfSpaceTemplateSin = new double[mfSamplesPerBit];
-        mfSpaceTemplateCos = new double[mfSamplesPerBit];
         mfBufferPos = 0;
+        mfMarkAccRe = mfMarkAccIm = 0;
+        mfSpaceAccRe = mfSpaceAccIm = 0;
 
         double fMark = frecventaTunedBaza;
         double fSpace = frecventaTunedBaza + (regimReverseSoftware ? -170.0 : 170.0);
+        setareaConstantelorMF(fMark, fSpace, sampleRate);
+    }
 
-        for (int i = 0; i < mfSamplesPerBit; i++) {
-            double t = (double) i / sampleRate;
-            mfMarkTemplateSin[i] = Math.sin(2 * Math.PI * fMark * t);
-            mfMarkTemplateCos[i] = Math.cos(2 * Math.PI * fMark * t);
-            mfSpaceTemplateSin[i] = Math.sin(2 * Math.PI * fSpace * t);
-            mfSpaceTemplateCos[i] = Math.cos(2 * Math.PI * fSpace * t);
+    /**
+     * OPTIMIZARE: in loc sa recalculam N valori sin/cos (O(N)) de fiecare data cand se
+     * schimba frecventa (ex: din AFC, la fiecare fractiune de secunda), recalculam doar
+     * cateva constante de rotatie (O(1)). Acumulatorul corelatiei glisante (mfMarkAccRe/Im,
+     * mfSpaceAccRe/Im) NU se reseteaza aici - continua sa evolueze lin sub noua rotatie,
+     * la fel cum bufferul audio (mfBuffer) nu e resetat la o simpla derivare de frecventa
+     * din AFC (se reseteaza doar explicit, la solicitaResetFiltre).
+     */
+    private void recalculeazaShabloaneMF() {
+        if (mfBuffer != null) {
+            double fMark = frecventaTunedBaza;
+            double fSpace = frecventaTunedBaza + (regimReverseSoftware ? -170.0 : 170.0);
+            setareaConstantelorMF(fMark, fSpace, sampleRateFiltre);
         }
     }
 
-    private void recalculeazaShabloaneMF() {
-        if (mfMarkTemplateSin != null) {
-            double fMark = frecventaTunedBaza;
-            double fSpace = frecventaTunedBaza + (regimReverseSoftware ? -170.0 : 170.0);
-            for (int i = 0; i < mfSamplesPerBit; i++) {
-                double t = (double) i / sampleRateFiltre;
-                mfMarkTemplateSin[i] = Math.sin(2 * Math.PI * fMark * t);
-                mfMarkTemplateCos[i] = Math.cos(2 * Math.PI * fMark * t);
-                mfSpaceTemplateSin[i] = Math.sin(2 * Math.PI * fSpace * t);
-                mfSpaceTemplateCos[i] = Math.cos(2 * Math.PI * fSpace * t);
-            }
-        }
+    private void setareaConstantelorMF(double fMark, double fSpace, double sampleRate) {
+        double wMark = 2.0 * Math.PI * fMark / sampleRate;
+        double wSpace = 2.0 * Math.PI * fSpace / sampleRate;
+
+        // psi = e^{-j*w}  (rotatia per esantion)
+        mfMarkRotRe = Math.cos(-wMark);
+        mfMarkRotIm = Math.sin(-wMark);
+        mfSpaceRotRe = Math.cos(-wSpace);
+        mfSpaceRotIm = Math.sin(-wSpace);
+
+        // PsiN = e^{+j*w*N}  (corectia legata de esantionul care iese din fereastra)
+        double wMarkN = wMark * mfSamplesPerBit;
+        double wSpaceN = wSpace * mfSamplesPerBit;
+        mfMarkPowNRe = Math.cos(wMarkN);
+        mfMarkPowNIm = Math.sin(wMarkN);
+        mfSpacePowNRe = Math.cos(wSpaceN);
+        mfSpacePowNIm = Math.sin(wSpaceN);
     }
 
     private void sincronizeazaSetariReceptie() {
@@ -363,7 +386,7 @@ public class EcranRttyDroid {
             folosesteMatchedFilter = !folosesteMatchedFilter;
             btnDecoderToggle.setText(folosesteMatchedFilter ? "DECODER: MATCHED FILTER" : "DECODER: CHEBYSHEV");
             btnDecoderToggle.setBackgroundColor(Color.parseColor(folosesteMatchedFilter ? "#6A1B9A" : "#00695C"));
-            if (folosesteMatchedFilter && mfMarkTemplateSin == null) {
+            if (folosesteMatchedFilter && mfBuffer == null) {
                 initMatchedFilterTemplates(48000, 45.45);
             }
             recalculeazaShabloaneMF();
@@ -759,6 +782,14 @@ public class EcranRttyDroid {
             double I_acc = 0, Q_acc = 0;
             double last_phase = 0;
             int samplesSinceLastAFC = 0;
+            // OPTIMIZARE/CORECTIE: fereastra de acumulare AFC trebuie sa fie un multiplu
+            // intreg al perioadei unui simbol (samplesPerBit), altfel punctul de esantionare
+            // a fazei "aluneca" fata de granitele reale ale bitilor RTTY, ceea ce introduce
+            // eroare suplimentara in estimarea de frecventa (mai ales pe semnal slab).
+            // Vechea valoare fixa (960 esantioane = 20ms) nu se alinia cu perioada reala
+            // de simbol (~1056 esantioane = 22ms la 45.45 baud).
+            final int ferestreAFC = 1; // cate perioade de simbol acumulam intre 2 corectii AFC
+            final int fereastraAFCSamples = Math.max(1, (int) Math.round(samplesPerBit)) * ferestreAFC;
 
             noiseFloor = 1e-9;
 
@@ -787,6 +818,8 @@ public class EcranRttyDroid {
                     if (folosesteMatchedFilter && mfBuffer != null) {
                         for (int k = 0; k < mfBuffer.length; k++) mfBuffer[k] = 0;
                         mfBufferPos = 0;
+                        mfMarkAccRe = mfMarkAccIm = 0;
+                        mfSpaceAccRe = mfSpaceAccIm = 0;
                     }
                     solicitaResetFiltre = false;
                 }
@@ -814,26 +847,27 @@ public class EcranRttyDroid {
                     double diferentaBruta = 0.0;
 
                     if (folosesteMatchedFilter) {
+                        // OPTIMIZARE (era O(N) per esantion, ~1056 x4 inmultiri -> acum O(1)):
+                        // corelatie glisanta recursiva, matematic echivalenta cu suma completa
+                        // pe fereastra de mfSamplesPerBit esantioane, actualizata incremental:
+                        //   S(n+1) = psi * ( S(n) - x_iesit + x_nou * PsiN )
+                        double xIesit = mfBuffer[mfBufferPos];
                         mfBuffer[mfBufferPos] = sample;
                         mfBufferPos = (mfBufferPos + 1) % mfSamplesPerBit;
 
-                        double corrMarkSin = 0, corrMarkCos = 0;
-                        double corrSpaceSin = 0, corrSpaceCos = 0;
-                        int idx = mfBufferPos;
-                        for (int k = 0; k < mfSamplesPerBit; k++) {
-                            corrMarkSin += mfBuffer[idx] * mfMarkTemplateSin[k];
-                            corrMarkCos += mfBuffer[idx] * mfMarkTemplateCos[k];
-                            corrSpaceSin += mfBuffer[idx] * mfSpaceTemplateSin[k];
-                            corrSpaceCos += mfBuffer[idx] * mfSpaceTemplateCos[k];
-                            idx = (idx + 1) % mfSamplesPerBit;
-                        }
-                        corrMarkSin = (2.0 * corrMarkSin) / mfSamplesPerBit;
-                        corrMarkCos = (2.0 * corrMarkCos) / mfSamplesPerBit;
-                        corrSpaceSin = (2.0 * corrSpaceSin) / mfSamplesPerBit;
-                        corrSpaceCos = (2.0 * corrSpaceCos) / mfSamplesPerBit;
+                        double markInRe = mfMarkAccRe - xIesit + sample * mfMarkPowNRe;
+                        double markInIm = mfMarkAccIm + sample * mfMarkPowNIm;
+                        mfMarkAccRe = mfMarkRotRe * markInRe - mfMarkRotIm * markInIm;
+                        mfMarkAccIm = mfMarkRotRe * markInIm + mfMarkRotIm * markInRe;
 
-                        magMark = Math.sqrt(corrMarkSin * corrMarkSin + corrMarkCos * corrMarkCos);
-                        magSpace = Math.sqrt(corrSpaceSin * corrSpaceSin + corrSpaceCos * corrSpaceCos);
+                        double spaceInRe = mfSpaceAccRe - xIesit + sample * mfSpacePowNRe;
+                        double spaceInIm = mfSpaceAccIm + sample * mfSpacePowNIm;
+                        mfSpaceAccRe = mfSpaceRotRe * spaceInRe - mfSpaceRotIm * spaceInIm;
+                        mfSpaceAccIm = mfSpaceRotRe * spaceInIm + mfSpaceRotIm * spaceInRe;
+
+                        double scalareMF = 2.0 / mfSamplesPerBit;
+                        magMark = Math.sqrt(mfMarkAccRe * mfMarkAccRe + mfMarkAccIm * mfMarkAccIm) * scalareMF;
+                        magSpace = Math.sqrt(mfSpaceAccRe * mfSpaceAccRe + mfSpaceAccIm * mfSpaceAccIm) * scalareMF;
                         diferentaBruta = magMark - magSpace;
                     } else {
                         double m0 = sample - rCheb * rCheb * mx2 + qMarkA * rCheb * mx1;
@@ -854,7 +888,7 @@ public class EcranRttyDroid {
                     Q_acc += sample * Math.sin(fazaAFC);
                     samplesSinceLastAFC++;
 
-                    if (samplesSinceLastAFC >= 960) {
+                    if (samplesSinceLastAFC >= fereastraAFCSamples) {
                         double current_phase = Math.atan2(Q_acc, I_acc);
                         double delta_phase = current_phase - last_phase;
 

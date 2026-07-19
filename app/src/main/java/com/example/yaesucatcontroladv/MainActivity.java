@@ -29,6 +29,38 @@ import androidx.drawerlayout.widget.DrawerLayout;
 public class MainActivity extends AppCompatActivity {
     private static final String ACTION_USB_PERMISSION = "com.example.yaesucatcontroladv.USB_PERMISSION";
 
+    // OPTIMIZARE (fix dp/px): valorile UI erau inainte pixeli bruti, deci apareau
+    // cu marime diferita in functie de densitatea ecranului (minuscule pe telefoane
+    // cu densitate mare). Le-am convertit in dp folosind helper-ul dp() de mai jos,
+    // care foloseste TypedValue.applyDimension() - conversia oficiala Android,
+    // identica cu ce foloseste automat un layout XML.
+    // Valorile in dp de mai jos au fost deduse din vechile valori px impartite la
+    // ~3 (densitate xxhdpi, foarte comuna la telefoanele Android actuale) - rezultat
+    // confirmat de faptul ca ies in valori "rotunde" conforme cu Material Design
+    // (meniu ~250dp, butoane ~43-50dp, aproape de touch target-ul standard 48dp).
+    private static final float DP_TOOLBAR_PAD_H = 7f;
+    private static final float DP_TOOLBAR_PAD_TOP = 27f;
+    private static final float DP_HAMBURGER_SIZE = 50f;
+    private static final float DP_TITLE_PAD_START = 10f;
+    private static final float DP_MENU_PAD_H = 13f;
+    private static final float DP_MENU_PAD_TOP = 33f;
+    private static final float DP_MENU_LABEL_PAD_START = 3f;
+    private static final float DP_MENU_LABEL_PAD_BOTTOM = 17f;
+    private static final float DP_DRAWER_WIDTH = 250f;
+    private static final float DP_MENU_BUTTON_HEIGHT = 43f;
+    private static final float DP_MENU_BUTTON_MARGIN_TOP = 2f;
+    private static final float DP_MENU_BUTTON_MARGIN_BOTTOM = 5f;
+    private static final float DP_EXIT_BUTTON_MARGIN_TOP = 10f;
+    private static final float DP_EXIT_BUTTON_MARGIN_BOTTOM = 5f;
+
+    /** Converteste o valoare in dp (density-independent pixels) in pixeli reali,
+     *  tinand cont de densitatea ecranului curent - exact ce face automat Android
+     *  cand pui "dp" intr-un fisier XML. */
+    private int dp(float valoareDp) {
+        return Math.round(android.util.TypedValue.applyDimension(
+                android.util.TypedValue.COMPLEX_UNIT_DIP, valoareDp, getResources().getDisplayMetrics()));
+    }
+
     private RadioManager radioManager;
     private EcranComenzi managerEcranComenzi;
     private EcranRttyDroid managerEcranRtty;
@@ -132,14 +164,14 @@ public class MainActivity extends AppCompatActivity {
         toolbar.setOrientation(LinearLayout.HORIZONTAL);
         toolbar.setBackgroundColor(Color.parseColor("#007ACC"));
         toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.setPadding(20, 80, 20, 20);
+        toolbar.setPadding(dp(DP_TOOLBAR_PAD_H), dp(DP_TOOLBAR_PAD_TOP), dp(DP_TOOLBAR_PAD_H), dp(DP_TOOLBAR_PAD_H));
 
         Button btnHamburger = new Button(this);
         btnHamburger.setText("≡");
         btnHamburger.setTextSize(30);
         btnHamburger.setTextColor(Color.WHITE);
         btnHamburger.setBackgroundColor(Color.TRANSPARENT);
-        btnHamburger.setLayoutParams(new LinearLayout.LayoutParams(150, 150));
+        btnHamburger.setLayoutParams(new LinearLayout.LayoutParams(dp(DP_HAMBURGER_SIZE), dp(DP_HAMBURGER_SIZE)));
         btnHamburger.setOnClickListener(v -> drawerLayout.openDrawer(GravityCompat.START));
 
         TextView tvTitluApp = new TextView(this);
@@ -147,7 +179,7 @@ public class MainActivity extends AppCompatActivity {
         tvTitluApp.setTextColor(Color.WHITE);
         tvTitluApp.setTextSize(18);
         tvTitluApp.setTypeface(null, Typeface.BOLD);
-        tvTitluApp.setPadding(30, 0, 0, 0);
+        tvTitluApp.setPadding(dp(DP_TITLE_PAD_START), 0, 0, 0);
 
         toolbar.addView(btnHamburger);
         toolbar.addView(tvTitluApp);
@@ -161,10 +193,10 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout meniuLateral = new LinearLayout(this);
         meniuLateral.setOrientation(LinearLayout.VERTICAL);
         meniuLateral.setBackgroundColor(Color.parseColor("#F5F5F5"));
-        meniuLateral.setPadding(40, 100, 40, 40);
+        meniuLateral.setPadding(dp(DP_MENU_PAD_H), dp(DP_MENU_PAD_TOP), dp(DP_MENU_PAD_H), dp(DP_MENU_PAD_H));
 
         DrawerLayout.LayoutParams paramsMeniu = new DrawerLayout.LayoutParams(
-                750, DrawerLayout.LayoutParams.MATCH_PARENT);
+                dp(DP_DRAWER_WIDTH), DrawerLayout.LayoutParams.MATCH_PARENT);
         paramsMeniu.gravity = GravityCompat.START;
         meniuLateral.setLayoutParams(paramsMeniu);
 
@@ -173,7 +205,7 @@ public class MainActivity extends AppCompatActivity {
         tvEtichetaMeniu.setTextColor(Color.GRAY);
         tvEtichetaMeniu.setTextSize(13);
         tvEtichetaMeniu.setTypeface(null, Typeface.BOLD);
-        tvEtichetaMeniu.setPadding(10, 0, 0, 50);
+        tvEtichetaMeniu.setPadding(dp(DP_MENU_LABEL_PAD_START), 0, 0, dp(DP_MENU_LABEL_PAD_BOTTOM));
         meniuLateral.addView(tvEtichetaMeniu);
 
         btnMeniuCAT = creeazaButonMeniu("COMMANDS", v -> comutaEcranMaster(1));
@@ -190,8 +222,8 @@ public class MainActivity extends AppCompatActivity {
         btnMeniuExit.setTextColor(Color.WHITE);
         btnMeniuExit.setTypeface(null, Typeface.BOLD);
         LinearLayout.LayoutParams pExit = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 130);
-        pExit.setMargins(0, 30, 0, 15);
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(DP_MENU_BUTTON_HEIGHT));
+        pExit.setMargins(0, dp(DP_EXIT_BUTTON_MARGIN_TOP), 0, dp(DP_EXIT_BUTTON_MARGIN_BOTTOM));
         btnMeniuExit.setLayoutParams(pExit);
         btnMeniuExit.setOnClickListener(v -> exitAplicatie());
 
@@ -219,8 +251,8 @@ public class MainActivity extends AppCompatActivity {
         b.setTextColor(Color.BLACK);
         b.setTypeface(null, Typeface.BOLD);
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 130);
-        p.setMargins(0, 5, 0, 15);
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(DP_MENU_BUTTON_HEIGHT));
+        p.setMargins(0, dp(DP_MENU_BUTTON_MARGIN_TOP), 0, dp(DP_MENU_BUTTON_MARGIN_BOTTOM));
         b.setLayoutParams(p);
         b.setOnClickListener(cl);
         return b;

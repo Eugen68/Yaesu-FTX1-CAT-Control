@@ -19,6 +19,12 @@ public class Waterfall extends View {
 
     private Bitmap waterfallBitmap;
     private Canvas bitmapCanvas;
+    // OPTIMIZARE: bitmap "scratch" preAlocat o singura data (in onSizeChanged), refolosit
+    // la fiecare cadru prin swap de referinte, in loc sa alocam+reciclam un Bitmap nou
+    // la fiecare rand nou de waterfall (aloca presiune GC pe threadul UI, concurand cu
+    // threadul audio de decodare RTTY pentru CPU).
+    private Bitmap scratchBitmap;
+    private Canvas scratchCanvas;
     private final Paint pixelPaint = new Paint();
     private final Paint markerPaint = new Paint();
 
@@ -53,6 +59,10 @@ public class Waterfall extends View {
             waterfallBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
             bitmapCanvas = new Canvas(waterfallBitmap);
             bitmapCanvas.drawColor(Color.BLACK);
+
+            scratchBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            scratchCanvas = new Canvas(scratchBitmap);
+            scratchCanvas.drawColor(Color.BLACK);
         }
     }
 
@@ -63,15 +73,17 @@ public class Waterfall extends View {
     }
 
     private void drawNewRow(float[] magnitude) {
-        if (waterfallBitmap == null) return;
+        if (waterfallBitmap == null || scratchBitmap == null) return;
         int width = waterfallBitmap.getWidth();
         int height = waterfallBitmap.getHeight();
         if (height < 2) return;
 
-        Bitmap shifted = Bitmap.createBitmap(waterfallBitmap, 0, 1, width, height - 1);
-        bitmapCanvas.drawColor(Color.BLACK);
-        bitmapCanvas.drawBitmap(shifted, 0, 0, null);
-        shifted.recycle();
+        // OPTIMIZARE: in loc sa cream un Bitmap nou (crop) la fiecare rand si sa-l reciclam
+        // imediat (alocare+GC pe fiecare cadru), desenam continutul vechi, deplasat cu un
+        // pixel in sus, direct in bitmap-ul "scratch" preAlocat, apoi facem swap de referinte.
+        // Zero alocari noi in bucla fierbinte.
+        scratchCanvas.drawColor(Color.BLACK);
+        scratchCanvas.drawBitmap(waterfallBitmap, 0, -1, null);
 
         float maxVal = 0f;
         float minVal = Float.MAX_VALUE;
@@ -85,8 +97,19 @@ public class Waterfall extends View {
             int bin = (int) (((float) x / width) * magnitude.length);
             bin = Math.max(0, Math.min(bin, magnitude.length - 1));
             pixelPaint.setColor(magnitudeToColor(magnitude[bin], minVal, range));
-            bitmapCanvas.drawPoint(x, height - 1, pixelPaint);
+            scratchCanvas.drawPoint(x, height - 1, pixelPaint);
         }
+
+        // Swap: bitmap-ul proaspat desenat (scratch) devine bitmap-ul activ afisat,
+        // iar cel vechi devine noul "scratch" pentru cadrul urmator.
+        Bitmap tmpBmp = waterfallBitmap;
+        waterfallBitmap = scratchBitmap;
+        scratchBitmap = tmpBmp;
+
+        Canvas tmpCanvas = bitmapCanvas;
+        bitmapCanvas = scratchCanvas;
+        scratchCanvas = tmpCanvas;
+
         invalidate();
     }
 
@@ -143,6 +166,11 @@ public class Waterfall extends View {
             waterfallBitmap.recycle();
             waterfallBitmap = null;
             bitmapCanvas = null;
+        }
+        if (scratchBitmap != null && !scratchBitmap.isRecycled()) {
+            scratchBitmap.recycle();
+            scratchBitmap = null;
+            scratchCanvas = null;
         }
     }
 }

@@ -6,12 +6,15 @@ import android.content.Intent;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import android.widget.Toast;
 
 import com.hoho.android.usbserial.driver.UsbSerialDriver;
 import com.hoho.android.usbserial.driver.UsbSerialPort;
 import com.hoho.android.usbserial.driver.UsbSerialProber;
+import com.hoho.android.usbserial.util.SerialInputOutputManager;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -21,22 +24,37 @@ public class RadioManager {
     private static final String TAG = "RadioManager";
     private static final String ACTION_USB_PERMISSION = "com.example.yaesucatcontroladv.USB_PERMISSION";
     private final Context context;
+    private final Handler handlerUi = new Handler(Looper.getMainLooper());
 
     // Porturi separate
     private UsbSerialPort catPort;
     private UsbSerialPort dataPort;
 
-    // ✅ FLAG-uri separate pentru fiecare port
-    private boolean ascultareCatActiva = false;
-    private boolean ascultareDataActiva = false;
+    // OPTIMIZARE: inlocuim thread-urile proprii cu polling (Thread.sleep(20) intre
+    // citiri) cu SerialInputOutputManager din biblioteca usb-serial-for-android:
+    // - citire event-driven, onNewData() apelat imediat ce sosesc date (nu la
+    //   urmatorul "tick" de 20-70ms) -> latenta mai mica, zero risipa CPU/baterie
+    //   cand nu vine nimic;
+    // - onRunError() e apelat automat la deconectare/eroare de citire, in loc sa
+    //   trebuiasca sa prindem noi exceptia dintr-un read() manual;
+    // - stop() gestioneaza intern oprirea sigura a thread-ului de citire, eliminand
+    //   cursa veche dintre "citire in curs" si "port inchis" (vezi opresteToat()).
+    private SerialInputOutputManager catIoManager;
+    private SerialInputOutputManager dataIoManager;
 
-    // Interfață pentru CAT
+    // Buffer de asamblare comenzi CAT. Comenzile pot sosi fragmentate pe mai multe
+    // apeluri onNewData (nu vine mereu o comanda "intreaga" dintr-o citire), deci
+    // bufferul trebuie sa persiste intre apeluri -> field, nu variabila locala.
+    // Ii facem reset explicit la fiecare pornire de conexiune (porneteIoManagerCAT).
+    private final StringBuilder catSb = new StringBuilder();
+
+    // Interfata pentru CAT
     public interface CatDataListener {
         void onCatCommandReceived(String cmd);
     }
     private CatDataListener catListener;
 
-    // Interfață pentru DATA (opțional, pentru viitor)
+    // Interfata pentru DATA (optional, pentru viitor)
     public interface DataListener {
         void onDataReceived(byte[] data, int length);
     }
@@ -109,12 +127,11 @@ public class RadioManager {
 
             Toast.makeText(context, "Connected to Yaesu!", Toast.LENGTH_SHORT).show();
 
-            // ✅ PORNIM THREAD-URI SEPARATE
-            ascultareCatActiva = true;
-            ascultareDataActiva = true;
-
-            pornesteThreadAscultareCAT();
-            pornesteThreadAscultareDATA();
+            // PORNIM IoManager-ele (inlocuiesc thread-urile manuale de dinainte)
+            porneteIoManagerCAT();
+            if (dataPort != null) {
+                porneteIoManagerDATA();
+            }
 
             interogheazaStareStatie();
         } catch (Exception e) {
@@ -122,60 +139,62 @@ public class RadioManager {
         }
     }
 
-    // ✅ THREAD SEPARAT PENTRU CAT
-    private void pornesteThreadAscultareCAT() {
-        new Thread(() -> {
-            byte[] catBuffer = new byte[1024];  // ✅ Buffer dedicat CAT
-            StringBuilder catSb = new StringBuilder();  // ✅ StringBuilder dedicat CAT
+    // OPTIMIZARE: inlocuieste vechiul pornesteThreadAscultareCAT() (thread manual,
+    // buffer+StringBuilder locale, bucla while cu Thread.sleep(20)) cu un
+    // SerialInputOutputManager event-driven. Parsarea comenzilor terminate cu ';'
+    // ramane identica ca logica, doar mecanismul de livrare a datelor s-a schimbat.
+    private void porneteIoManagerCAT() {
+        catSb.setLength(0);
 
-            while (ascultareCatActiva) {
-                try {
-                    if (catPort != null && catPort.isOpen()) {
-                        int len = catPort.read(catBuffer, 50);
-                        if (len > 0) {
-                            String data = new String(catBuffer, 0, len, StandardCharsets.US_ASCII)
-                                    .replaceAll("[\\s\\n\\r]", "");
-                            catSb.append(data);
-                        }
-                    }
+        SerialInputOutputManager.Listener listener = new SerialInputOutputManager.Listener() {
+            @Override
+            public void onNewData(byte[] data) {
+                String chunk = new String(data, StandardCharsets.US_ASCII)
+                        .replaceAll("[\\s\\n\\r]", "");
+                catSb.append(chunk);
 
-                    int idx;
-                    while ((idx = catSb.indexOf(";")) != -1) {
-                        String cmd = catSb.substring(0, idx);
-                        catSb.delete(0, idx + 1);
-                        if (catListener != null) {
-                            catListener.onCatCommandReceived(cmd);
-                        }
+                int idx;
+                while ((idx = catSb.indexOf(";")) != -1) {
+                    String cmd = catSb.substring(0, idx);
+                    catSb.delete(0, idx + 1);
+                    if (catListener != null) {
+                        catListener.onCatCommandReceived(cmd);
                     }
-                } catch (Exception e) {
-                    Log.e(TAG, "Err in CAT read loop", e);
                 }
-                try { Thread.sleep(20); } catch (Exception e) {}
             }
-        }, "CAT-Reader-Thread").start();
+
+            @Override
+            public void onRunError(Exception e) {
+                // Apelat automat de biblioteca la deconectare/eroare de citire -
+                // inainte trebuia sa prindem noi asta manual dintr-un read().
+                Log.e(TAG, "CAT IoManager oprit (deconectare/eroare)", e);
+                handlerUi.post(() -> Toast.makeText(context,
+                        "Conexiune CAT pierduta: " + e.getMessage(), Toast.LENGTH_SHORT).show());
+            }
+        };
+
+        catIoManager = new SerialInputOutputManager(catPort, listener);
+        catIoManager.start();
     }
 
-    // ✅ THREAD SEPARAT PENTRU DATA
-    private void pornesteThreadAscultareDATA() {
-        new Thread(() -> {
-            byte[] dataBuffer = new byte[1024];  // ✅ Buffer dedicat DATA
-
-            while (ascultareDataActiva) {
-                try {
-                    if (dataPort != null && dataPort.isOpen()) {
-                        int len = dataPort.read(dataBuffer, 50);
-                        if (len > 0 && dataListener != null) {
-                            // Pentru moment nu procesăm datele DATA (FSK keying e manual)
-                            // Dar avem infrastructura pregătită pentru viitor
-                            dataListener.onDataReceived(dataBuffer, len);
-                        }
-                    }
-                } catch (Exception e) {
-                    Log.e(TAG, "Err in DATA read loop", e);
+    // OPTIMIZARE: inlocuieste vechiul pornesteThreadAscultareDATA().
+    private void porneteIoManagerDATA() {
+        SerialInputOutputManager.Listener listener = new SerialInputOutputManager.Listener() {
+            @Override
+            public void onNewData(byte[] data) {
+                if (dataListener != null) {
+                    dataListener.onDataReceived(data, data.length);
                 }
-                try { Thread.sleep(20); } catch (Exception e) {}
             }
-        }, "DATA-Reader-Thread").start();
+
+            @Override
+            public void onRunError(Exception e) {
+                Log.e(TAG, "DATA IoManager oprit (deconectare/eroare)", e);
+            }
+        };
+
+        dataIoManager = new SerialInputOutputManager(dataPort, listener);
+        dataIoManager.start();
     }
 
     public void interogheazaStareStatie() {
@@ -221,10 +240,20 @@ public class RadioManager {
         return dataPort;
     }
 
+    // OPTIMIZARE: oprim intai IoManager-ele - stop() e SINCRON cu privire la starea
+    // interna (biblioteca gestioneaza tranzitia RUNNING -> STOPPING -> STOPPED si
+    // orice citire aflata in desfasurare) - si ABIA DUPA aceea inchidem porturile.
+    // Elimina cursa veche (thread de citire activ + port inchis simultan din alt
+    // thread), care putea produce IOException/crash la deconectare rapida.
     public void opresteToat() {
-        // ✅ Oprim ambele thread-uri
-        ascultareCatActiva = false;
-        ascultareDataActiva = false;
+        if (catIoManager != null) {
+            catIoManager.stop();
+            catIoManager = null;
+        }
+        if (dataIoManager != null) {
+            dataIoManager.stop();
+            dataIoManager = null;
+        }
 
         try {
             if (catPort != null) catPort.close();
