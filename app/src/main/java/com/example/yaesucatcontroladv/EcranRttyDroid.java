@@ -44,15 +44,13 @@ public class EcranRttyDroid {
     // Lista macro-uri stil terminal
     private LinearLayout llMacroListContainer;
 
-    // Interfata pentru comunicare cu Logger (click pe indicativ)
-    public interface OnCallsignTappedListener {
-        void onCallsignTapped(String callsign);
-    }
-    private OnCallsignTappedListener callsignListener;
-    private final StringBuilder bufferCuvantCurent = new StringBuilder();
+    // REFACTORIZARE: detectarea/afisarea indicativelor a fost extrasa in CallsignDetector.
+    // Instantiat in constructor, dupa ce construiesteInterfata() a creat tvRttyTerminal/
+    // etRttyInputLive/svRttyScroll (de care are nevoie).
+    private CallsignDetector callsignDetector;
 
-    public void setOnCallsignTappedListener(OnCallsignTappedListener listener) {
-        this.callsignListener = listener;
+    public void setOnCallsignTappedListener(CallsignDetector.OnCallsignTappedListener listener) {
+        callsignDetector.setOnCallsignTappedListener(listener);
     }
 
     // Stari receptie
@@ -111,6 +109,7 @@ public class EcranRttyDroid {
         this.context = context;
         this.radioManager = radioManager;
         construiesteInterfata();
+        callsignDetector = new CallsignDetector(context, tvRttyTerminal, etRttyInputLive, svRttyScroll);
     }
 
     private void initMatchedFilterTemplates(int sampleRate, double baud) {
@@ -344,7 +343,7 @@ public class EcranRttyDroid {
         btnRttyClear.setLayoutParams(pBtn);
         btnRttyClear.setOnClickListener(v -> {
             tvRttyTerminal.setText("--- RTTY RECEIVE TERMINAL ---\n");
-            bufferCuvantCurent.setLength(0);
+            callsignDetector.resetBuffer();
         });
         rAndControaleRtty.addView(btnRttyClear);
 
@@ -661,108 +660,8 @@ public class EcranRttyDroid {
         viewPrincipal.addView(llRttyMain);
     }
 
-    // ============================================================
-    // Click pe indicative (Callsign -> Logger)
-    // ============================================================
-    private boolean esteIndicativValid(String text) {
-        if (text == null) return false;
-        text = text.trim().toUpperCase();
-        if (text.length() < 3 || text.length() > 10) return false;
-        return text.matches("^(?:[A-Z]{1,2}|[0-9][A-Z]|[A-Z][0-9])[0-9][A-Z]{1,4}$");
-    }
-
-    // ============================================================
-    // 1. LOGICA COMUNA (Fara cozi de asteptare, executie IMEDIATA)
-    // ============================================================
-    private void executaActiuneCallsign(String callsign) {
-        final String callFinal = callsign.toUpperCase().trim();
-
-        // PASUL 1: Stocăm MEREU în buffer-ul static pentru Logger
-        EcranRttyDroid.callsignBuffer = callFinal;
-
-        // Toast IMEDIAT (fara runOnUiThread)
-        Toast.makeText(context, "📋 " + callFinal + " memorat", Toast.LENGTH_SHORT).show();
-
-        // PASUL 2: Verificăm focusul în FSK
-        if (etRttyInputLive != null && etRttyInputLive.hasFocus()) {
-            SharedPreferences prefs = context.getSharedPreferences(
-                    EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
-            String myCall = prefs.getString(EcranSetariProprii.PREF_MY_CALL, "").trim().toUpperCase();
-
-            if (!myCall.isEmpty()) {
-                String textDeInserat = callFinal + " DE " + myCall + " KN";
-                int cursorPos = etRttyInputLive.getSelectionStart();
-                if (cursorPos < 0) cursorPos = etRttyInputLive.getText().length();
-
-                // Inserare IMEDIATA la cursor
-                etRttyInputLive.getText().insert(cursorPos, textDeInserat);
-                etRttyInputLive.setSelection(cursorPos + textDeInserat.length());
-            } else {
-                Toast.makeText(context, "⚠️ Configurează MY CALL în MY SETTINGS",
-                        Toast.LENGTH_LONG).show();
-            }
-        }
-    }
-
-    // ============================================================
-    // 2. AFISARE IN TERMINAL (Doar creeaza textul auriu clicabil)
-    // ============================================================
-    private void afiseazaIndicativColorat(String callsign) {
-        if (tvRttyTerminal == null) return;
-        final String callFinal = callsign.toUpperCase().trim();
-
-        android.text.SpannableString spannable = new android.text.SpannableString(callFinal);
-        android.text.style.ClickableSpan clickableSpan = new android.text.style.ClickableSpan() {
-            @Override
-            public void onClick(View widget) {
-                // Cand dai tap pe un indicativ deja afisat, doar executi actiunea
-                // (NU il mai afiseaza a doua oara in terminal)
-                onIndicativClick(callFinal);
-            }
-            @Override
-            public void updateDrawState(android.text.TextPaint ds) {
-                super.updateDrawState(ds);
-                ds.setColor(Color.parseColor("#FFD700"));
-                ds.setUnderlineText(true);
-            }
-        };
-        spannable.setSpan(clickableSpan, 0, callFinal.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        tvRttyTerminal.append(spannable);
-    }
-
-    // ============================================================
-    // 3. HANDLER PENTRU CLICK PE INDICATIV EXISTENT
-    // ============================================================
-    private void onIndicativClick(String callsign) {
-        executaActiuneCallsign(callsign);
-    }
-
-    private void proceseazaCaracterPentruClick(char c) {
-        if (tvRttyTerminal == null) return;
-
-        if (c == ' ' || c == '\n' || c == '\r') {
-            String cuvant = bufferCuvantCurent.toString().trim().toUpperCase();
-            bufferCuvantCurent.setLength(0);
-
-            if (!cuvant.isEmpty()) {
-                if (esteIndicativValid(cuvant)) {
-                    // DOAR afișare colorată (fără buffer, fără toast, fără FSK)
-                    afiseazaIndicativColorat(cuvant);
-                } else {
-                    tvRttyTerminal.append(cuvant);
-                }
-            }
-
-            if (c == '\n' || c == '\r') tvRttyTerminal.append("\n");
-            else tvRttyTerminal.append(" ");
-        } else {
-            bufferCuvantCurent.append(c);
-        }
-
-        if (svRttyScroll != null) {
-            svRttyScroll.post(() -> svRttyScroll.fullScroll(View.FOCUS_DOWN));
-        }
-    }
+    // REFACTORIZARE: logica de detectare/afisare a indicativelor a fost mutata in
+    // CallsignDetector.java (vezi campul callsignDetector si constructorul).
 
     private void verificareSiPornireDecodor() {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -1136,7 +1035,7 @@ public class EcranRttyDroid {
                     if (decoded == '\u0007') {
                         // Bell - ignoram
                     } else {
-                        proceseazaCaracterPentruClick(decoded);
+                        callsignDetector.proceseazaCaracterPentruClick(decoded);
                     }
                 }
             });
@@ -1254,7 +1153,7 @@ public class EcranRttyDroid {
         }
 
         // 4. Golim buffer-ul de cuvinte
-        bufferCuvantCurent.setLength(0);
+        callsignDetector.resetBuffer();
     }
 
     // ============================================================
