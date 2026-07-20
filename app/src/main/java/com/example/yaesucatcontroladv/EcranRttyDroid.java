@@ -702,6 +702,16 @@ public class EcranRttyDroid {
             int bitCounter = 0;
             int currentByte = 0;
 
+            // OPTIMIZARE: debounce la declansarea cadrului (start-bit). Inainte, un SINGUR
+            // esantion decis "space" (posibil doar zgomot, pe semnal slab) declansa imediat
+            // un cadru nou, la o faza arbitrara fata de bitstream-ul real - sursa principala
+            // a simptomului "litere corecte izolate, text neinteligibil per total" (cadre
+            // false + cadre reale defazate, ambele esuand testul stop-bitului de la final).
+            // Acum cerem ca starea "space" sa persiste un numar minim de esantioane inainte
+            // sa ne angajam pe un cadru nou.
+            int contorConfirmareStart = 0;
+            final int PRAG_CONFIRMARE_START = (int) Math.round(samplesPerBit * 0.7);
+
             double fazaAFC = 0;
             double I_acc = 0, Q_acc = 0;
             double last_phase = 0;
@@ -760,6 +770,7 @@ public class EcranRttyDroid {
                     fazaCeasAcumulator = 0;
                     bitCounter = 0;
                     currentByte = 0;
+                    contorConfirmareStart = 0;
                     if (folosesteMatchedFilter && mfBuffer != null) {
                         for (int k = 0; k < mfBuffer.length; k++) mfBuffer[k] = 0;
                         mfBufferPos = 0;
@@ -926,10 +937,20 @@ public class EcranRttyDroid {
                     // Clock Recovery
                     if (!inFrame) {
                         if (bitCurent == 0) {
-                            inFrame = true;
-                            fazaCeasAcumulator = 0;
-                            bitCounter = 0;
-                            currentByte = 0;
+                            contorConfirmareStart++;
+                            if (contorConfirmareStart >= PRAG_CONFIRMARE_START) {
+                                inFrame = true;
+                                // CORECTIE: nu pornim faza de la 0, ci de la cate esantioane
+                                // au trecut deja de la INCEPUTUL real al starii "space" (cat
+                                // am asteptat sa confirmam) - altfel am introduce o intarziere
+                                // sistematica noua la fiecare bit, in loc sa reparam sincronizarea.
+                                fazaCeasAcumulator = contorConfirmareStart;
+                                bitCounter = 0;
+                                currentByte = 0;
+                                contorConfirmareStart = 0;
+                            }
+                        } else {
+                            contorConfirmareStart = 0; // revenire la mark inainte de prag = fals pozitiv
                         }
                     } else {
                         fazaCeasAcumulator += 1.0;
