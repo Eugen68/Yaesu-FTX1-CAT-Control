@@ -1,0 +1,93 @@
+package com.example.yaesucatcontroladv;
+
+/**
+ * Codec ITA2 (Baudot) pentru RTTY - encodare/decodare caractere <-> coduri de 5 biti,
+ * inclusiv gestiunea starii LTRS/FIGS (shift).
+ *
+ * REFACTORIZARE: extras din EcranRttyDroid.java (care avea 1200+ linii, amestecand UI,
+ * DSP audio si logica de encodare Baudot in aceeasi clasa). Aceasta clasa nu are nicio
+ * dependenta de Android - e testabila independent, cu simple teste unitare Java.
+ *
+ * Fiecare directie de comunicare (receptie si transmisie) are propria stare LTRS/FIGS,
+ * deci foloseste propria instanta de BaudotCodec (nu e stare statica/globala).
+ */
+public class BaudotCodec {
+
+    public static final char[] ITA2_LTRS_MAP = {
+            '\0', 'E', '\n', 'A', ' ', 'S', 'I', 'U', '\n', 'D', 'R', 'J', 'N', 'F', 'C', 'K',
+            'T', 'Z', 'L', 'W', 'H', 'Y', 'P', 'Q', 'O', 'B', 'G', '\0', 'M', 'X', 'V', '\0'
+    };
+    public static final char[] ITA2_FIGS_MAP = {
+            '\0', '3', '\n', '-', ' ', '\'', '8', '7', '\n', '4', '4', '\u0007', ',', '!', ':', '(',
+            '5', '+', ')', '2', '#', '6', '0', '1', '9', '?', '&', '\0', '.', '/', ';', '\0'
+    };
+    private static final int[] CHAR_TO_BAUDOT_CODE = new int[256];
+    private static final boolean[] CHAR_IS_FIGS = new boolean[256];
+
+    static {
+        for (int i = 0; i < 32; i++) {
+            char l = ITA2_LTRS_MAP[i];
+            if (l != '\0' && l != '\n') { CHAR_TO_BAUDOT_CODE[l] = i; CHAR_IS_FIGS[l] = false; }
+            char f = ITA2_FIGS_MAP[i];
+            if (f != '\0' && f != '\n' && f != '\u0007') { CHAR_TO_BAUDOT_CODE[f] = i; CHAR_IS_FIGS[f] = true; }
+        }
+        CHAR_TO_BAUDOT_CODE[' '] = 4;  CHAR_IS_FIGS[' '] = false;
+        CHAR_TO_BAUDOT_CODE['\n'] = 2; CHAR_IS_FIGS['\n'] = false;
+        CHAR_TO_BAUDOT_CODE['\r'] = 8; CHAR_IS_FIGS['\r'] = false;
+    }
+
+    /** Starea curenta LTRS('L')/FIGS('F') a acestei instante (RX sau TX, independente). */
+    private char shift = 'L';
+
+    public char getShift() {
+        return shift;
+    }
+
+    /** Reseteaza starea la LTRS - apelata de obicei la inceputul unei transmisii/receptii noi. */
+    public void resetShift() {
+        shift = 'L';
+    }
+
+    public static boolean esteFigs(char c) {
+        return CHAR_IS_FIGS[c];
+    }
+
+    public static int codBaudotPentru(char c) {
+        return CHAR_TO_BAUDOT_CODE[c];
+    }
+
+    /**
+     * Decodeaza un cod Baudot de 5 biti (0-31), actualizand starea interna LTRS/FIGS.
+     * @return caracterul decodat, sau '\0' daca e un cod de control (shift) fara
+     *         caracter vizibil de afisat.
+     */
+    public char decode(int code) {
+        if (code == 0x1F) { shift = 'L'; return '\0'; }
+        if (code == 0x1B) { shift = 'F'; return '\0'; }
+        if (code == 0x04) { shift = 'L'; } // spatiul reseteaza mereu la LTRS (comportament original pastrat)
+        return (shift == 'L') ? ITA2_LTRS_MAP[code] : ITA2_FIGS_MAP[code];
+    }
+
+    /**
+     * Encodeaza un singur caracter (deja normalizat uppercase de apelant) in unul sau doua
+     * coduri Baudot de trimis in ordine: [cod-de-shift-optional, cod-propriu-zis-al-caracterului].
+     * Actualizeaza starea interna LTRS/FIGS in mod corespunzator.
+     */
+    public int[] encode(char c) {
+        if (c != ' ' && c != '\n' && c != '\r') {
+            boolean cereFigs = esteFigs(c);
+            if (cereFigs && shift == 'L') {
+                shift = 'F';
+                return new int[]{0x1B, codBaudotPentru(c)};
+            } else if (!cereFigs && shift == 'F') {
+                shift = 'L';
+                return new int[]{0x1F, codBaudotPentru(c)};
+            }
+        } else {
+            // Spatiu/newline/CR: nu trimitem cod de shift explicit (comportament original),
+            // doar resetam starea interna daca eram in FIGS.
+            if (shift == 'F') shift = 'L';
+        }
+        return new int[]{codBaudotPentru(c)};
+    }
+}

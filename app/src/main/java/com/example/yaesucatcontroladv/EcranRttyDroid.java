@@ -58,7 +58,6 @@ public class EcranRttyDroid {
     // Stari receptie
     private boolean decodareRttyActiva = false;
     private boolean regimReverseSoftware = false;
-    private char currentRttyShift = 'L';
     private short[] miniBufferFft = new short[512];
 
     // Coeficienti
@@ -101,31 +100,12 @@ public class EcranRttyDroid {
 
     // Emisie
     private boolean isTransmittingRtty = false;
-    private char currentTxShift = 'L';
 
-    // ITA2 (Baudot)
-    private static final char[] ITA2_LTRS_MAP = {
-            '\0', 'E', '\n', 'A', ' ', 'S', 'I', 'U', '\n', 'D', 'R', 'J', 'N', 'F', 'C', 'K',
-            'T', 'Z', 'L', 'W', 'H', 'Y', 'P', 'Q', 'O', 'B', 'G', '\0', 'M', 'X', 'V', '\0'
-    };
-    private static final char[] ITA2_FIGS_MAP = {
-            '\0', '3', '\n', '-', ' ', '\'', '8', '7', '\n', '4', '4', '\u0007', ',', '!', ':', '(',
-            '5', '+', ')', '2', '#', '6', '0', '1', '9', '?', '&', '\0', '.', '/', ';', '\0'
-    };
-    private static final int[] CHAR_TO_BAUDOT_CODE = new int[256];
-    private static final boolean[] CHAR_IS_FIGS = new boolean[256];
-
-    static {
-        for (int i = 0; i < 32; i++) {
-            char l = ITA2_LTRS_MAP[i];
-            if (l != '\0' && l != '\n') { CHAR_TO_BAUDOT_CODE[l] = i; CHAR_IS_FIGS[l] = false; }
-            char f = ITA2_FIGS_MAP[i];
-            if (f != '\0' && f != '\n' && f != '\u0007') { CHAR_TO_BAUDOT_CODE[f] = i; CHAR_IS_FIGS[f] = true; }
-        }
-        CHAR_TO_BAUDOT_CODE[' '] = 4;  CHAR_IS_FIGS[' '] = false;
-        CHAR_TO_BAUDOT_CODE['\n'] = 2; CHAR_IS_FIGS['\n'] = false;
-        CHAR_TO_BAUDOT_CODE['\r'] = 8;  CHAR_IS_FIGS['\r'] = false;
-    }
+    // REFACTORIZARE: tabelele ITA2 si logica de shift LTRS/FIGS au fost extrase in
+    // BaudotCodec (clasa noua, fara dependente Android, testabila independent).
+    // RX si TX au fiecare propria stare de shift, deci fiecare propria instanta.
+    private final BaudotCodec rxBaudotCodec = new BaudotCodec();
+    private final BaudotCodec txBaudotCodec = new BaudotCodec();
 
     public EcranRttyDroid(Context context, RadioManager radioManager) {
         this.context = context;
@@ -1146,10 +1126,7 @@ public class EcranRttyDroid {
     }
 
     private void proceseazaCodBaudot(int code) {
-        if (code == 0x1F) { currentRttyShift = 'L'; return; }
-        if (code == 0x1B) { currentRttyShift = 'F'; return; }
-        if (code == 0x04) { currentRttyShift = 'L'; }
-        char decoded = (currentRttyShift == 'L') ? ITA2_LTRS_MAP[code] : ITA2_FIGS_MAP[code];
+        char decoded = rxBaudotCodec.decode(code);
         if (decoded != '\0') {
             Activity activity = (Activity) context;
             if (activity.isFinishing() || activity.isDestroyed()) return;
@@ -1206,7 +1183,7 @@ public class EcranRttyDroid {
                 });
                 radioManager.getDataPort().setDTR(true);
                 Thread.sleep(250);
-                currentTxShift = 'L';
+                txBaudotCodec.resetShift();
 
                 long dur = 22002200L;
                 long next = System.nanoTime();
@@ -1216,20 +1193,9 @@ public class EcranRttyDroid {
 
                 for (int i = 0; i < text.length(); i++) {
                     char c = Character.toUpperCase(text.charAt(i));
-                    if (c != ' ' && c != '\n' && c != '\r') {
-                        boolean cereFigs = CHAR_IS_FIGS[c];
-                        if (cereFigs && currentTxShift == 'L') {
-                            next = trimiteOctetBaudotHardware(0x1B, next, dur);
-                            currentTxShift = 'F';
-                        } else if (!cereFigs && currentTxShift == 'F') {
-                            next = trimiteOctetBaudotHardware(0x1F, next, dur);
-                            currentTxShift = 'L';
-                        }
-                    } else {
-                        if (currentTxShift == 'F') currentTxShift = 'L';
+                    for (int codBaudot : txBaudotCodec.encode(c)) {
+                        next = trimiteOctetBaudotHardware(codBaudot, next, dur);
                     }
-                    int codBaudot = CHAR_TO_BAUDOT_CODE[c];
-                    next = trimiteOctetBaudotHardware(codBaudot, next, dur);
                 }
                 Thread.sleep(150);
                 isTransmittingRtty = false;
