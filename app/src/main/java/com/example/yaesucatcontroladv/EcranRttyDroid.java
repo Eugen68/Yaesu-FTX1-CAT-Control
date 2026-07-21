@@ -10,7 +10,10 @@ import android.graphics.Typeface;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -65,6 +68,16 @@ public class EcranRttyDroid {
     private double rCheb = 0.992;
     private volatile double pragSensibilitate = 0.05;
     private int modUrmarireFrecventa = 0;
+
+    // FUNCTIONALITATE NOUA: Noise Blanker (NB) - suprima pulsurile scurte de zgomot
+    // impulsiv (QRN) direct in eșantioanele audio brute, INAINTE de AFC/Chebyshev/
+    // matched filter, ca tot lantul de decodare sa beneficieze de intrare mai curata.
+    private volatile boolean folosesteNoiseBlanker = false;
+    private volatile double nbFactorPrag = 5.0; // cat de mult peste media recenta declanseaza blanking-ul
+    private Button btnNoiseBlanker;
+    private LinearLayout rAndSliderNoiseBlanker;
+    private SeekBar sbNoiseBlanker;
+    private TextView tvNoiseBlankerValoare;
 
     // OPTIMIZARE: constanta de clasa (nu doar variabila locala in threadul de decodare),
     // ca sa poata fi folosita si de slider-ul "Latime Filtru" pentru a lega podeaua
@@ -422,29 +435,137 @@ public class EcranRttyDroid {
         });
         rAndDecoderToggle.addView(btnDecoderToggle);
 
+        // FUNCTIONALITATE NOUA: fostul buton unic "TRK:xxx" e acum impartit in doi butoni
+        // aseazati unul langa altul, ocupand IMPREUNA exact spatiul (weight 1f) pe care
+        // il ocupa inainte singurul buton TRK - restul randului (btnDecoderToggle) ramane
+        // neschimbat.
+        LinearLayout llTrkSiNb = new LinearLayout(context);
+        llTrkSiNb.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams pLlTrkSiNb = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        llTrkSiNb.setLayoutParams(pLlTrkSiNb);
+
         btnTrackToggle = new Button(context);
-        btnTrackToggle.setText("TRK:OFF");
+        btnTrackToggle.setText("OFF");
         btnTrackToggle.setBackgroundColor(Color.parseColor("#757575"));
         btnTrackToggle.setTextColor(Color.WHITE);
         btnTrackToggle.setTypeface(null, Typeface.BOLD);
-        LinearLayout.LayoutParams pBtnTrack = new LinearLayout.LayoutParams(0, 110, 1f);
-        pBtnTrack.setMargins(10, 0, 10, 0);
+        LinearLayout.LayoutParams pBtnTrack = new LinearLayout.LayoutParams(0, 110, 0.5f);
+        pBtnTrack.setMargins(10, 0, 5, 0);
         btnTrackToggle.setLayoutParams(pBtnTrack);
         btnTrackToggle.setOnClickListener(v -> {
             modUrmarireFrecventa = (modUrmarireFrecventa + 1) % 3;
             if (modUrmarireFrecventa == 0) {
-                btnTrackToggle.setText("TRK:OFF");
+                btnTrackToggle.setText("OFF");
                 btnTrackToggle.setBackgroundColor(Color.parseColor("#757575"));
             } else if (modUrmarireFrecventa == 1) {
-                btnTrackToggle.setText("TRK:AFC");
+                btnTrackToggle.setText("AFC");
                 btnTrackToggle.setBackgroundColor(Color.parseColor("#007ACC"));
             } else {
-                btnTrackToggle.setText("TRK:PLL");
+                btnTrackToggle.setText("PLL");
                 btnTrackToggle.setBackgroundColor(Color.parseColor("#2E7D32"));
             }
         });
-        rAndDecoderToggle.addView(btnTrackToggle);
+        llTrkSiNb.addView(btnTrackToggle);
+
+        // Buton NOU: Noise Blanker. Tap scurt = on/off (gri/albastru). Apasare sustinuta
+        // peste 3 secunde = arata/ascunde slider-ul de prag, la fel ca un NB de transceiver.
+        btnNoiseBlanker = new Button(context);
+        btnNoiseBlanker.setText("NB");
+        btnNoiseBlanker.setBackgroundColor(Color.parseColor("#757575"));
+        btnNoiseBlanker.setTextColor(Color.WHITE);
+        btnNoiseBlanker.setTypeface(null, Typeface.BOLD);
+        LinearLayout.LayoutParams pBtnNb = new LinearLayout.LayoutParams(0, 110, 0.5f);
+        pBtnNb.setMargins(5, 0, 10, 0);
+        btnNoiseBlanker.setLayoutParams(pBtnNb);
+
+        final Handler handlerNbLongPress = new Handler(Looper.getMainLooper());
+        final boolean[] sliderAfisatPrinHold = {false};
+        // FUNCTIONALITATE NOUA: slider-ul NB dispare singur dupa 5 secunde de inactivitate.
+        Runnable ascundeSliderNbAutomat = () -> rAndSliderNoiseBlanker.setVisibility(View.GONE);
+        Runnable actiuneHoldNb = () -> {
+            sliderAfisatPrinHold[0] = true;
+            boolean eraVizibil = rAndSliderNoiseBlanker.getVisibility() == View.VISIBLE;
+            if (eraVizibil) {
+                rAndSliderNoiseBlanker.setVisibility(View.GONE);
+                handlerNbLongPress.removeCallbacks(ascundeSliderNbAutomat);
+            } else {
+                rAndSliderNoiseBlanker.setVisibility(View.VISIBLE);
+                handlerNbLongPress.removeCallbacks(ascundeSliderNbAutomat);
+                handlerNbLongPress.postDelayed(ascundeSliderNbAutomat, 5000);
+            }
+        };
+        btnNoiseBlanker.setOnTouchListener((v, event) -> {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    sliderAfisatPrinHold[0] = false;
+                    handlerNbLongPress.postDelayed(actiuneHoldNb, 3000);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    handlerNbLongPress.removeCallbacks(actiuneHoldNb);
+                    if (!sliderAfisatPrinHold[0]) {
+                        // Tap scurt normal (nu a durat 3 secunde) -> comutam on/off
+                        folosesteNoiseBlanker = !folosesteNoiseBlanker;
+                        btnNoiseBlanker.setBackgroundColor(Color.parseColor(folosesteNoiseBlanker ? "#007ACC" : "#757575"));
+                    }
+                    v.performClick();
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    handlerNbLongPress.removeCallbacks(actiuneHoldNb);
+                    return true;
+                default:
+                    return false;
+            }
+        });
+        llTrkSiNb.addView(btnNoiseBlanker);
+
+        rAndDecoderToggle.addView(llTrkSiNb);
         llRttyMain.addView(rAndDecoderToggle);
+
+        // SLIDER NOISE BLANKER (ascuns implicit - apare la apasare sustinuta pe butonul NB)
+        rAndSliderNoiseBlanker = new LinearLayout(context);
+        rAndSliderNoiseBlanker.setOrientation(LinearLayout.HORIZONTAL);
+        rAndSliderNoiseBlanker.setVisibility(View.GONE);
+        LinearLayout.LayoutParams pRandNb = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pRandNb.setMargins(0, 10, 0, 10);
+        rAndSliderNoiseBlanker.setLayoutParams(pRandNb);
+
+        TextView tvNbLabel = new TextView(context);
+        tvNbLabel.setText("Prag NB:");
+        tvNbLabel.setTextColor(Color.WHITE);
+        tvNbLabel.setTextSize(13);
+        rAndSliderNoiseBlanker.addView(tvNbLabel);
+
+        sbNoiseBlanker = new SeekBar(context);
+        sbNoiseBlanker.setMax(20);
+        sbNoiseBlanker.setProgress(9); // corespunde ~5.0x, valoarea implicita a nbFactorPrag
+        LinearLayout.LayoutParams pSbNb = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        sbNoiseBlanker.setLayoutParams(pSbNb);
+
+        tvNoiseBlankerValoare = new TextView(context);
+        tvNoiseBlankerValoare.setText("x5.0");
+        tvNoiseBlankerValoare.setTextColor(Color.parseColor("#00FF00"));
+        tvNoiseBlankerValoare.setTextSize(13);
+        tvNoiseBlankerValoare.setTypeface(Typeface.MONOSPACE);
+
+        sbNoiseBlanker.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                // Interval 2.0x (zgomotos, prinde doar pulsuri f. mari) - 12.0x (agresiv,
+                // risca sa taie si varfuri de semnal real) - progres 0..20.
+                nbFactorPrag = 2.0 + (progress * (10.0 / 20.0));
+                tvNoiseBlankerValoare.setText(String.format("x%.1f", nbFactorPrag));
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {
+                handlerNbLongPress.removeCallbacks(ascundeSliderNbAutomat);
+            }
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                handlerNbLongPress.postDelayed(ascundeSliderNbAutomat, 5000);
+            }
+        });
+
+        rAndSliderNoiseBlanker.addView(sbNoiseBlanker);
+        rAndSliderNoiseBlanker.addView(tvNoiseBlankerValoare);
+        llRttyMain.addView(rAndSliderNoiseBlanker);
 
         // SLIDER SENSIBILITATE
         LinearLayout rAndSensibilitate = new LinearLayout(context);
@@ -735,6 +856,14 @@ public class EcranRttyDroid {
             // decat 0.6 la respingerea puseurilor scurte de zgomot).
             final int PRAG_CONFIRMARE_START = (int) Math.round(samplesPerBit * 0.7);
 
+            // FUNCTIONALITATE NOUA: Noise Blanker - stare locala pe threadul de decodare.
+            // nbNivelMediu urmareste amplitudinea "normala" recenta a semnalului audio brut
+            // (medie EMA a |sample|), actualizata DOAR din esantioane NEsuprimate (ca sa nu
+            // se auto-contamineze cu propriile pulsuri de zgomot pe care le respinge).
+            double nbNivelMediu = 0.05;
+            double nbUltimulEsantionValid = 0;
+            final double NB_EMA_ALPHA = 0.0008;
+
             double fazaAFC = 0;
             double I_acc = 0, Q_acc = 0;
             double last_phase = 0;
@@ -794,6 +923,8 @@ public class EcranRttyDroid {
                     bitCounter = 0;
                     currentByte = 0;
                     contorConfirmareStart = 0;
+                    nbNivelMediu = 0.05;
+                    nbUltimulEsantionValid = 0;
                     if (folosesteMatchedFilter && mfBuffer != null) {
                         for (int k = 0; k < mfBuffer.length; k++) mfBuffer[k] = 0;
                         mfBufferPos = 0;
@@ -821,6 +952,25 @@ public class EcranRttyDroid {
                     double sample = rawSample - dcBlockerInVech + 0.995 * dcBlockerOutVech;
                     dcBlockerInVech = rawSample;
                     dcBlockerOutVech = sample;
+
+                    // FUNCTIONALITATE NOUA: Noise Blanker - suprima pulsurile scurte de
+                    // zgomot impulsiv (QRN) INAINTE ca esantionul sa alimenteze AFC/
+                    // Chebyshev/matched filter, ca tot lantul de decodare sa beneficieze.
+                    if (folosesteNoiseBlanker) {
+                        double sampleAbs = Math.abs(sample);
+                        double pragNb = nbNivelMediu * nbFactorPrag;
+                        if (sampleAbs > pragNb) {
+                            // Puls detectat: "hold" - repetam ultimul esantion valid, mai
+                            // lin decat sa punem pe zero (evita un "click" spectral brusc).
+                            sample = nbUltimulEsantionValid;
+                        } else {
+                            nbUltimulEsantionValid = sample;
+                            // Actualizam media DOAR cu esantioane acceptate (ne-suprimate) -
+                            // altfel pulsul insusi ar umfla pragul, permitand pulsuri si mai
+                            // mari sa treaca nedetectate data viitoare.
+                            nbNivelMediu = (NB_EMA_ALPHA * sampleAbs) + ((1.0 - NB_EMA_ALPHA) * nbNivelMediu);
+                        }
+                    }
 
                     double magMark = 0, magSpace = 0;
                     double diferentaBruta = 0.0;
