@@ -3,6 +3,8 @@ package com.example.yaesucatcontroladv;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.SpannableString;
 import android.text.Spanned;
 import android.text.TextPaint;
@@ -35,11 +37,41 @@ public class CallsignDetector {
 
     private final StringBuilder bufferCuvantCurent = new StringBuilder();
 
+    // FUNCTIONALITATE NOUA: pauza auto-scroll la interactiune manuala. Cand utilizatorul
+    // atinge/deruleaza fereastra de terminal, oprim auto-scroll-ul (decodarea continua
+    // normal, mesajele se acumuleaza in fundal) ca sa poata citi/derula liber mesaje mai
+    // vechi. Daca nu mai atinge fereastra 3 secunde, reactivam auto-scroll-ul si sarim
+    // direct la ultimul mesaj, aratand tot ce s-a acumulat cat timp a derulat manual.
+    private final Handler handlerAutoScroll = new Handler(Looper.getMainLooper());
+    private volatile boolean autoScrollPausat = false;
+    private static final long INTARZIERE_REACTIVARE_AUTOSCROLL_MS = 3000;
+    // CORECTIE COMPILARE: NU se initializeaza inline aici (ca inainte) - un initializator
+    // de camp ruleaza INAINTE de corpul constructorului, deci lambda-ul ar referi svScroll
+    // (camp final) inainte ca acesta sa fie garantat atribuit -> eroare "might not have
+    // been initialized". Se atribuie in schimb in constructor, DUPA this.svScroll = svScroll.
+    private final Runnable reactiveazaAutoScroll;
+
+    /**
+     * Apelata cand utilizatorul atinge/deruleaza manual fereastra de terminal - opreste
+     * auto-scroll-ul si reporneste temporizatorul de 3 secunde de inactivitate.
+     */
+    public void inregistreazaInteractiuneManuala() {
+        autoScrollPausat = true;
+        handlerAutoScroll.removeCallbacks(reactiveazaAutoScroll);
+        handlerAutoScroll.postDelayed(reactiveazaAutoScroll, INTARZIERE_REACTIVARE_AUTOSCROLL_MS);
+    }
+
     public CallsignDetector(Context context, TextView tvTerminal, EditText etInputLive, ScrollView svScroll) {
         this.context = context;
         this.tvTerminal = tvTerminal;
         this.etInputLive = etInputLive;
         this.svScroll = svScroll;
+        this.reactiveazaAutoScroll = () -> {
+            autoScrollPausat = false;
+            if (this.svScroll != null) {
+                this.svScroll.post(() -> this.svScroll.fullScroll(View.FOCUS_DOWN));
+            }
+        };
     }
 
     public void setOnCallsignTappedListener(OnCallsignTappedListener listener) {
@@ -151,7 +183,7 @@ public class CallsignDetector {
             bufferCuvantCurent.append(c);
         }
 
-        if (svScroll != null) {
+        if (svScroll != null && !autoScrollPausat) {
             svScroll.post(() -> svScroll.fullScroll(View.FOCUS_DOWN));
         }
     }

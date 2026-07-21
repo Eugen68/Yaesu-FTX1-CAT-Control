@@ -99,6 +99,13 @@ public class EcranRttyDroid {
     // Emisie
     private boolean isTransmittingRtty = false;
 
+    // FUNCTIONALITATE NOUA: coada de mesaje pentru transmisie RTTY. Un singur thread
+    // dedicat de transmisie (workerTxActiv) proceseaza mesajele STRICT secvential - daca
+    // se apasa SEND cat timp un mesaj e deja in curs de transmisie, noul mesaj asteapta
+    // in coada, nu porneste un thread separat care ar concura pe acelasi port serial.
+    private final java.util.concurrent.ConcurrentLinkedQueue<String> coadaMesajeTxRtty = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final java.util.concurrent.atomic.AtomicBoolean workerTxRttyActiv = new java.util.concurrent.atomic.AtomicBoolean(false);
+
     // REFACTORIZARE: tabelele ITA2 si logica de shift LTRS/FIGS au fost extrase in
     // BaudotCodec (clasa noua, fara dependente Android, testabila independent).
     // RX si TX au fiecare propria stare de shift, deci fiecare propria instanta.
@@ -310,6 +317,20 @@ public class EcranRttyDroid {
         // ============================================================
         tvRttyTerminal.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
         tvRttyTerminal.setHighlightColor(Color.TRANSPARENT); // Elimină fundalul gri la apăsare
+
+        // FUNCTIONALITATE NOUA: la orice atingere/derulare manuala a ferestrei de terminal,
+        // oprim auto-scroll-ul (decodarea continua normal in fundal) ca utilizatorul sa
+        // poata citi mesaje mai vechi. Returnam "false" ca sa NU consumam evenimentul -
+        // ScrollView-ul si LinkMovementMethod-ul (pt. click pe indicative) tot functioneaza
+        // normal, doar "observam" interactiunea in plus.
+        View.OnTouchListener listenerPauzaAutoScroll = (v, event) -> {
+            if (callsignDetector != null) {
+                callsignDetector.inregistreazaInteractiuneManuala();
+            }
+            return false;
+        };
+        svRttyScroll.setOnTouchListener(listenerPauzaAutoScroll);
+        tvRttyTerminal.setOnTouchListener(listenerPauzaAutoScroll);
 
         svRttyScroll.addView(tvRttyTerminal);
         llRttyMain.addView(svRttyScroll);
@@ -628,7 +649,7 @@ public class EcranRttyDroid {
         btnRttySendLive.setOnClickListener(v -> {
             String txt = etRttyInputLive.getText().toString();
             if (!txt.isEmpty()) {
-                transmiteMesajTextRttyBaudot(txt);
+                adaugaInCoadaTransmisieRtty(txt);
                 etRttyInputLive.setText("");
             }
         });
@@ -710,6 +731,8 @@ public class EcranRttyDroid {
             // Acum cerem ca starea "space" sa persiste un numar minim de esantioane inainte
             // sa ne angajam pe un cadru nou.
             int contorConfirmareStart = 0;
+            // Prag confirmat de utilizator pe semnal real cu QRN/QRM (0.7 a mers mai bine
+            // decat 0.6 la respingerea puseurilor scurte de zgomot).
             final int PRAG_CONFIRMARE_START = (int) Math.round(samplesPerBit * 0.7);
 
             double fazaAFC = 0;
@@ -1075,11 +1098,61 @@ public class EcranRttyDroid {
         }
     }
 
-    private void transmiteMesajTextRttyBaudot(final String text) {
+    /**
+     * Punct de intrare pentru butonul SEND: adauga mesajul in coada si porneste
+     * worker-ul de transmisie daca nu ruleaza deja. Mesajele se transmit STRICT
+     * secvential, fara intrerupere, indiferent de cate ori se apasa SEND.
+     */
+    private void adaugaInCoadaTransmisieRtty(String text) {
         if (radioManager == null || radioManager.getDataPort() == null || !radioManager.getDataPort().isOpen()) {
             Toast.makeText(context, "Porturile DATA nu sunt conectate!", Toast.LENGTH_SHORT).show();
             return;
         }
+        coadaMesajeTxRtty.add(text);
+        actualizeazaLabelSend();
+        porneteWorkerTxRttyDacaNuRuleaza();
+    }
+
+    /** Actualizeaza caption-ul butonului SEND cu numarul de mesaje in asteptare + cel curent. */
+    private void actualizeazaLabelSend() {
+        if (btnRttySendLive == null) return;
+        int total = coadaMesajeTxRtty.size() + (isTransmittingRtty ? 1 : 0);
+        String caption = (total <= 1) ? "SEND" : ("SEND " + total);
+        Activity activity = (Activity) context;
+        if (activity.isFinishing() || activity.isDestroyed()) return;
+        activity.runOnUiThread(() -> {
+            if (!activity.isFinishing() && !activity.isDestroyed()) {
+                btnRttySendLive.setText(caption);
+            }
+        });
+    }
+
+    /**
+     * Un singur thread de fundal "workerTxRttyActiv" goleste coada strict secvential -
+     * fiecare mesaj asteapta terminarea celui anterior, niciodata transmisii concurente
+     * pe acelasi port serial.
+     */
+    private void porneteWorkerTxRttyDacaNuRuleaza() {
+        if (!workerTxRttyActiv.compareAndSet(false, true)) return; // deja ruleaza un worker
+        new Thread(() -> {
+            try {
+                String mesaj;
+                while ((mesaj = coadaMesajeTxRtty.poll()) != null) {
+                    transmiteUnMesajRttyBaudotBlocant(mesaj);
+                    actualizeazaLabelSend();
+                }
+            } finally {
+                workerTxRttyActiv.set(false);
+                actualizeazaLabelSend(); // revine la "SEND" simplu cand coada s-a golit
+            }
+        }, "RTTY-TX-Worker").start();
+    }
+
+    /**
+     * Transmite EFECTIV un singur mesaj pe hardware - BLOCANT (ruleaza pe thread-ul
+     * worker-ului de coada, nu isi mai creeaza propriul thread ca inainte).
+     */
+    private void transmiteUnMesajRttyBaudotBlocant(final String text) {
         Activity activity = (Activity) context;
         if (activity.isFinishing() || activity.isDestroyed()) return;
         activity.runOnUiThread(() -> {
@@ -1092,44 +1165,49 @@ public class EcranRttyDroid {
             }
         });
 
-        new Thread(() -> {
-            try {
-                isTransmittingRtty = true;
+        try {
+            isTransmittingRtty = true;
+            if (activity.isFinishing() || activity.isDestroyed()) return;
+            activity.runOnUiThread(() -> {
                 if (activity.isFinishing() || activity.isDestroyed()) return;
-                activity.runOnUiThread(() -> {
-                    if (activity.isFinishing() || activity.isDestroyed()) return;
-                    btnRttyPttToggle.setBackgroundColor(Color.parseColor("#B71C1C"));
-                    btnRttyPttToggle.setText("TX");
-                });
-                radioManager.getDataPort().setDTR(true);
-                Thread.sleep(250);
-                txBaudotCodec.resetShift();
+                btnRttyPttToggle.setBackgroundColor(Color.parseColor("#B71C1C"));
+                btnRttyPttToggle.setText("TX");
+            });
+            radioManager.getDataPort().setDTR(true);
+            Thread.sleep(250);
+            txBaudotCodec.resetShift();
 
-                long dur = 22002200L;
-                long next = System.nanoTime();
-                next = trimiteOctetBaudotHardware(0x1F, next, dur);
-                next = trimiteOctetBaudotHardware(0x1F, next, dur);
-                next = trimiteOctetBaudotHardware(0x1F, next, dur);
+            long dur = 22002200L;
+            long next = System.nanoTime();
+            next = trimiteOctetBaudotHardware(0x1F, next, dur);
+            next = trimiteOctetBaudotHardware(0x1F, next, dur);
+            next = trimiteOctetBaudotHardware(0x1F, next, dur);
 
-                for (int i = 0; i < text.length(); i++) {
-                    char c = Character.toUpperCase(text.charAt(i));
-                    for (int codBaudot : txBaudotCodec.encode(c)) {
-                        next = trimiteOctetBaudotHardware(codBaudot, next, dur);
-                    }
+            for (int i = 0; i < text.length(); i++) {
+                char c = Character.toUpperCase(text.charAt(i));
+                for (int codBaudot : txBaudotCodec.encode(c)) {
+                    next = trimiteOctetBaudotHardware(codBaudot, next, dur);
                 }
-                Thread.sleep(150);
-                isTransmittingRtty = false;
-                if (activity.isFinishing() || activity.isDestroyed()) return;
+            }
+            Thread.sleep(150);
+        } catch (Exception e) {
+            android.util.Log.e("RTTY_TX", "Eroare loop FSK", e);
+        } finally {
+            // CORECTIE: isTransmittingRtty=false si DTR off garantate acum si pe ramura de
+            // eroare (finally), nu doar pe drumul de succes ca inainte - evita ramanerea
+            // "blocata" in stare TX daca apare o exceptie in mijlocul transmisiei.
+            isTransmittingRtty = false;
+            if (!activity.isFinishing() && !activity.isDestroyed()) {
                 activity.runOnUiThread(() -> {
                     if (activity.isFinishing() || activity.isDestroyed()) return;
                     btnRttyPttToggle.setBackgroundColor(Color.parseColor("#424242"));
                     btnRttyPttToggle.setText("PTT");
                 });
-                radioManager.getDataPort().setDTR(false);
-            } catch (Exception e) {
-                android.util.Log.e("RTTY_TX", "Eroare loop FSK", e);
             }
-        }).start();
+            try {
+                radioManager.getDataPort().setDTR(false);
+            } catch (Exception ignored) {}
+        }
     }
 
     private long trimiteOctetBaudotHardware(int codBaudot, long n, long d) throws Exception {
