@@ -235,6 +235,8 @@ public class RadioManager {
                 Thread.sleep(50);
                 trimiteComandaCAT("PC;");
                 Thread.sleep(50);
+                trimiteComandaCAT("RM8;"); // Interogăm tensiunea pentru a detecta 6W vs 10W
+                Thread.sleep(50);
                 trimiteComandaCAT("SS04;");
                 Thread.sleep(50);
                 trimiteComandaCAT("KS;");
@@ -242,6 +244,24 @@ public class RadioManager {
                 Log.e(TAG, "Error in initial query", e);
             }
         }).start();
+
+        // Lansăm polling-ul periodic pentru tensiune (RM8) la fiecare 5 secunde
+        pornestePollingTensiune();
+    }
+
+    private final Runnable runnablePollingRM8 = new Runnable() {
+        @Override
+        public void run() {
+            if (catPort != null && catPort.isOpen()) {
+                trimiteComandaCAT("RM8;");
+                handlerUi.postDelayed(this, 5000); // Repetăm la 5 secunde
+            }
+        }
+    };
+
+    private void pornestePollingTensiune() {
+        handlerUi.removeCallbacks(runnablePollingRM8);
+        handlerUi.postDelayed(runnablePollingRM8, 5000);
     }
 
     public void trimiteComandaCAT(String cmd) {

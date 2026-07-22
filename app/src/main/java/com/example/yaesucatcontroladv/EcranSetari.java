@@ -399,9 +399,13 @@ public class EcranSetari {
             String datePC = comandaScurta.substring(2);
             if (!datePC.isEmpty()) {
                 prefixPutereStatie = datePC.charAt(0);
-                // Actualizăm eticheta modelului (Field = prefix '1', Optima = orice alt prefix, de obicei '0')
-                final String model = (prefixPutereStatie == '1') ? "YAESU FTX1 Field" : "YAESU FTX1 Optima";
-                tvModelLabel.setText(model);
+                // Actualizăm eticheta modelului conform noii cerințe
+                if (prefixPutereStatie == '1') {
+                    String pwr = (skPower.getMax() == 60) ? "6W" : "10W";
+                    tvModelLabel.setText("Yaesu FTX1 Field - " + pwr);
+                } else {
+                    tvModelLabel.setText("Yaesu FTX1 Optima - 100W");
+                }
                 
                 if (datePC.length() >= 4) {
                     try {
@@ -429,6 +433,21 @@ public class EcranSetari {
                         // Ignorăm erorile de format
                     }
                 }
+            }
+        } else if (prefix.equals("RM")) {
+            // RM8nnn000; -> nnn este tensiunea (ex: 138 = 13.8V)
+            if (comandaScurta.length() >= 6 && comandaScurta.charAt(2) == '8') {
+                try {
+                    int tensiuneRaw = Integer.parseInt(comandaScurta.substring(3, 6));
+                    if (prefixPutereStatie == '1') {
+                        // Calibrare: 10.8V = 169. Pragul de 11.5V corespunde la ~180 unități.
+                        boolean esteBaterie = tensiuneRaw < 180; 
+                        skPower.setMax(esteBaterie ? 60 : 100);
+                        
+                        String pwr = esteBaterie ? "6W" : "10W";
+                        tvModelLabel.setText("Yaesu FTX1 Field - " + pwr);
+                    }
+                } catch (Exception ignored) {}
             }
         } else if (prefix.equals("SS") && comandaScurta.startsWith("SS04")) {
             try {

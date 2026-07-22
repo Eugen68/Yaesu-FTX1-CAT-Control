@@ -269,6 +269,9 @@ public class EcranComenzi {
         } else if (prefix.equals("RM")) {
             try {
                 if (comandaScurta.length() < 6) return; // FIX: verificare lungime
+                // Verificăm dacă este pentru S-Meter (RM1); RM8 (tensiune) este ignorat aici
+                if (comandaScurta.charAt(2) != '1') return;
+
                 int nivelBrut = Integer.parseInt(comandaScurta.substring(3, 6));
                 pbSMeter.setProgress(nivelBrut);
                 String label = "S " + (nivelBrut / 15);
