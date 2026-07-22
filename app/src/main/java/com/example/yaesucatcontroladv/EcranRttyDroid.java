@@ -119,6 +119,16 @@ public class EcranRttyDroid {
     private final java.util.concurrent.ConcurrentLinkedQueue<String> coadaMesajeTxRtty = new java.util.concurrent.ConcurrentLinkedQueue<>();
     private final java.util.concurrent.atomic.AtomicBoolean workerTxRttyActiv = new java.util.concurrent.atomic.AtomicBoolean(false);
 
+    // CORECTIE: referinte pastrate catre thread-urile de fundal (decodare + TX), ca
+    // eliberareResurse() sa poata astepta (join) oprirea lor efectiva, nu doar sa
+    // seteze un flag si sa continue imediat sperand ca s-au oprit. Fara asta, la EXIT
+    // se putea intampla o cursa: threadul TX inca scriind pe port dupa ce RadioManager
+    // il inchisese deja (mai ales cu coada TX noua, daca EXIT venea in mijlocul unei
+    // transmisii).
+    private volatile Thread threadDecodareRtty;
+    private volatile Thread threadWorkerTxRtty;
+    private volatile boolean opreteTxRttySolicitata = false;
+
     // REFACTORIZARE: tabelele ITA2 si logica de shift LTRS/FIGS au fost extrase in
     // BaudotCodec (clasa noua, fara dependente Android, testabila independent).
     // RX si TX au fiecare propria stare de shift, deci fiecare propria instanta.
@@ -819,7 +829,7 @@ public class EcranRttyDroid {
         btnRttyAudioToggle.setText("STOP");
         btnRttyAudioToggle.setBackgroundColor(Color.RED);
 
-        new Thread(() -> {
+        threadDecodareRtty = new Thread(() -> {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
             int sampleRate = 48000;
             double baudRTTY = BAUD_RTTY;
@@ -1150,7 +1160,8 @@ public class EcranRttyDroid {
             } catch (Exception e) {
                 android.util.Log.e("RTTY_DECODER", "Eroare oprire AudioRecord", e);
             }
-        }).start();
+        });
+        threadDecodareRtty.start();
     }
 
     private void opresteDecodorRtty() {
@@ -1284,10 +1295,10 @@ public class EcranRttyDroid {
      */
     private void porneteWorkerTxRttyDacaNuRuleaza() {
         if (!workerTxRttyActiv.compareAndSet(false, true)) return; // deja ruleaza un worker
-        new Thread(() -> {
+        threadWorkerTxRtty = new Thread(() -> {
             try {
                 String mesaj;
-                while ((mesaj = coadaMesajeTxRtty.poll()) != null) {
+                while (!opreteTxRttySolicitata && (mesaj = coadaMesajeTxRtty.poll()) != null) {
                     transmiteUnMesajRttyBaudotBlocant(mesaj);
                     actualizeazaLabelSend();
                 }
@@ -1295,7 +1306,8 @@ public class EcranRttyDroid {
                 workerTxRttyActiv.set(false);
                 actualizeazaLabelSend(); // revine la "SEND" simplu cand coada s-a golit
             }
-        }, "RTTY-TX-Worker").start();
+        }, "RTTY-TX-Worker");
+        threadWorkerTxRtty.start();
     }
 
     /**
@@ -1333,7 +1345,7 @@ public class EcranRttyDroid {
             next = trimiteOctetBaudotHardware(0x1F, next, dur);
             next = trimiteOctetBaudotHardware(0x1F, next, dur);
 
-            for (int i = 0; i < text.length(); i++) {
+            for (int i = 0; i < text.length() && !opreteTxRttySolicitata; i++) {
                 char c = Character.toUpperCase(text.charAt(i));
                 for (int codBaudot : txBaudotCodec.encode(c)) {
                     next = trimiteOctetBaudotHardware(codBaudot, next, dur);
@@ -1387,7 +1399,14 @@ public class EcranRttyDroid {
         // 1. Oprim decodarea (flag-ul opreste bucla while din thread)
         decodareRttyActiva = false;
 
-        // 2. Oprim transmisia FSK daca e activa
+        // 2. CORECTIE: golim coada TX si semnalam worker-ului sa opreasca mesajul curent
+        // cat mai curand (intre caractere, nu in mijlocul unui cod Baudot, ca sa nu lasam
+        // radioul intr-o stare inconsistenta), apoi asteptam efectiv sa se opreasca -
+        // inainte doar setam isTransmittingRtty=false si continuam imediat, fara nicio
+        // garantie ca threadul chiar s-a oprit (risc real daca EXIT venea in mijlocul
+        // unei transmisii, threadul putea scrie pe port dupa ce RadioManager il inchidea).
+        coadaMesajeTxRtty.clear();
+        opreteTxRttySolicitata = true;
         isTransmittingRtty = false;
         if (radioManager != null && radioManager.getDataPort() != null) {
             try {
@@ -1395,13 +1414,24 @@ public class EcranRttyDroid {
                 radioManager.getDataPort().setRTS(false);
             } catch (Exception ignored) {}
         }
+        Thread workerTx = threadWorkerTxRtty;
+        if (workerTx != null && workerTx.isAlive()) {
+            try { workerTx.join(500); } catch (InterruptedException ignored) {}
+        }
 
-        // 3. Reciclam bitmap-urile Waterfall
+        // 3. CORECTIE: asteptam (cu timeout scurt) si threadul de decodare audio, in loc
+        // sa continuam imediat presupunand ca s-a oprit doar pentru ca am setat flag-ul.
+        Thread decodThread = threadDecodareRtty;
+        if (decodThread != null && decodThread.isAlive()) {
+            try { decodThread.join(500); } catch (InterruptedException ignored) {}
+        }
+
+        // 4. Reciclam bitmap-urile Waterfall
         if (waterfall != null) {
             waterfall.eliberareBitmap();
         }
 
-        // 4. Golim buffer-ul de cuvinte
+        // 5. Golim buffer-ul de cuvinte
         callsignDetector.resetBuffer();
     }
 
