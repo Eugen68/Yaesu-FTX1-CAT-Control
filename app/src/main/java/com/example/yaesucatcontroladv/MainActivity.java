@@ -73,6 +73,8 @@ public class MainActivity extends AppCompatActivity {
     private FrameLayout containerPrincipal;
     private Button btnMeniuCAT, btnMeniuSettings, btnMeniuRtty, btnMeniuRttyPy, btnMeniuLogger, btnMeniuMySettings, btnMeniuExit;
 
+    private boolean isReceiverRegistered = false;
+
     private final BroadcastReceiver usbReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -88,6 +90,11 @@ public class MainActivity extends AppCompatActivity {
                         Toast.makeText(context, "Permission denied for USB device", Toast.LENGTH_SHORT).show();
                     }
                 }
+            } else if (UsbManager.ACTION_USB_DEVICE_DETACHED.equals(action)) {
+                if (radioManager != null) {
+                    radioManager.opresteToat();
+                    Toast.makeText(context, "Radio disconnected (USB detached)", Toast.LENGTH_SHORT).show();
+                }
             }
         }
     };
@@ -100,8 +107,11 @@ public class MainActivity extends AppCompatActivity {
         verificaPermisiuneOverlay();
         ascundeButoaneNavigare();
 
-        IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(ACTION_USB_PERMISSION);
+        filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
         registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        isReceiverRegistered = true;
 
         radioManager = new RadioManager(this);
 
@@ -289,6 +299,9 @@ public class MainActivity extends AppCompatActivity {
     // ============================================================
     // EXIT APLICATIE - Eliberare completa resurse + inchidere fortata
     // ============================================================
+// ============================================================
+// EXIT APLICATIE - Eliberare completa resurse + inchidere graceful
+// ============================================================
     private void exitAplicatie() {
         new AlertDialog.Builder(this)
                 .setTitle("Confirmare Iesire")
@@ -298,27 +311,37 @@ public class MainActivity extends AppCompatActivity {
                     if (managerEcranRtty != null) {
                         managerEcranRtty.eliberareResurse();
                     }
-
                     // 2. Dezactivam receiver-ul USB
-                    try {
-                        unregisterReceiver(usbReceiver);
-                    } catch (Exception e) {
-                        android.util.Log.e("MAIN", "Receiver deja dezactivat", e);
-                    }
+                    safeUnregisterReceiver();
 
                     // 3. Oprim porturile seriale si conexiunile USB
                     if (radioManager != null) {
                         radioManager.opresteToat();
                     }
 
-                    // 4. Inchidem Activity-ul curent
-                    finish();
+                    // 4. Asteptam 200ms ca thread-urile USB sa se opreasca elegant
+                    //    (Aceasta linie previne eroarea "Connection closed")
+                    try {
+                        Thread.sleep(200);
+                    } catch (InterruptedException ignored) {}
 
-                    // 5. Fortam terminarea procesului (garanteaza eliberarea completa)
-                    System.exit(0);
+                    // 5. Inchidem Activity-ul curent (FARA System.exit!)
+                    //    Android va gestiona cleanup-ul nativ in mod sigur.
+                    finish();
                 })
                 .setNegativeButton("Anuleaza", null)
                 .show();
+    }
+
+    private void safeUnregisterReceiver() {
+        if (isReceiverRegistered) {
+            try {
+                unregisterReceiver(usbReceiver);
+            } catch (Exception e) {
+                android.util.Log.e("MAIN", "Eroare la dezactivarea receiver-ului", e);
+            }
+            isReceiverRegistered = false;
+        }
     }
 
     @Override
@@ -366,11 +389,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         // Dezactivam receiver-ul USB
-        try {
-            unregisterReceiver(usbReceiver);
-        } catch (Exception e) {
-            android.util.Log.e("MAIN", "Receiver deja dezactivat", e);
-        }
+        safeUnregisterReceiver();
 
         // Oprim porturile seriale
         if (radioManager != null) {

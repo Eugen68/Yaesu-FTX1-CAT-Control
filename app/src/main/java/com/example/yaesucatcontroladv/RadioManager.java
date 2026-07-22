@@ -30,6 +30,8 @@ public class RadioManager {
     private UsbSerialPort catPort;
     private UsbSerialPort dataPort;
 
+    private boolean intentionalDisconnect = false;
+
     // OPTIMIZARE: inlocuim thread-urile proprii cu polling (Thread.sleep(20) intre
     // citiri) cu SerialInputOutputManager din biblioteca usb-serial-for-android:
     // - citire event-driven, onNewData() apelat imediat ce sosesc date (nu la
@@ -108,6 +110,7 @@ public class RadioManager {
 
     private void deschidePorturi(UsbManager manager, UsbDevice device) {
         try {
+            intentionalDisconnect = false;
             UsbDeviceConnection connection = manager.openDevice(device);
             if (connection == null) return;
 
@@ -174,6 +177,11 @@ public class RadioManager {
             public void onRunError(Exception e) {
                 // Apelat automat de biblioteca la deconectare/eroare de citire -
                 // inainte trebuia sa prindem noi asta manual dintr-un read().
+                if (intentionalDisconnect) {
+                    Log.d(TAG, "CAT IoManager oprit controlat (disconnect/exit)");
+                    return;
+                }
+
                 Log.e(TAG, "CAT IoManager oprit (deconectare/eroare)", e);
                 handlerUi.post(() -> Toast.makeText(context,
                         "Conexiune CAT pierduta: " + e.getMessage(), Toast.LENGTH_SHORT).show());
@@ -259,6 +267,7 @@ public class RadioManager {
     // Elimina cursa veche (thread de citire activ + port inchis simultan din alt
     // thread), care putea produce IOException/crash la deconectare rapida.
     public void opresteToat() {
+        intentionalDisconnect = true;
         if (catIoManager != null) {
             catIoManager.stop();
             catIoManager = null;
@@ -269,10 +278,31 @@ public class RadioManager {
         }
 
         try {
-            if (catPort != null) catPort.close();
-            if (dataPort != null) dataPort.close();
+            if (catPort != null) {
+                catPort.close();
+            }
+        } catch (IOException e) {
+            if (!"Already closed".equals(e.getMessage())) {
+                Log.e(TAG, "Err closing catPort", e);
+            }
         } catch (Exception e) {
-            Log.e(TAG, "Err closing ports", e);
+            Log.e(TAG, "Err closing catPort (generic)", e);
+        } finally {
+            catPort = null;
+        }
+
+        try {
+            if (dataPort != null) {
+                dataPort.close();
+            }
+        } catch (IOException e) {
+            if (!"Already closed".equals(e.getMessage())) {
+                Log.e(TAG, "Err closing dataPort", e);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Err closing dataPort (generic)", e);
+        } finally {
+            dataPort = null;
         }
     }
 }

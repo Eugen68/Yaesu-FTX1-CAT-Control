@@ -1416,14 +1416,18 @@ public class EcranRttyDroid {
         }
         Thread workerTx = threadWorkerTxRtty;
         if (workerTx != null && workerTx.isAlive()) {
-            try { workerTx.join(500); } catch (InterruptedException ignored) {}
+            try { 
+                workerTx.join(500); 
+            } catch (InterruptedException ignored) {}
         }
 
         // 3. CORECTIE: asteptam (cu timeout scurt) si threadul de decodare audio, in loc
         // sa continuam imediat presupunand ca s-a oprit doar pentru ca am setat flag-ul.
         Thread decodThread = threadDecodareRtty;
         if (decodThread != null && decodThread.isAlive()) {
-            try { decodThread.join(500); } catch (InterruptedException ignored) {}
+            try { 
+                decodThread.join(500); 
+            } catch (InterruptedException ignored) {}
         }
 
         // 4. Reciclam bitmap-urile Waterfall
