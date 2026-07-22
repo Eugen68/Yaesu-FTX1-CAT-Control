@@ -117,12 +117,17 @@ public class MainActivity extends AppCompatActivity {
 
         radioManager.setCatDataListener(cmd -> {
             runOnUiThread(() -> {
-                if (cmd.startsWith("TX ->")) {
-                    if (managerEcranSetari != null) {
-                        managerEcranSetari.raporteazaComandaInLog(cmd);
-                    }
-                    return;
+                // 1. LOGARE CENTRALĂ: Trimitem orice comandă (TX sau RX) direct în Monitorul din Setări
+                if (managerEcranSetari != null) {
+                    // Dacă e RX, adăugăm manual punctul și virgula (pe care RadioManager le elimină la parsare)
+                    String logText = cmd.startsWith("TX ->") ? cmd : (cmd + ";");
+                    managerEcranSetari.raporteazaComandaInLog(logText);
                 }
+
+                // 2. Dacă e TX, nu mai procesăm parsarea de răspuns
+                if (cmd.startsWith("TX ->")) return;
+
+                // 3. PROCESARE RĂSPUNSURI (RX)
                 if (cmd.length() >= 2) {
                     final String prefix = cmd.substring(0, 2);
                     if (prefix.equals("FA")) {

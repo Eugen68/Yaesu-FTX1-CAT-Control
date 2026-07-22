@@ -21,7 +21,7 @@ public class EcranComenzi {
     private TextView tvSMeterValue;
     private ProgressBar pbSMeter;
     private Button btnLSB, btnUSB, btnCW, btnRTTYL;
-    private Button btnBkInToggle, btnApfToggle, btnWidthToggle;
+    private Button btnBkInToggle, btnApfToggle, btnWidthToggle, btnConnect;
     private LinearLayout containerButoaneCwExtra;
 
     // Variabile de stare internă pentru butoane
@@ -47,7 +47,7 @@ public class EcranComenzi {
         llCAT.setPadding(30, 30, 30, 30);
 
         // --- BUTTON STATIE CONECTARE ---
-        Button btnConnect = new Button(context);
+        btnConnect = new Button(context);
         btnConnect.setText("CONNECT RADIO STATION");
         btnConnect.setBackgroundColor(Color.parseColor("#007ACC"));
         btnConnect.setTextColor(Color.WHITE);
@@ -277,6 +277,13 @@ public class EcranComenzi {
                 pbSMeter.setProgressTintList(android.content.res.ColorStateList.valueOf(
                         Color.parseColor(nivelBrut > 110 ? "#D32F2F" : "#FFB300")));
             } catch (Exception e) { /* parsing eșuat, ignorăm */ }
+        } else if (prefix.equals("PC")) {
+            if (comandaScurta.length() >= 3) {
+                char pfx = comandaScurta.charAt(2);
+                String model = (pfx == '1') ? "FTX1 FIELD" : "FTX1 OPTIMA";
+                btnConnect.setText("CONNECTED TO " + model);
+                btnConnect.setBackgroundColor(Color.parseColor("#2E7D32")); // Verde succes
+            }
         }
     }
     private void actualizeazaInterfataModuriInstant(String codMod) {

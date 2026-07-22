@@ -99,14 +99,35 @@ public class EcranSetari {
             @Override
             public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
                 int pEfectiv = progress < 5 ? 5 : progress;
-                tvPowerLabel.setText("Power Adjustment: " + pEfectiv + " W");
+                if (prefixPutereStatie == '1') {
+                    double wati = pEfectiv / 10.0;
+                    if (pEfectiv % 10 == 0) {
+                        tvPowerLabel.setText(String.format(java.util.Locale.US, "Power Adjustment: %d W", (int)wati));
+                    } else {
+                        tvPowerLabel.setText(String.format(java.util.Locale.US, "Power Adjustment: %.1f W", wati));
+                    }
+                } else {
+                    tvPowerLabel.setText("Power Adjustment: " + pEfectiv + " W");
+                }
             }
             @Override public void onStartTrackingTouch(SeekBar sb) {}
             @Override
             public void onStopTrackingTouch(SeekBar sb) {
                 int p = sb.getProgress() < 5 ? 5 : sb.getProgress();
-                radioManager.trimiteComandaCAT("PC" + prefixPutereStatie + String.format(java.util.Locale.US, "%03d", p) + ";");
-                raporteazaComandaInLog("TX -> PC" + prefixPutereStatie + String.format(java.util.Locale.US, "%03d", p) + ";");
+                String valoareCAT;
+                if (prefixPutereStatie == '1') {
+                    // Format hibrid Field: 3 caractere fixe (ex: "006" sau "5.9")
+                    double wati = p / 10.0;
+                    if (p % 10 == 0) {
+                        valoareCAT = String.format(java.util.Locale.US, "%03d", (int)wati);
+                    } else {
+                        valoareCAT = String.format(java.util.Locale.US, "%.1f", wati);
+                    }
+                } else {
+                    valoareCAT = String.format(java.util.Locale.US, "%03d", p);
+                }
+                
+                radioManager.trimiteComandaCAT("PC" + prefixPutereStatie + valoareCAT + ";");
             }
         });
         llGen.addView(skPower);
@@ -374,19 +395,40 @@ public class EcranSetari {
 
     // --- PARSER CENTRAL ASINCRON ---
     public void proceseazaDateCATInSetari(String prefix, String comandaScurta) {
-        // Înregistrăm orice pachet sosit de la Yaesu direct în monitorul de log
-        // --- REPARAT: Marcăm explicit stringul cu RX pentru a fi forțat în Verde de loger ---
-        raporteazaComandaInLog("RX <- " + comandaScurta + ";");
-
         if (prefix.equals("PC")) {
             String datePC = comandaScurta.substring(2);
-            if (datePC.length() >= 4) {
+            if (!datePC.isEmpty()) {
                 prefixPutereStatie = datePC.charAt(0);
-                final String model = (prefixPutereStatie == '1') ? "Yaesu FTX1 Field" : "Yaesu FTX1 Optima";
-                final int putere = Integer.parseInt(datePC.substring(1, 4));
-                skPower.setProgress(putere);
-                tvPowerLabel.setText("Power Adjustment: " + putere + " W");
+                // Actualizăm eticheta modelului (Field = prefix '1', Optima = orice alt prefix, de obicei '0')
+                final String model = (prefixPutereStatie == '1') ? "YAESU FTX1 Field" : "YAESU FTX1 Optima";
                 tvModelLabel.setText(model);
+                
+                if (datePC.length() >= 4) {
+                    try {
+                        String valStr = datePC.substring(1, 4); // Luăm fix cele 3 caractere de după prefix
+                        double valoareWati;
+                        if (valStr.contains(".")) {
+                            valoareWati = Double.parseDouble(valStr);
+                        } else {
+                            // Dacă nu are punct, e formatul "005" sau "085"
+                            valoareWati = Integer.parseInt(valStr.trim());
+                        }
+                        
+                        if (prefixPutereStatie == '1') {
+                            skPower.setProgress((int)(valoareWati * 10));
+                            if ((int)(valoareWati * 10) % 10 == 0) {
+                                tvPowerLabel.setText(String.format(java.util.Locale.US, "Power Adjustment: %d W", (int)valoareWati));
+                            } else {
+                                tvPowerLabel.setText(String.format(java.util.Locale.US, "Power Adjustment: %.1f W", valoareWati));
+                            }
+                        } else {
+                            skPower.setProgress((int)valoareWati);
+                            tvPowerLabel.setText("Power Adjustment: " + (int)valoareWati + " W");
+                        }
+                    } catch (Exception e) {
+                        // Ignorăm erorile de format
+                    }
+                }
             }
         } else if (prefix.equals("SS") && comandaScurta.startsWith("SS04")) {
             try {
