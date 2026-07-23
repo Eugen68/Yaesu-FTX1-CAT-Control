@@ -89,7 +89,7 @@ public class QrzLookupHelper {
 
                 handlerUi.post(() -> callback.onSucces(rezultat));
             } catch (Exception e) {
-                final String mesaj = "Eroare rețea/QRZ: " + e.getMessage();
+                final String mesaj = "Network/QRZ error: " + e.getMessage();
                 handlerUi.post(() -> callback.onEroare(mesaj));
             }
         }, "QrzLookup").start();
@@ -111,7 +111,7 @@ public class QrzLookupHelper {
         }
         String key = raspuns.get("Key");
         if (key == null) {
-            throw new Exception("Login QRZ eșuat - verifică userul/parola.");
+            throw new Exception("QRZ login failed - check username/password.");
         }
         return key;
     }
@@ -143,7 +143,7 @@ public class QrzLookupHelper {
 
         int codRaspuns = conn.getResponseCode();
         if (codRaspuns != HttpURLConnection.HTTP_OK) {
-            throw new Exception("Server HTTP " + codRaspuns + " (" + conn.getResponseMessage() + ")");
+            throw new Exception("HTTP Server " + codRaspuns + " (" + conn.getResponseMessage() + ")");
         }
 
         try (InputStream in = conn.getInputStream()) {
@@ -184,7 +184,7 @@ public class QrzLookupHelper {
             // sa se poata diagnostica exact ce a trimis serverul.
             if (!rezultat.containsKey("Key") && !rezultat.containsKey("Error") && !rezultat.containsKey("call")) {
                 String fragment = raspunsBrut.length() > 200 ? raspunsBrut.substring(0, 200) + "..." : raspunsBrut;
-                throw new Exception("Răspuns neașteptat de la server: " + fragment);
+                throw new Exception("Unexpected response from server: " + fragment);
             }
         } finally {
             conn.disconnect();

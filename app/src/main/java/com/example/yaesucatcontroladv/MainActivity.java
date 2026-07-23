@@ -225,7 +225,7 @@ public class MainActivity extends AppCompatActivity {
 
         btnMeniuCAT = creeazaButonMeniu("COMMANDS", v -> comutaEcranMaster(1));
         btnMeniuSettings = creeazaButonMeniu("STATION SETTINGS", v -> comutaEcranMaster(2));
-        btnMeniuRtty = creeazaButonMeniu("RTTY DROID", v -> comutaEcranMaster(3));
+        btnMeniuRtty = creeazaButonMeniu("RTTY CENTER", v -> comutaEcranMaster(3));
         btnMeniuRttyPy = creeazaButonMeniu("MACROS EDITOR", v -> comutaEcranMaster(4));
         btnMeniuLogger = creeazaButonMeniu("LOGGER", v -> comutaEcranMaster(5));
         btnMeniuMySettings = creeazaButonMeniu("MY SETTINGS", v -> comutaEcranMaster(6));
@@ -309,9 +309,9 @@ public class MainActivity extends AppCompatActivity {
 // ============================================================
     private void exitAplicatie() {
         new AlertDialog.Builder(this)
-                .setTitle("Confirmare Iesire")
-                .setMessage("Sigur doriti sa inchideti aplicatia?\n\nToate resursele USB si audio vor fi eliberate.")
-                .setPositiveButton("DA, INCHIDE", (dialog, which) -> {
+                .setTitle("Exit Confirmation")
+                .setMessage("Are you sure you want to close the application?\n\nAll USB and audio resources will be released.")
+                .setPositiveButton("YES, CLOSE", (dialog, which) -> {
                     // 1. Oprim resursele RTTY (AudioRecord, thread decodare, bitmap-uri)
                     if (managerEcranRtty != null) {
                         managerEcranRtty.eliberareResurse();
@@ -334,7 +334,7 @@ public class MainActivity extends AppCompatActivity {
                     //    Android va gestiona cleanup-ul nativ in mod sigur.
                     finish();
                 })
-                .setNegativeButton("Anuleaza", null)
+                .setNegativeButton("Cancel", null)
                 .show();
     }
 
@@ -370,14 +370,14 @@ public class MainActivity extends AppCompatActivity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!Settings.canDrawOverlays(this)) {
                 new AlertDialog.Builder(this)
-                        .setTitle("Permisiune Afișare Peste Alte Aplicații")
-                        .setMessage("Pentru a funcționa corect și a menține ecranul activ, această aplicație are nevoie de permisiunea de a apărea peste alte aplicații.\n\nVeți fi redirecționat către setările sistemului pentru a activa manual această opțiune.")
-                        .setPositiveButton("OK, MERGI LA SETĂRI", (dialog, which) -> {
+                        .setTitle("Overlay Permission")
+                        .setMessage("To work correctly and keep the screen active, this application needs permission to appear over other apps.\n\nYou will be redirected to the system settings to manually enable this option.")
+                        .setPositiveButton("OK, GO TO SETTINGS", (dialog, which) -> {
                             Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                                     Uri.parse("package:" + getPackageName()));
                             startActivity(intent);
                         })
-                        .setNegativeButton("MAI TÂRZIU", null)
+                        .setNegativeButton("LATER", null)
                         .setCancelable(false)
                         .show();
             }

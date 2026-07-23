@@ -279,7 +279,7 @@ public class EcranComenzi {
                 tvSMeterValue.setText(label);
                 pbSMeter.setProgressTintList(android.content.res.ColorStateList.valueOf(
                         Color.parseColor(nivelBrut > 110 ? "#D32F2F" : "#FFB300")));
-            } catch (Exception e) { /* parsing eșuat, ignorăm */ }
+            } catch (Exception e) { /* parsing failed, ignore */ }
         } else if (prefix.equals("PC")) {
             if (comandaScurta.length() >= 3) {
                 char pfx = comandaScurta.charAt(2);

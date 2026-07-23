@@ -88,9 +88,9 @@ public class AdifExporter {
         values.put(MediaStore.Downloads.MIME_TYPE, "text/plain");
         values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/" + PROGRAM_ID);
         Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-        if (uri == null) throw new Exception("Nu s-a putut crea fișierul ADIF.");
+        if (uri == null) throw new Exception("Could not create ADIF file.");
         try (OutputStream out = resolver.openOutputStream(uri)) {
-            if (out == null) throw new Exception("Nu s-a putut deschide fișierul ADIF.");
+            if (out == null) throw new Exception("Could not open ADIF file.");
             out.write(continut.getBytes(StandardCharsets.UTF_8));
         }
     }
@@ -112,7 +112,7 @@ public class AdifExporter {
 
         StringBuilder continut = new StringBuilder();
         try (InputStream in = context.getContentResolver().openInputStream(uri)) {
-            if (in == null) throw new Exception("Fișier invalid.");
+            if (in == null) throw new Exception("Invalid file.");
             BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
             String linie;
             while ((linie = reader.readLine()) != null) {

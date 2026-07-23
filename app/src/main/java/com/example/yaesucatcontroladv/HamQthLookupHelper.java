@@ -71,7 +71,7 @@ public class HamQthLookupHelper {
 
                 handlerUi.post(() -> callback.onSucces(rezultat));
             } catch (Exception e) {
-                final String mesaj = "Eroare HamQTH: " + e.getMessage();
+                final String mesaj = "HamQTH error: " + e.getMessage();
                 handlerUi.post(() -> callback.onEroare(mesaj));
             }
         }, "HamQthLookup").start();
@@ -91,7 +91,7 @@ public class HamQthLookupHelper {
         }
         String key = raspuns.get("session_id");
         if (key == null) {
-            throw new Exception("Login HamQTH eșuat.");
+            throw new Exception("HamQTH login failed.");
         }
         return key;
     }
@@ -113,7 +113,7 @@ public class HamQthLookupHelper {
 
         int codRaspuns = conn.getResponseCode();
         if (codRaspuns != HttpURLConnection.HTTP_OK) {
-            throw new Exception("Server HTTP " + codRaspuns);
+            throw new Exception("HTTP Server " + codRaspuns);
         }
 
         try (InputStream in = conn.getInputStream()) {

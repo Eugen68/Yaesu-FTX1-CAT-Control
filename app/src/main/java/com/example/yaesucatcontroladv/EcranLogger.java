@@ -111,11 +111,11 @@ public class EcranLogger {
         tvTitlu.setPadding(0, 0, 0, 20);
         viewPrincipal.addView(tvTitlu);
 
-        etCall = creeazaEditText("Indicativ (Call)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+        etCall = creeazaEditText("Callsign", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
         viewPrincipal.addView(etCall);
 
         Button btnCautaQrz = new Button(context);
-        btnCautaQrz.setText("CAUTA PE QRZ.COM");
+        btnCautaQrz.setText("SEARCH ON QRZ.COM");
         btnCautaQrz.setBackgroundColor(Color.parseColor("#5D4037"));
         btnCautaQrz.setTextColor(Color.WHITE);
         LinearLayout.LayoutParams pBtnQrz = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -131,7 +131,7 @@ public class EcranLogger {
         etRstRcvd = creeazaEditTextPondere("RST Rx", InputType.TYPE_CLASS_TEXT);
         etRstRcvd.setText("599");
 
-        etTimeOn = creeazaEditTextPondere("Ora UTC (HH:MM)", InputType.TYPE_CLASS_TEXT);
+        etTimeOn = creeazaEditTextPondere("UTC Time (HH:MM)", InputType.TYPE_CLASS_TEXT);
         etTimeOn.setKeyListener(android.text.method.DigitsKeyListener.getInstance("0123456789:"));
         etTimeOn.addTextChangedListener(new TextWatcher() {
             private boolean modificandu = false;
@@ -172,9 +172,9 @@ public class EcranLogger {
 
         LinearLayout rAndFrecventa = new LinearLayout(context);
         rAndFrecventa.setOrientation(LinearLayout.HORIZONTAL);
-        etFreq = creeazaEditTextPondere("Frecv. (MHz)", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        etBand = creeazaEditTextPondere("Banda", InputType.TYPE_CLASS_TEXT);
-        etMode = creeazaEditTextPondere("Mod", InputType.TYPE_CLASS_TEXT);
+        etFreq = creeazaEditTextPondere("Freq. (MHz)", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        etBand = creeazaEditTextPondere("Band", InputType.TYPE_CLASS_TEXT);
+        etMode = creeazaEditTextPondere("Mode", InputType.TYPE_CLASS_TEXT);
         rAndFrecventa.addView(etFreq);
         rAndFrecventa.addView(spatiuOrizontal());
         rAndFrecventa.addView(etBand);
@@ -183,7 +183,7 @@ public class EcranLogger {
         viewPrincipal.addView(rAndFrecventa);
 
         Button btnPreiaDinRadio = new Button(context);
-        btnPreiaDinRadio.setText("PREIA FRECVENTA/MOD DIN RADIO");
+        btnPreiaDinRadio.setText("GET FREQ/MODE FROM RADIO");
         btnPreiaDinRadio.setBackgroundColor(Color.parseColor("#007ACC"));
         btnPreiaDinRadio.setTextColor(Color.WHITE);
         LinearLayout.LayoutParams pBtnPreia = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -194,7 +194,7 @@ public class EcranLogger {
 
         LinearLayout rAndNume = new LinearLayout(context);
         rAndNume.setOrientation(LinearLayout.HORIZONTAL);
-        etName = creeazaEditTextPondere("Nume", InputType.TYPE_CLASS_TEXT);
+        etName = creeazaEditTextPondere("Name", InputType.TYPE_CLASS_TEXT);
         etQth = creeazaEditTextPondere("QTH", InputType.TYPE_CLASS_TEXT);
         rAndNume.addView(etName);
         rAndNume.addView(spatiuOrizontal());
@@ -204,7 +204,7 @@ public class EcranLogger {
         LinearLayout rAndGrid = new LinearLayout(context);
         rAndGrid.setOrientation(LinearLayout.HORIZONTAL);
         etGrid = creeazaEditTextPondere("Locator (Grid)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
-        etPower = creeazaEditTextPondere("Putere (W)", InputType.TYPE_CLASS_NUMBER);
+        etPower = creeazaEditTextPondere("Power (W)", InputType.TYPE_CLASS_NUMBER);
         rAndGrid.addView(etGrid);
         rAndGrid.addView(spatiuOrizontal());
         rAndGrid.addView(etPower);
@@ -213,7 +213,7 @@ public class EcranLogger {
         LinearLayout rAndMyGrid = new LinearLayout(context);
         rAndMyGrid.setOrientation(LinearLayout.HORIZONTAL);
         rAndMyGrid.setGravity(Gravity.CENTER_VERTICAL);
-        etMyGrid = creeazaEditTextPondere("Locatorul meu (My Grid)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+        etMyGrid = creeazaEditTextPondere("My Locator (My Grid)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
         Button btnGpsGrid = new Button(context);
         btnGpsGrid.setText("GPS");
         btnGpsGrid.setBackgroundColor(Color.parseColor("#00695C"));
@@ -224,7 +224,7 @@ public class EcranLogger {
         rAndMyGrid.addView(btnGpsGrid);
         viewPrincipal.addView(rAndMyGrid);
 
-        etComment = creeazaEditText("Comentariu", InputType.TYPE_CLASS_TEXT);
+        etComment = creeazaEditText("Comment", InputType.TYPE_CLASS_TEXT);
         viewPrincipal.addView(etComment);
 
         tvStareEditare = new TextView(context);
@@ -237,7 +237,7 @@ public class EcranLogger {
         viewPrincipal.addView(tvStareEditare);
 
         btnAdaugaQso = new Button(context);
-        btnAdaugaQso.setText("ADAUGA QSO IN JURNAL");
+        btnAdaugaQso.setText("ADD QSO TO LOG");
         btnAdaugaQso.setBackgroundColor(Color.parseColor("#2E7D32"));
         btnAdaugaQso.setTextColor(Color.WHITE);
         btnAdaugaQso.setTypeface(null, Typeface.BOLD);
@@ -248,7 +248,7 @@ public class EcranLogger {
         viewPrincipal.addView(btnAdaugaQso);
 
         btnAnuleazaEditare = new Button(context);
-        btnAnuleazaEditare.setText("ANULEAZA EDITAREA / QSO NOU");
+        btnAnuleazaEditare.setText("CANCEL EDIT / NEW QSO");
         btnAnuleazaEditare.setBackgroundColor(Color.parseColor("#757575"));
         btnAnuleazaEditare.setTextColor(Color.WHITE);
         LinearLayout.LayoutParams pBtnAnuleaza = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -259,7 +259,7 @@ public class EcranLogger {
         viewPrincipal.addView(btnAnuleazaEditare);
 
         TextView tvIstoricLabel = new TextView(context);
-        tvIstoricLabel.setText("Istoric QSO (tine apasat pentru a sterge):");
+        tvIstoricLabel.setText("QSO History (long press to delete):");
         tvIstoricLabel.setTextColor(Color.GRAY);
         tvIstoricLabel.setTextSize(12);
         tvIstoricLabel.setPadding(0, 0, 0, 5);
@@ -330,7 +330,7 @@ public class EcranLogger {
     private void salveazaQso() {
         String call = etCall.getText().toString().trim().toUpperCase(Locale.US);
         if (call.isEmpty()) {
-            Toast.makeText(context, "Introdu indicativul statiei lucrate.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "Enter the callsign of the station worked.", Toast.LENGTH_SHORT).show();
             return;
         }
         boolean esteEditare = (idQsoInEditare != null);
@@ -361,10 +361,10 @@ public class EcranLogger {
         if (esteEditare) {
             qso.id = idQsoInEditare;
             dbHelper.actualizeazaQso(qso);
-            Toast.makeText(context, "QSO actualizat: " + call, Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "QSO updated: " + call, Toast.LENGTH_SHORT).show();
         } else {
             dbHelper.insereazaQso(qso);
-            Toast.makeText(context, "QSO salvat: " + call, Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "QSO saved: " + call, Toast.LENGTH_SHORT).show();
         }
         iesiDinModEditare();
         refreshListaQso();
@@ -389,9 +389,9 @@ public class EcranLogger {
         etComment.setText(q.comment);
         etPower.setText(q.power);
         etMyGrid.setText(q.myGridsquare);
-        btnAdaugaQso.setText("SALVEAZA MODIFICARILE");
+        btnAdaugaQso.setText("SAVE CHANGES");
         btnAnuleazaEditare.setVisibility(View.VISIBLE);
-        tvStareEditare.setText("Editezi QSO: " + q.call + " (" + q.qsoDate + ")");
+        tvStareEditare.setText("Editing QSO: " + q.call + " (" + q.qsoDate + ")");
         tvStareEditare.setVisibility(View.VISIBLE);
     }
 
@@ -405,7 +405,7 @@ public class EcranLogger {
         etComment.setText("");
         etRstSent.setText("599");
         etRstRcvd.setText("599");
-        btnAdaugaQso.setText("ADAUGA QSO IN JURNAL");
+        btnAdaugaQso.setText("ADD QSO TO LOG");
         btnAnuleazaEditare.setVisibility(View.GONE);
         tvStareEditare.setVisibility(View.GONE);
     }
@@ -413,14 +413,14 @@ public class EcranLogger {
     private void initiazaCautareQrz() {
         String call = etCall.getText().toString().trim();
         if (call.isEmpty()) {
-            Toast.makeText(context, "Introdu mai intai un indicativ.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "Enter a callsign first.", Toast.LENGTH_SHORT).show();
             return;
         }
         SharedPreferences prefs = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
         String user = prefs.getString(EcranSetariProprii.PREF_QRZ_USER, "");
         String pass = prefs.getString(EcranSetariProprii.PREF_QRZ_PASS, "");
         if (user.isEmpty() || pass.isEmpty()) {
-            Toast.makeText(context, "Configureaza userul/parola QRZ.com in tab-ul MY SETTINGS.", Toast.LENGTH_LONG).show();
+            Toast.makeText(context, "Configure QRZ.com username/password in the MY SETTINGS tab.", Toast.LENGTH_LONG).show();
             return;
         }
         executaCautareQrz(call);
@@ -431,10 +431,10 @@ public class EcranLogger {
         String userQrz = prefs.getString(EcranSetariProprii.PREF_QRZ_USER, "");
         String passQrz = prefs.getString(EcranSetariProprii.PREF_QRZ_PASS, "");
         if (userQrz.isEmpty() || passQrz.isEmpty()) {
-            Toast.makeText(context, "Configureaza QRZ.com in MY SETTINGS", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "Configure QRZ.com in MY SETTINGS", Toast.LENGTH_SHORT).show();
             return;
         }
-        Toast.makeText(context, "Caut " + call + " pe QRZ.com...", Toast.LENGTH_SHORT).show();
+        Toast.makeText(context, "Searching " + call + " on QRZ.com...", Toast.LENGTH_SHORT).show();
         QrzLookupHelper.cautaIndicativ(userQrz, passQrz, call, new QrzLookupHelper.QrzCallback() {
             @Override
             public void onSucces(QrzLookupHelper.QrzRezultat r) {
@@ -451,15 +451,15 @@ public class EcranLogger {
                 }
                 if (r.grid != null && !r.grid.isEmpty()) {
                     etGrid.setText(r.grid);
-                    Toast.makeText(context, "QRZ: gasit " + call + " (cu grid)", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(context, "QRZ: found " + call + " (with grid)", Toast.LENGTH_SHORT).show();
                     return;
                 }
-                Toast.makeText(context, "QRZ: fara grid. Incerc HamQTH...", Toast.LENGTH_SHORT).show();
+                Toast.makeText(context, "QRZ: no grid. Trying HamQTH...", Toast.LENGTH_SHORT).show();
                 cautaPeHamQthPentruGrid(call);
             }
             @Override
             public void onEroare(String mesaj) {
-                Toast.makeText(context, "QRZ eroare: " + mesaj + "\nIncerc HamQTH...", Toast.LENGTH_SHORT).show();
+                Toast.makeText(context, "QRZ error: " + mesaj + "\nTrying HamQTH...", Toast.LENGTH_SHORT).show();
                 cautaPeHamQthPentruGrid(call);
             }
         });
@@ -470,7 +470,7 @@ public class EcranLogger {
         String userHam = prefs.getString(EcranSetariProprii.PREF_HAMQTH_USER, "");
         String passHam = prefs.getString(EcranSetariProprii.PREF_HAMQTH_PASS, "");
         if (userHam.isEmpty() || passHam.isEmpty()) {
-            Toast.makeText(context, "Configureaza HamQTH.com in MY SETTINGS pentru grid!", Toast.LENGTH_LONG).show();
+            Toast.makeText(context, "Configure HamQTH.com in MY SETTINGS for grid!", Toast.LENGTH_LONG).show();
             return;
         }
         HamQthLookupHelper.cautaIndicativ(userHam, passHam, call, new HamQthLookupHelper.HamQthCallback() {
@@ -492,7 +492,7 @@ public class EcranLogger {
             }
             @Override
             public void onEroare(String mesaj) {
-                Toast.makeText(context, "HamQTH eroare: " + mesaj, Toast.LENGTH_SHORT).show();
+                Toast.makeText(context, "HamQTH error: " + mesaj, Toast.LENGTH_SHORT).show();
             }
         });
     }
@@ -502,20 +502,20 @@ public class EcranLogger {
                 != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions((Activity) context,
                     new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, REQUEST_CODE_LOCATION);
-            Toast.makeText(context, "Permite accesul la locatie, apoi apasa din nou GPS.", Toast.LENGTH_LONG).show();
+            Toast.makeText(context, "Allow location access, then press GPS again.", Toast.LENGTH_LONG).show();
             return;
         }
         LocationManager lm = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
         if (lm == null) {
-            Toast.makeText(context, "Serviciul de localizare nu este disponibil.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "Location service not available.", Toast.LENGTH_SHORT).show();
             return;
         }
-        Toast.makeText(context, "Se cauta pozitia GPS...", Toast.LENGTH_SHORT).show();
+        Toast.makeText(context, "Searching for GPS position...", Toast.LENGTH_SHORT).show();
         LocationListener listener = new LocationListener() {
             @Override public void onLocationChanged(Location location) {
                 String grid = GridLocatorHelper.calculeazaGrid(location.getLatitude(), location.getLongitude());
                 etMyGrid.setText(grid);
-                Toast.makeText(context, "Grid GPS: " + grid, Toast.LENGTH_SHORT).show();
+                Toast.makeText(context, "GPS Grid: " + grid, Toast.LENGTH_SHORT).show();
                 lm.removeUpdates(this);
             }
             @Override public void onStatusChanged(String p, int s, Bundle e) {}
@@ -528,7 +528,7 @@ public class EcranLogger {
             } else if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
                 lm.requestSingleUpdate(LocationManager.NETWORK_PROVIDER, listener, Looper.getMainLooper());
             } else {
-                Toast.makeText(context, "Activeaza locatia (GPS) din setarile telefonului.", Toast.LENGTH_LONG).show();
+                Toast.makeText(context, "Enable location (GPS) in phone settings.", Toast.LENGTH_LONG).show();
             }
             Location ultimaCunoscuta = null;
             try {
@@ -540,7 +540,7 @@ public class EcranLogger {
                 etMyGrid.setText(grid);
             }
         } catch (SecurityException e) {
-            Toast.makeText(context, "Permisiune de locatie lipsa.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "Missing location permission.", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -575,14 +575,14 @@ public class EcranLogger {
             long idQsoDeSters = idUri.get(position);
             String linieAfisata = linii.get(position);
             new AlertDialog.Builder(context)
-                    .setTitle("Sterge QSO")
-                    .setMessage("Stergi acest QSO din jurnal?\n\n" + linieAfisata)
-                    .setPositiveButton("Sterge", (dialog, which) -> {
+                    .setTitle("Delete QSO")
+                    .setMessage("Delete this QSO from the log?\n\n" + linieAfisata)
+                    .setPositiveButton("Delete", (dialog, which) -> {
                         dbHelper.stergeQso(idQsoDeSters);
                         if (idQsoInEditare != null && idQsoInEditare == idQsoDeSters) iesiDinModEditare();
                         refreshListaQso();
                     })
-                    .setNegativeButton("Anuleaza", null)
+                    .setNegativeButton("Cancel", null)
                     .show();
             return true;
         });
@@ -599,6 +599,6 @@ public class EcranLogger {
         }
         solicitaFrecventaSiModDinRadio();
         executaCautareQrz(callsign);
-        Toast.makeText(context, callsign + " preluat in Logger", Toast.LENGTH_SHORT).show();
+        Toast.makeText(context, callsign + " imported into Logger", Toast.LENGTH_SHORT).show();
     }
 }

@@ -113,9 +113,9 @@ public class BackupHelper {
         values.put(MediaStore.Downloads.MIME_TYPE, "application/json");
         values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/YaesuCatControlADV");
         Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-        if (uri == null) throw new Exception("Nu s-a putut crea fișierul în Downloads.");
+        if (uri == null) throw new Exception("Could not create file in Downloads.");
         try (OutputStream out = resolver.openOutputStream(uri)) {
-            if (out == null) throw new Exception("Nu s-a putut deschide fișierul pentru scriere.");
+            if (out == null) throw new Exception("Could not open file for writing.");
             out.write(continut.getBytes(StandardCharsets.UTF_8));
         }
     }
@@ -133,7 +133,7 @@ public class BackupHelper {
     public static RezultatImport importa(Context context, QsoDbHelper dbHelper, Uri uri) throws Exception {
         StringBuilder sb = new StringBuilder();
         try (InputStream in = context.getContentResolver().openInputStream(uri)) {
-            if (in == null) throw new Exception("Nu s-a putut citi fișierul selectat.");
+            if (in == null) throw new Exception("Could not read the selected file.");
             byte[] buffer = new byte[4096];
             int n;
             while ((n = in.read(buffer)) != -1) {

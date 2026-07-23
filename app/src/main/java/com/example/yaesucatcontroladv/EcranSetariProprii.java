@@ -68,13 +68,13 @@ public class EcranSetariProprii {
         llMain.addView(tvTitlu);
 
         // --- CÂMPURI SETĂRI PROPRII ---
-        etMyCall = creeazaCampEditabil("Indicativul meu (MY CALL)", false);
+        etMyCall = creeazaCampEditabil("My Callsign (MY CALL)", false);
         llMain.addView(etMyCall);
 
-        etMyGrid = creeazaCampEditabil("Locatorul meu (MY GRID)", true);
+        etMyGrid = creeazaCampEditabil("My Locator (MY GRID)", true);
         llMain.addView(etMyGrid);
 
-        etMyQth = creeazaCampEditabil("Oraș / QTH", false);
+        etMyQth = creeazaCampEditabil("City / QTH", false);
         llMain.addView(etMyQth);
 
         LinearLayout rAndZone = new LinearLayout(context);
@@ -113,7 +113,7 @@ public class EcranSetariProprii {
 
         // BUTON TESTARE QRZ.COM
         Button btnTestQrz = new Button(context);
-        btnTestQrz.setText("🔍 TESTEAZĂ CONEXIUNEA QRZ.COM");
+        btnTestQrz.setText("🔍 TEST QRZ.COM CONNECTION");
         btnTestQrz.setBackgroundColor(Color.parseColor("#5D4037"));
         btnTestQrz.setTextColor(Color.WHITE);
         btnTestQrz.setTypeface(null, Typeface.BOLD);
@@ -134,7 +134,7 @@ public class EcranSetariProprii {
         llMain.addView(separatorHam);
 
         TextView tvHamTitlu = new TextView(context);
-        tvHamTitlu.setText("HamQTH.com (GRATUIT - pentru Grid)");
+        tvHamTitlu.setText("HamQTH.com (FREE - for Grid)");
         tvHamTitlu.setTextColor(Color.parseColor("#AAAAAA"));
         tvHamTitlu.setTextSize(14);
         tvHamTitlu.setPadding(0, 0, 0, 10);
@@ -149,7 +149,7 @@ public class EcranSetariProprii {
         llMain.addView(etHamQthPass);
 
         Button btnTestHamQth = new Button(context);
-        btnTestHamQth.setText("🔍 TESTEAZĂ CONEXIUNEA HAMQTH");
+        btnTestHamQth.setText("🔍 TEST HAMQTH CONNECTION");
         btnTestHamQth.setBackgroundColor(Color.parseColor("#0277BD"));
         btnTestHamQth.setTextColor(Color.WHITE);
         btnTestHamQth.setTypeface(null, Typeface.BOLD);
@@ -161,7 +161,7 @@ public class EcranSetariProprii {
         llMain.addView(btnTestHamQth);
 
         Button btnSave = new Button(context);
-        btnSave.setText("💾 SALVEAZĂ SETĂRILE");
+        btnSave.setText("💾 SAVE SETTINGS");
         btnSave.setBackgroundColor(Color.parseColor("#FF6F00"));
         btnSave.setTextColor(Color.WHITE);
         btnSave.setTypeface(null, Typeface.BOLD);
@@ -185,7 +185,7 @@ public class EcranSetariProprii {
         // LINIA 1: BACKUP / RESTORE SETĂRI + MACRO (JSON)
         // ============================================================
         TextView tvBackupLabel = new TextView(context);
-        tvBackupLabel.setText("Aplicație & Macro-uri RTTY");
+        tvBackupLabel.setText("App & RTTY Macros");
         tvBackupLabel.setTextColor(Color.parseColor("#AAAAAA"));
         tvBackupLabel.setTextSize(12);
         tvBackupLabel.setPadding(0, 0, 0, 5);
@@ -220,7 +220,7 @@ public class EcranSetariProprii {
         // LINIA 2: EXPORT / IMPORT LOG (ADIF)
         // ============================================================
         TextView tvAdifLabel = new TextView(context);
-        tvAdifLabel.setText("Jurnal QSO (Format ADIF)");
+        tvAdifLabel.setText("QSO Log (ADIF Format)");
         tvAdifLabel.setTextColor(Color.parseColor("#AAAAAA"));
         tvAdifLabel.setTextSize(12);
         tvAdifLabel.setPadding(0, 5, 0, 5);
@@ -313,7 +313,7 @@ public class EcranSetariProprii {
         editor.apply();
         QrzLookupHelper.resetSesiune();
         HamQthLookupHelper.resetSesiune();
-        Toast.makeText(context, "Setările au fost salvate!", Toast.LENGTH_SHORT).show();
+        Toast.makeText(context, "Settings saved!", Toast.LENGTH_SHORT).show();
     }
 
     private void incarcaSetarile() {
@@ -337,22 +337,22 @@ public class EcranSetariProprii {
         String pass = etQrzPass.getText().toString().trim();
 
         if (user.isEmpty() || pass.isEmpty()) {
-            Toast.makeText(context, "⚠️ Completează mai întâi username-ul și parola!", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "⚠️ Complete the username and password first!", Toast.LENGTH_SHORT).show();
             return;
         }
 
         String tempCall = etMyCall.getText().toString().trim().toUpperCase();
         final String callsignDeTest = tempCall.isEmpty() ? "W1AW" : tempCall;
 
-        Toast.makeText(context, "🔄 Se testează conexiunea...\n(Căutare: " + callsignDeTest + ")", Toast.LENGTH_SHORT).show();
+        Toast.makeText(context, "🔄 Testing connection...\n(Search: " + callsignDeTest + ")", Toast.LENGTH_SHORT).show();
 
         QrzLookupHelper.cautaIndicativ(user, pass, callsignDeTest, new QrzLookupHelper.QrzCallback() {
             @Override
             public void onSucces(QrzLookupHelper.QrzRezultat r) {
                 ((Activity) context).runOnUiThread(() -> {
-                    String msg = "✅ Conectare QRZ.com reușită!\n";
+                    String msg = "✅ QRZ.com connection successful!\n";
                     if (r != null && r.call != null) {
-                        msg += "Date preluate pentru: " + r.call;
+                        msg += "Data retrieved for: " + r.call;
                         if (r.name != null && !r.name.isEmpty()) {
                             msg += " (" + r.name + ")";
                         }
@@ -368,13 +368,13 @@ public class EcranSetariProprii {
                     String mesajMic = (mesaj != null) ? mesaj.toLowerCase() : "";
 
                     if (mesajMic.contains("invalid") || mesajMic.contains("password") || mesajMic.contains("session") || mesajMic.contains("subscriber")) {
-                        mesajAfisat = "❌ Credențiale invalide sau lipsă abonament XML!\n" + mesaj;
+                        mesajAfisat = "❌ Invalid credentials or missing XML subscription!\n" + mesaj;
                     }
                     else if (mesajMic.contains("no match") || mesajMic.contains("not found")) {
-                        mesajAfisat = "✅ Conectare QRZ.com reușită!\n(Credențiale valide, deși indicativul de test nu a fost găsit în baza de date).";
+                        mesajAfisat = "✅ QRZ.com connection successful!\n(Valid credentials, although the test callsign was not found in the database).";
                     }
                     else {
-                        mesajAfisat = "⚠️ Eroare de rețea sau server:\n" + mesaj;
+                        mesajAfisat = "⚠️ Network or server error:\n" + mesaj;
                     }
                     Toast.makeText(context, mesajAfisat, Toast.LENGTH_LONG).show();
                 });
@@ -390,20 +390,20 @@ public class EcranSetariProprii {
         String pass = etHamQthPass.getText().toString().trim();
 
         if (user.isEmpty() || pass.isEmpty()) {
-            Toast.makeText(context, "⚠️ Completează user/parola HamQTH!", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "⚠️ Complete HamQTH user/password!", Toast.LENGTH_SHORT).show();
             return;
         }
 
         String tempCall = etMyCall.getText().toString().trim().toUpperCase();
         final String callsignDeTest = tempCall.isEmpty() ? "W1AW" : tempCall;
 
-        Toast.makeText(context, "🔄 Testez HamQTH.com...", Toast.LENGTH_SHORT).show();
+        Toast.makeText(context, "🔄 Testing HamQTH.com...", Toast.LENGTH_SHORT).show();
 
         HamQthLookupHelper.cautaIndicativ(user, pass, callsignDeTest, new HamQthLookupHelper.HamQthCallback() {
             @Override
             public void onSucces(HamQthLookupHelper.HamQthRezultat r) {
                 ((Activity) context).runOnUiThread(() -> {
-                    String msg = "✅ HamQTH conectare reușită!\n";
+                    String msg = "✅ HamQTH connection successful!\n";
                     if (r != null && r.grid != null && !r.grid.isEmpty()) {
                         msg += "Grid " + callsignDeTest + ": " + r.grid;
                     }
@@ -414,7 +414,7 @@ public class EcranSetariProprii {
             @Override
             public void onEroare(String mesaj) {
                 ((Activity) context).runOnUiThread(() ->
-                        Toast.makeText(context, "❌ Eroare HamQTH:\n" + mesaj, Toast.LENGTH_LONG).show());
+                        Toast.makeText(context, "❌ HamQTH error:\n" + mesaj, Toast.LENGTH_LONG).show());
             }
         });
     }
@@ -427,10 +427,10 @@ public class EcranSetariProprii {
             try {
                 String nume = BackupHelper.exporta(context, new QsoDbHelper(context));
                 ((Activity) context).runOnUiThread(() ->
-                        Toast.makeText(context, "Backup exportat:\n" + nume, Toast.LENGTH_LONG).show());
+                        Toast.makeText(context, "Backup exported:\n" + nume, Toast.LENGTH_LONG).show());
             } catch (Exception e) {
                 ((Activity) context).runOnUiThread(() ->
-                        Toast.makeText(context, "Eroare export backup:\n" + e.getMessage(), Toast.LENGTH_LONG).show());
+                        Toast.makeText(context, "Error exporting backup:\n" + e.getMessage(), Toast.LENGTH_LONG).show());
             }
         }).start();
     }
@@ -450,10 +450,10 @@ public class EcranSetariProprii {
             try {
                 String nume = AdifExporter.exportaAdif(context, new QsoDbHelper(context));
                 ((Activity) context).runOnUiThread(() ->
-                        Toast.makeText(context, "Log ADIF exportat:\n" + nume, Toast.LENGTH_LONG).show());
+                        Toast.makeText(context, "ADIF Log exported:\n" + nume, Toast.LENGTH_LONG).show());
             } catch (Exception e) {
                 ((Activity) context).runOnUiThread(() ->
-                        Toast.makeText(context, "Eroare export ADIF:\n" + e.getMessage(), Toast.LENGTH_LONG).show());
+                        Toast.makeText(context, "Error exporting ADIF:\n" + e.getMessage(), Toast.LENGTH_LONG).show());
             }
         }).start();
     }
@@ -478,14 +478,14 @@ public class EcranSetariProprii {
                 try {
                     BackupHelper.RezultatImport rez = BackupHelper.importa(context, new QsoDbHelper(context), uri);
                     ((Activity) context).runOnUiThread(() -> {
-                        String msg = String.format("Import finalizat:\n%d setări\n%d macro-uri\n%d QSO-uri",
+                        String msg = String.format("Import completed:\n%d settings\n%d macros\n%d QSOs",
                                 rez.setariRestaurate ? 1 : 0, rez.macroRestaurate, rez.qsoImportate);
                         Toast.makeText(context, msg, Toast.LENGTH_LONG).show();
                         if (rez.setariRestaurate) incarcaSetarile();
                     });
                 } catch (Exception e) {
                     ((Activity) context).runOnUiThread(() ->
-                            Toast.makeText(context, "Eroare import backup:\n" + e.getMessage(), Toast.LENGTH_LONG).show());
+                            Toast.makeText(context, "Error importing backup:\n" + e.getMessage(), Toast.LENGTH_LONG).show());
                 }
             }).start();
 
@@ -496,17 +496,17 @@ public class EcranSetariProprii {
                     ((Activity) context).runOnUiThread(() -> {
                         if (!rez.validFormat) {
                             Toast.makeText(context,
-                                    "⚠️ Fișier invalid!\nImportul acceptă doar fișiere ADIF exportate de YaesuCatControlADV.",
+                                    "⚠️ Invalid file!\nImport only accepts ADIF files exported by YaesuCatControlADV.",
                                     Toast.LENGTH_LONG).show();
                         } else {
-                            String msg = String.format("Import ADIF finalizat:\n✅ %d QSO-uri noi\n⏭️ %d duplicate ignorate",
+                            String msg = String.format("ADIF Import completed:\n✅ %d new QSOs\n⏭️ %d duplicates ignored",
                                     rez.qsoImportate, rez.qsoDuplicate);
                             Toast.makeText(context, msg, Toast.LENGTH_LONG).show();
                         }
                     });
                 } catch (Exception e) {
                     ((Activity) context).runOnUiThread(() ->
-                            Toast.makeText(context, "Eroare import ADIF:\n" + e.getMessage(), Toast.LENGTH_LONG).show());
+                            Toast.makeText(context, "Error importing ADIF:\n" + e.getMessage(), Toast.LENGTH_LONG).show());
                 }
             }).start();
         }

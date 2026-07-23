@@ -209,7 +209,7 @@ public class EcranSetari {
                     nivelDnrCurent = nivelEfectiv;
                     stareDnrOn = true;
                 }
-                tvDnrLabel.setText("DNR: " + (stareDnrOn ? "ON" : "OFF") + " (Nivel " + nivelEfectiv + ")");
+                tvDnrLabel.setText("DNR: " + (stareDnrOn ? "ON" : "OFF") + " (Level " + nivelEfectiv + ")");
             }
             @Override public void onStartTrackingTouch(SeekBar sb) {}
             @Override
@@ -282,12 +282,12 @@ public class EcranSetari {
                 act.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                 btnKeepScreenOn.setText("KEEP SCREEN ON: ACTIVE");
                 btnKeepScreenOn.setBackgroundColor(Color.parseColor("#007ACC"));
-                Toast.makeText(context, "Ecranul va rămâne permanent aprins!", Toast.LENGTH_SHORT).show();
+                Toast.makeText(context, "The screen will remain permanently on!", Toast.LENGTH_SHORT).show();
             } else {
                 act.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                 btnKeepScreenOn.setText("KEEP SCREEN ON: OFF");
                 btnKeepScreenOn.setBackgroundColor(Color.parseColor("#37474F"));
-                Toast.makeText(context, "Mecanism dezactivat.", Toast.LENGTH_SHORT).show();
+                Toast.makeText(context, "Mechanism deactivated.", Toast.LENGTH_SHORT).show();
             }
         });
         llGen.addView(btnKeepScreenOn);
@@ -307,7 +307,7 @@ public class EcranSetari {
         svLogScroll.setPadding(15, 15, 15, 15);
 
         tvLogTerminal = new TextView(context);
-        tvLogTerminal.setText("--- Monitor pornit. Așteptare trafic serial... ---\n");
+        tvLogTerminal.setText("--- Monitor started. Waiting for serial traffic... ---\n");
         tvLogTerminal.setTextColor(Color.parseColor("#00FF00")); // Monitor verde retro
         tvLogTerminal.setTextSize(13);
         tvLogTerminal.setTypeface(Typeface.MONOSPACE);
@@ -335,7 +335,7 @@ public class EcranSetari {
     private void actualizeazaGraficaDnr(boolean parOn, int parNivel) {
         btnDnrToggle.setText(parOn ? "DNR: ON" : "DNR: OFF");
         btnDnrToggle.setBackgroundColor(Color.parseColor(parOn ? "#2E7D32" : "#424242"));
-        tvDnrLabel.setText("DNR: " + (parOn ? "ON" : "OFF") + " (Nivel " + parNivel + ")");
+        tvDnrLabel.setText("DNR: " + (parOn ? "ON" : "OFF") + " (Level " + parNivel + ")");
         skDnr.setProgress(parNivel);
     }
 
