@@ -4,10 +4,14 @@ import android.app.Activity;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.text.InputFilter;
+import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.ScrollView;
@@ -328,6 +332,52 @@ public class EcranSetari {
             btnScrollLock.setBackgroundColor(Color.parseColor(autoScrollLogActiv ? "#424242" : "#B71C1C"));
         });
         llGen.addView(btnScrollLock);
+
+        // --- 8. MANUAL CAT COMMAND ENTRY ---
+        LinearLayout randManualCat = new LinearLayout(context);
+        randManualCat.setOrientation(LinearLayout.HORIZONTAL);
+        randManualCat.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams pRandManual = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pRandManual.setMargins(0, 10, 0, 10);
+        randManualCat.setLayoutParams(pRandManual);
+
+        EditText etManualCmd = new EditText(context);
+        etManualCmd.setHint("Enter CAT command...");
+        etManualCmd.setHintTextColor(Color.GRAY);
+        etManualCmd.setTextColor(Color.WHITE);
+        etManualCmd.setTextSize(15);
+        etManualCmd.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+        etManualCmd.setFilters(new InputFilter[] {new InputFilter.AllCaps()});
+        LinearLayout.LayoutParams pEtManual = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.75f);
+        etManualCmd.setLayoutParams(pEtManual);
+
+        Button btnSendManual = new Button(context);
+        btnSendManual.setText("SEND");
+        btnSendManual.setBackgroundColor(Color.parseColor("#0D47A1"));
+        btnSendManual.setTextColor(Color.WHITE);
+        btnSendManual.setTypeface(null, Typeface.BOLD);
+        LinearLayout.LayoutParams pBtnManual = new LinearLayout.LayoutParams(0, 110, 0.25f);
+        pBtnManual.setMargins(10, 0, 0, 0);
+        btnSendManual.setLayoutParams(pBtnManual);
+
+        btnSendManual.setOnClickListener(v -> {
+            String cmd = etManualCmd.getText().toString().trim();
+            if (!cmd.isEmpty()) {
+                radioManager.trimiteComandaCAT(cmd);
+                etManualCmd.setText("");
+
+                // Hide keyboard
+                InputMethodManager imm = (InputMethodManager) context.getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (imm != null) {
+                    imm.hideSoftInputFromWindow(etManualCmd.getWindowToken(), 0);
+                }
+            }
+        });
+
+        randManualCat.addView(etManualCmd);
+        randManualCat.addView(btnSendManual);
+        llGen.addView(randManualCat);
 
         viewPrincipal.addView(llGen);
     }
