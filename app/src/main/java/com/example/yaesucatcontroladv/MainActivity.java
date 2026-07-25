@@ -250,6 +250,16 @@ public class MainActivity extends AppCompatActivity {
         meniuLateral.addView(btnMeniuMySettings);
         meniuLateral.addView(btnMeniuExit); // ← Adăugat la final
 
+        // AFISARE VERSIUNE SI DATA BUILD
+        TextView tvVersionInfo = new TextView(this);
+        String vInfo = "v" + BuildConfig.VERSION_NAME + " | Ref: " + BuildConfig.GIT_HASH + "\nBuild: " + BuildConfig.BUILD_TIME;
+        tvVersionInfo.setText(vInfo);
+        tvVersionInfo.setTextColor(Color.GRAY);
+        tvVersionInfo.setTextSize(10);
+        tvVersionInfo.setGravity(Gravity.CENTER);
+        tvVersionInfo.setPadding(0, dp(15), 0, dp(10));
+        meniuLateral.addView(tvVersionInfo);
+
         drawerLayout.addView(panouCentral);
         drawerLayout.addView(meniuLateral, paramsMeniu);
 

@@ -1250,6 +1250,13 @@ public class EcranRttyDroid {
     private void comutaStarePttManual() {
         if (radioManager == null || radioManager.getDataPort() == null) return;
         try {
+            // Dacă suntem în curs de emisie (fie manuală, fie din coadă), STOP TOTAL
+            if (isTransmittingRtty) {
+                coadaMesajeTxRtty.clear();
+                opreteTxRttySolicitata = true;
+                actualizeazaLabelSend();
+            }
+
             isTransmittingRtty = !isTransmittingRtty;
             radioManager.getDataPort().setDTR(isTransmittingRtty);
             btnRttyPttToggle.setBackgroundColor(Color.parseColor(isTransmittingRtty ? "#B71C1C" : "#424242"));
@@ -1295,6 +1302,7 @@ public class EcranRttyDroid {
      */
     private void porneteWorkerTxRttyDacaNuRuleaza() {
         if (!workerTxRttyActiv.compareAndSet(false, true)) return; // deja ruleaza un worker
+        opreteTxRttySolicitata = false; // Resetăm flag-ul de stop pentru noua sesiune
         threadWorkerTxRtty = new Thread(() -> {
             try {
                 String mesaj;
