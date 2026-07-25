@@ -100,6 +100,7 @@ public class MainActivity extends AppCompatActivity {
         }
     };
 
+    @android.annotation.SuppressLint("UnspecifiedRegisterReceiverFlag")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -111,7 +112,13 @@ public class MainActivity extends AppCompatActivity {
         IntentFilter filter = new IntentFilter();
         filter.addAction(ACTION_USB_PERMISSION);
         filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
-        registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            // No flag needed or available for API < 33
+            android.util.Log.d("MAIN", "Registering receiver without flag (API < 33)");
+            registerReceiver(usbReceiver, filter);
+        }
         isReceiverRegistered = true;
 
         radioManager = new RadioManager(this);
