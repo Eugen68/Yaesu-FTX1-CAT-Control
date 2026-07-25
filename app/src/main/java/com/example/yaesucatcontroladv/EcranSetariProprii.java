@@ -32,6 +32,11 @@ public class EcranSetariProprii {
     public static final String PREF_CLUSTER_USER = "cluster_user";
     public static final String PREF_CLUSTER_PASS = "cluster_pass";
 
+    // Chei Filtre Cluster
+    public static final String PREF_CLUSTER_FILTER_BAND = "cluster_filter_band";
+    public static final String PREF_CLUSTER_FILTER_MODE = "cluster_filter_mode";
+    public static final String PREF_CLUSTER_FILTER_SEARCH = "cluster_filter_search";
+
     // Coduri cereri fișiere
     private static final int REQUEST_IMPORT_BACKUP = 501;
     private static final int REQUEST_IMPORT_ADIF = 601;

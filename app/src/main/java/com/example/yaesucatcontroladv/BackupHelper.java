@@ -31,8 +31,15 @@ public class BackupHelper {
             EcranSetariProprii.PREF_MY_CQ_ZONE,
             EcranSetariProprii.PREF_QRZ_USER,
             EcranSetariProprii.PREF_QRZ_PASS,
-            EcranSetariProprii.PREF_HAMQTH_USER,   // ← NOU
-            EcranSetariProprii.PREF_HAMQTH_PASS    // ← NOU
+            EcranSetariProprii.PREF_HAMQTH_USER,
+            EcranSetariProprii.PREF_HAMQTH_PASS,
+            EcranSetariProprii.PREF_CLUSTER_SERVER, // ← NOU
+            EcranSetariProprii.PREF_CLUSTER_PORT,   // ← NOU
+            EcranSetariProprii.PREF_CLUSTER_USER,   // ← NOU
+            EcranSetariProprii.PREF_CLUSTER_PASS,   // ← NOU
+            EcranSetariProprii.PREF_CLUSTER_FILTER_BAND,   // ← NOU
+            EcranSetariProprii.PREF_CLUSTER_FILTER_MODE,   // ← NOU
+            EcranSetariProprii.PREF_CLUSTER_FILTER_SEARCH   // ← NOU
     };
 
     public static class RezultatImport {
@@ -43,7 +50,7 @@ public class BackupHelper {
 
     public static String exporta(Context context, QsoDbHelper dbHelper) throws Exception {
         JSONObject radacina = new JSONObject();
-        radacina.put("versiune_backup", 3);
+        radacina.put("versiune_backup", 4);
 
         SharedPreferences prefs = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
         JSONObject setari = new JSONObject();

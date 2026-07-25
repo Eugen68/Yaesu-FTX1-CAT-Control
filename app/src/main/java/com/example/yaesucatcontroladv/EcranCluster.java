@@ -7,14 +7,18 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -34,6 +38,17 @@ public class EcranCluster {
     private CheckBox cbKeepLive;
     private final Handler reconnectHandler = new Handler(Looper.getMainLooper());
     private boolean isReconnecting = false;
+
+    // Elemente Filtre
+    private LinearLayout panelFiltre;
+    private Spinner spBand, spMode;
+    private EditText etSearch;
+    private boolean filtersVisible = false;
+
+    // Filtre Curente
+    private String filterBand = "All";
+    private String filterMode = "All";
+    private String filterSearch = "";
 
     private final List<Spot> spoturi = new ArrayList<>();
     private static final int MAX_SPOTURI = 100; // Limită pentru a nu umple memoria
@@ -111,12 +126,142 @@ public class EcranCluster {
 
         viewPrincipal.addView(rowConnect);
 
+        // --- LINIE INSTRUMENTE (CLEAR & FILTERS) ---
+        LinearLayout rowTools = new LinearLayout(context);
+        rowTools.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams pRowTools = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pRowTools.setMargins(0, 0, 0, 10);
+        rowTools.setLayoutParams(pRowTools);
+
+        Button btnClear = new Button(context);
+        btnClear.setText("CLEAR LIST");
+        btnClear.setBackgroundColor(Color.parseColor("#455A64"));
+        btnClear.setTextColor(Color.WHITE);
+        btnClear.setTextSize(11);
+        btnClear.setLayoutParams(new LinearLayout.LayoutParams(0, 110, 1f));
+        btnClear.setOnClickListener(v -> clearList());
+        rowTools.addView(btnClear);
+
+        View spacerTools = new View(context);
+        spacerTools.setLayoutParams(new LinearLayout.LayoutParams(15, 1));
+        rowTools.addView(spacerTools);
+
+        Button btnToggleFilters = new Button(context);
+        btnToggleFilters.setText("FILTERS ▼");
+        btnToggleFilters.setBackgroundColor(Color.parseColor("#37474F"));
+        btnToggleFilters.setTextColor(Color.WHITE);
+        btnToggleFilters.setTextSize(11);
+        btnToggleFilters.setLayoutParams(new LinearLayout.LayoutParams(0, 110, 1f));
+        btnToggleFilters.setOnClickListener(v -> toggleFilters());
+        rowTools.addView(btnToggleFilters);
+
+        viewPrincipal.addView(rowTools);
+
+        // --- PANOU FILTRE (HIDDEN BY DEFAULT) ---
+        panelFiltre = new LinearLayout(context);
+        panelFiltre.setOrientation(LinearLayout.VERTICAL);
+        panelFiltre.setBackgroundColor(Color.parseColor("#1E1E1E"));
+        panelFiltre.setPadding(20, 20, 20, 20);
+        panelFiltre.setVisibility(View.GONE);
+        LinearLayout.LayoutParams pPanel = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pPanel.setMargins(0, 0, 0, 15);
+        panelFiltre.setLayoutParams(pPanel);
+
+        // Row 1: Band & Mode
+        LinearLayout rowF1 = new LinearLayout(context);
+        rowF1.setOrientation(LinearLayout.HORIZONTAL);
+        
+        spBand = createFilterSpinner(Arrays.asList("All", "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "2m"));
+        spMode = createFilterSpinner(Arrays.asList("All", "CW", "SSB", "FT8", "FT4", "RTTY", "PSK"));
+        
+        rowF1.addView(spBand);
+        View spacerF = new View(context);
+        spacerF.setLayoutParams(new LinearLayout.LayoutParams(20, 1));
+        rowF1.addView(spacerF);
+        rowF1.addView(spMode);
+        panelFiltre.addView(rowF1);
+
+        // Row 2: Search
+        etSearch = new EditText(context);
+        etSearch.setHint("Search Callsign / Prefix...");
+        etSearch.setHintTextColor(Color.GRAY);
+        etSearch.setTextColor(Color.WHITE);
+        etSearch.setTextSize(14);
+        etSearch.setSingleLine(true);
+        LinearLayout.LayoutParams pSearch = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pSearch.setMargins(0, 10, 0, 0);
+        etSearch.setLayoutParams(pSearch);
+        etSearch.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void afterTextChanged(android.text.Editable s) {
+                filterSearch = s.toString().trim().toUpperCase();
+                saveFilters();
+                refacereLista();
+            }
+        });
+        panelFiltre.addView(etSearch);
+
+        viewPrincipal.addView(panelFiltre);
+
+        // --- LINIE COMANDĂ CLUSTER ---
+        LinearLayout rowCmd = new LinearLayout(context);
+        rowCmd.setOrientation(LinearLayout.HORIZONTAL);
+        rowCmd.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams pRowCmd = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pRowCmd.setMargins(0, 0, 0, 10);
+        rowCmd.setLayoutParams(pRowCmd);
+
+        EditText etCmd = new EditText(context);
+        etCmd.setHint("Cluster Command...");
+        etCmd.setHintTextColor(Color.GRAY);
+        etCmd.setTextColor(Color.WHITE);
+        etCmd.setTextSize(13);
+        etCmd.setSingleLine(true);
+        etCmd.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button btnSend = new Button(context);
+        btnSend.setText("SEND");
+        btnSend.setBackgroundColor(Color.parseColor("#0D47A1"));
+        btnSend.setTextColor(Color.WHITE);
+        btnSend.setTextSize(11);
+        btnSend.setLayoutParams(new LinearLayout.LayoutParams(160, 100));
+        btnSend.setOnClickListener(v -> {
+            String cmd = etCmd.getText().toString().trim();
+            if (!cmd.isEmpty()) {
+                clusterManager.sendCommand(cmd);
+                etCmd.setText("");
+            }
+        });
+
+        rowCmd.addView(etCmd);
+        rowCmd.addView(btnSend);
+        viewPrincipal.addView(rowCmd);
+
+        // --- QUICK COMMANDS ---
+        LinearLayout rowQuick = new LinearLayout(context);
+        rowQuick.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams pQuick = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pQuick.setMargins(0, 0, 0, 10);
+        rowQuick.setLayoutParams(pQuick);
+
+        rowQuick.addView(createQuickBtn("SH/DX", "SH/DX"));
+        rowQuick.addView(createQuickBtn("SH/DX/50", "SH/DX/50"));
+        rowQuick.addView(createQuickBtn("SET/NOBC", "SET/NOBC"));
+
+        viewPrincipal.addView(rowQuick);
+
         // Separator
         View separator = new View(context);
         separator.setBackgroundColor(Color.GRAY);
         LinearLayout.LayoutParams pSep = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 2);
-        pSep.setMargins(0, 10, 0, 10);
+        pSep.setMargins(0, 5, 0, 10);
         separator.setLayoutParams(pSep);
         viewPrincipal.addView(separator);
 
@@ -132,6 +277,107 @@ public class EcranCluster {
         sv.addView(listaSpoturi);
 
         viewPrincipal.addView(sv);
+
+        loadFilters(); // Încarcă filtrele salvate
+    }
+
+    private Spinner createFilterSpinner(List<String> items) {
+        Spinner s = new Spinner(context);
+        ArrayAdapter<String> adapter = new ArrayAdapter<String>(context, android.R.layout.simple_spinner_item, items) {
+            @androidx.annotation.NonNull
+            @Override
+            public View getView(int position, View convertView, @androidx.annotation.NonNull android.view.ViewGroup parent) {
+                View v = super.getView(position, convertView, parent);
+                ((TextView) v).setTextColor(Color.WHITE);
+                ((TextView) v).setTextSize(13);
+                return v;
+            }
+        };
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        s.setAdapter(adapter);
+        s.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        s.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
+                if (parent == spBand) filterBand = items.get(position);
+                else if (parent == spMode) filterMode = items.get(position);
+                saveFilters();
+                refacereLista();
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+        });
+        return s;
+    }
+
+    private Button createQuickBtn(String text, String cmd) {
+        Button b = new Button(context);
+        b.setText(text);
+        b.setBackgroundColor(Color.parseColor("#424242"));
+        b.setTextColor(Color.WHITE);
+        b.setTextSize(10);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, 90, 1f);
+        p.setMargins(5, 0, 5, 0);
+        b.setLayoutParams(p);
+        b.setOnClickListener(v -> clusterManager.sendCommand(cmd));
+        return b;
+    }
+
+    private void toggleFilters() {
+        filtersVisible = !filtersVisible;
+        panelFiltre.setVisibility(filtersVisible ? View.VISIBLE : View.GONE);
+    }
+
+    private void clearList() {
+        spoturi.clear();
+        listaSpoturi.removeAllViews();
+    }
+
+    private void saveFilters() {
+        context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putString(EcranSetariProprii.PREF_CLUSTER_FILTER_BAND, filterBand)
+                .putString(EcranSetariProprii.PREF_CLUSTER_FILTER_MODE, filterMode)
+                .putString(EcranSetariProprii.PREF_CLUSTER_FILTER_SEARCH, filterSearch)
+                .apply();
+    }
+
+    private void loadFilters() {
+        android.content.SharedPreferences prefs = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
+        filterBand = prefs.getString(EcranSetariProprii.PREF_CLUSTER_FILTER_BAND, "All");
+        filterMode = prefs.getString(EcranSetariProprii.PREF_CLUSTER_FILTER_MODE, "All");
+        filterSearch = prefs.getString(EcranSetariProprii.PREF_CLUSTER_FILTER_SEARCH, "");
+
+        setSpinnerValue(spBand, filterBand);
+        setSpinnerValue(spMode, filterMode);
+        etSearch.setText(filterSearch);
+    }
+
+    private void setSpinnerValue(Spinner s, String value) {
+        if (value == null) return;
+        @SuppressWarnings("unchecked")
+        ArrayAdapter<String> adapter = (ArrayAdapter<String>) s.getAdapter();
+        for (int i = 0; i < adapter.getCount(); i++) {
+            String item = adapter.getItem(i);
+            if (item != null && item.equals(value)) {
+                s.setSelection(i);
+                break;
+            }
+        }
+    }
+
+    private void refacereLista() {
+        listaSpoturi.removeAllViews();
+        for (Spot s : spoturi) {
+            if (respectaFiltrele(s)) {
+                listaSpoturi.addView(creeazaSpotView(s));
+            }
+        }
+    }
+
+    private boolean respectaFiltrele(Spot s) {
+        if (!filterBand.equals("All") && !filterBand.equalsIgnoreCase(s.band)) return false;
+        if (!filterMode.equals("All") && !filterMode.equalsIgnoreCase(s.mode)) return false;
+        if (!filterSearch.isEmpty() && !s.dxCall.toUpperCase().startsWith(filterSearch)) return false;
+        return true;
     }
 
     private void setupClusterListener() {
@@ -218,12 +464,18 @@ public class EcranCluster {
         // Limităm numărul de spoturi
         if (spoturi.size() > MAX_SPOTURI) {
             spoturi.remove(spoturi.size() - 1);
-            listaSpoturi.removeViewAt(listaSpoturi.getChildCount() - 1);
         }
 
-        // Creăm view-ul pentru spot și-l adăugăm la început
-        View spotView = creeazaSpotView(spot);
-        listaSpoturi.addView(spotView, 0);
+        // Adăugăm în UI doar dacă respectă filtrele
+        if (respectaFiltrele(spot)) {
+            View spotView = creeazaSpotView(spot);
+            listaSpoturi.addView(spotView, 0);
+
+            // Limităm și numărul de View-uri din UI
+            if (listaSpoturi.getChildCount() > MAX_SPOTURI) {
+                listaSpoturi.removeViewAt(listaSpoturi.getChildCount() - 1);
+            }
+        }
     }
 
     private View creeazaSpotView(Spot spot) {
