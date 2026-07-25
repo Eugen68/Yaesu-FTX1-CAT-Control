@@ -1,6 +1,8 @@
 package com.example.yaesucatcontroladv;
 
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -29,9 +31,9 @@ public class EcranSetari {
     private SeekBar skPower, skSpectrum, skDnr, sbCwSpeed;
     private Button btnDnrToggle, btnKeepScreenOn;
 
-    // --- ELEMENTE MONITORIZARE CAT LIVE (PUNCTUL 4) ---
+    // --- ELEMENTE MONITORIZARE CAT LIVE ---
     private ScrollView svLogScroll;
-    private TextView tvLogTerminal;
+    private LinearLayout llLogContainer; // Schimbat din TextView în LinearLayout
     private Button btnScrollLock;
     private boolean autoScrollLogActiv = true;
     // Stări interne
@@ -47,17 +49,6 @@ public class EcranSetari {
 //    200 linii ≈ 10KB memorie, suficient pentru debugging in timp real.
 //    Daca doresti un istoric mai lung, creste la 500 sau 1000.
     private static final int MAX_LINII_LOG = 200;
-    private final java.util.LinkedList<LinieLog> bufferLog = new java.util.LinkedList<>();
-
-    // Clasa interna pentru stocarea liniilor cu informatia de culoare
-    private static class LinieLog {
-        final String text;
-        final boolean isTx;
-        LinieLog(String text, boolean isTx) {
-            this.text = text;
-            this.isTx = isTx;
-        }
-    }
 
     public EcranSetari(Context context, RadioManager radioManager) {
         this.context = context;
@@ -310,12 +301,18 @@ public class EcranSetari {
         svLogScroll.setBackgroundColor(Color.BLACK);
         svLogScroll.setPadding(15, 15, 15, 15);
 
-        tvLogTerminal = new TextView(context);
-        tvLogTerminal.setText("--- Monitor started. Waiting for serial traffic... ---\n");
-        tvLogTerminal.setTextColor(Color.parseColor("#00FF00")); // Monitor verde retro
-        tvLogTerminal.setTextSize(13);
-        tvLogTerminal.setTypeface(Typeface.MONOSPACE);
-        svLogScroll.addView(tvLogTerminal);
+        llLogContainer = new LinearLayout(context);
+        llLogContainer.setOrientation(LinearLayout.VERTICAL);
+        svLogScroll.addView(llLogContainer);
+
+        // Mesaj inițial
+        TextView tvInit = new TextView(context);
+        tvInit.setText("--- Monitor started. Waiting for serial traffic... ---");
+        tvInit.setTextColor(Color.parseColor("#00FF00"));
+        tvInit.setTextSize(13);
+        tvInit.setTypeface(Typeface.MONOSPACE);
+        llLogContainer.addView(tvInit);
+        
         llGen.addView(svLogScroll);
 
         // Buton Scroll Lock compact dedesubt
@@ -395,46 +392,48 @@ public class EcranSetari {
     public void raporteazaComandaInLog(String textLog) {
         android.app.Activity act = (android.app.Activity) context;
         act.runOnUiThread(() -> {
-            if (tvLogTerminal != null) {
+            if (llLogContainer != null) {
                 String textCurat = textLog.trim();
-                if (!textCurat.isEmpty()) {
-                    boolean isTx = textCurat.contains("TX ->");
+                if (textCurat.isEmpty()) return;
 
-                    // 1. Adăugăm linia nouă în buffer-ul circular
-                    bufferLog.addLast(new LinieLog(textCurat, isTx));
+                boolean isTx = textCurat.contains("TX ->");
 
-                    // 2. Dacă am depășit limita, eliminăm cele mai vechi linii
-                    while (bufferLog.size() > MAX_LINII_LOG) {
-                        bufferLog.removeFirst();
+                // 1. Creăm un TextView nou pentru linie
+                TextView tvLinie = new TextView(context);
+                tvLinie.setText(textCurat);
+                tvLinie.setTextSize(13);
+                tvLinie.setTypeface(Typeface.MONOSPACE);
+                tvLinie.setPadding(0, 2, 0, 2);
+                
+                // Colorare
+                if (isTx) {
+                    tvLinie.setTextColor(Color.parseColor("#00B0FF")); // Albastru Cyan
+                } else {
+                    tvLinie.setTextColor(Color.parseColor("#00FF00")); // Verde Fosforos
+                }
+
+                // 2. ADĂUGĂM LONG-PRESS PENTRU COPIERE
+                tvLinie.setOnLongClickListener(v -> {
+                    ClipboardManager clipboard = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+                    ClipData clip = ClipData.newPlainText("CAT Command", textCurat);
+                    if (clipboard != null) {
+                        clipboard.setPrimaryClip(clip);
+                        Toast.makeText(context, "Command copied to clipboard!", Toast.LENGTH_SHORT).show();
                     }
+                    return true;
+                });
 
-                    // 3. Reconstruim TextView-ul folosind SpannableStringBuilder (mult mai fiabil decât HTML)
-                    android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder();
+                // 3. Adăugăm în container
+                llLogContainer.addView(tvLinie);
 
-                    for (LinieLog linie : bufferLog) {
-                        int start = sb.length();
-                        sb.append(linie.text);
-                        sb.append("\n");
-                        int end = sb.length() - 1; // -1 pentru a exclude newline-ul din colorare
+                // 4. Curățăm liniile vechi dacă depășim limita
+                if (llLogContainer.getChildCount() > MAX_LINII_LOG) {
+                    llLogContainer.removeViewAt(0);
+                }
 
-                        if (linie.isTx) {
-                            // TX = Albastru Cyan (#00B0FF)
-                            sb.setSpan(new android.text.style.ForegroundColorSpan(Color.parseColor("#00B0FF")),
-                                    start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                        } else {
-                            // RX = Verde Fosforos (#00FF00)
-                            sb.setSpan(new android.text.style.ForegroundColorSpan(Color.parseColor("#00FF00")),
-                                    start, end, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                        }
-                    }
-
-                    // 4. Aplicăm conținutul colorat
-                    tvLogTerminal.setText(sb);
-
-                    // 5. Scroll automat la final
-                    if (autoScrollLogActiv && svLogScroll != null) {
-                        svLogScroll.post(() -> svLogScroll.fullScroll(View.FOCUS_DOWN));
-                    }
+                // 5. Scroll automat la final
+                if (autoScrollLogActiv && svLogScroll != null) {
+                    svLogScroll.post(() -> svLogScroll.fullScroll(View.FOCUS_DOWN));
                 }
             }
         });

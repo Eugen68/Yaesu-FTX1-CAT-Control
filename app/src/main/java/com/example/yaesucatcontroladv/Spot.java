@@ -1,0 +1,96 @@
+package com.example.yaesucatcontroladv;
+
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+import java.util.TimeZone;
+
+/**
+ * Model de date pentru un spot DX din cluster.
+ * Conține toate informațiile relevante: frecvență, indicativ DX, comentariu,
+ * stația care a spotat, timpul spotului, banda și modul deduse automat.
+ */
+public class Spot {
+    public double frequency;      // Frecvența în MHz (ex: 14.250)
+    public String dxCall;         // Indicativul stației DX (ex: "W1AW")
+    public String comment;        // Comentariul spotter-ului (ex: "CQ NA")
+    public String spotter;        // Indicativul celui care a spotat (ex: "YO9VA")
+    public long timestamp;        // Timestamp-ul spotului (millis de la epoch)
+    public String band;           // Banda dedusă (ex: "20m")
+    public String mode;           // Modul dedus (ex: "SSB", "CW", "RTTY")
+
+    public Spot() {
+        this.timestamp = System.currentTimeMillis();
+    }
+
+    /**
+     * Deduce banda din frecvență conform standardului IARU/ARRL.
+     */
+    public static String deduceBanda(double freqMhz) {
+        if (freqMhz >= 1.8 && freqMhz < 2.0) return "160m";
+        if (freqMhz >= 3.5 && freqMhz < 4.0) return "80m";
+        if (freqMhz >= 5.3 && freqMhz < 5.4) return "60m";
+        if (freqMhz >= 7.0 && freqMhz < 7.3) return "40m";
+        if (freqMhz >= 10.1 && freqMhz < 10.15) return "30m";
+        if (freqMhz >= 14.0 && freqMhz < 14.35) return "20m";
+        if (freqMhz >= 18.068 && freqMhz < 18.168) return "17m";
+        if (freqMhz >= 21.0 && freqMhz < 21.45) return "15m";
+        if (freqMhz >= 24.89 && freqMhz < 24.99) return "12m";
+        if (freqMhz >= 28.0 && freqMhz < 29.7) return "10m";
+        if (freqMhz >= 50.0 && freqMhz < 54.0) return "6m";
+        if (freqMhz >= 144.0 && freqMhz < 148.0) return "2m";
+        return "??";
+    }
+
+    /**
+     * Deduce modul din comentariu sau din frecvență (fallback).
+     */
+    public static String deduceMod(String comment, double freqMhz) {
+        if (comment == null) comment = "";
+        String upper = comment.toUpperCase();
+
+        // Căutăm cuvinte cheie în comentariu
+        if (upper.contains("CW") || upper.contains("MORSE")) return "CW";
+        if (upper.contains("RTTY") || upper.contains("TELETYPE")) return "RTTY";
+        if (upper.contains("FT8")) return "FT8";
+        if (upper.contains("FT4")) return "FT4";
+        if (upper.contains("JS8")) return "JS8";
+        if (upper.contains("PSK") || upper.contains("PSK31")) return "PSK";
+        if (upper.contains("SSB") || upper.contains("LSB") || upper.contains("USB")) return "SSB";
+        if (upper.contains("AM")) return "AM";
+        if (upper.contains("FM")) return "FM";
+
+        // Fallback: deducem din frecvență
+        if (freqMhz < 10.0) {
+            return "CW"; // Benzile joase = CW predominant
+        } else if (freqMhz < 30.0) {
+            return "SSB"; // Benzile înalte = SSB predominant
+        }
+
+        return "??";
+    }
+
+    /**
+     * Formatează timestamp-ul ca oră UTC (HH:MM).
+     */
+    public String getOraUTC() {
+        SimpleDateFormat sdf = new SimpleDateFormat("HH:mm", Locale.US);
+        sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
+        return sdf.format(new Date(timestamp));
+    }
+
+    /**
+     * Verifică dacă spotul este mai vechi decât X minute.
+     */
+    public boolean esteMaiVechiDe(int minute) {
+        long diffMillis = System.currentTimeMillis() - timestamp;
+        long diffMinute = diffMillis / (60 * 1000);
+        return diffMinute > minute;
+    }
+
+    @Override
+    public String toString() {
+        return String.format(Locale.US, "%.3f %s %s %s %s",
+                frequency, dxCall, comment, spotter, getOraUTC());
+    }
+}

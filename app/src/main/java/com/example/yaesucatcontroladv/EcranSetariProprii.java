@@ -27,6 +27,10 @@ public class EcranSetariProprii {
     public static final String PREF_QRZ_PASS = "qrz_pass";
     public static final String PREF_HAMQTH_USER = "hamqth_user";
     public static final String PREF_HAMQTH_PASS = "hamqth_pass";
+    public static final String PREF_CLUSTER_SERVER = "cluster_server";
+    public static final String PREF_CLUSTER_PORT = "cluster_port";
+    public static final String PREF_CLUSTER_USER = "cluster_user";
+    public static final String PREF_CLUSTER_PASS = "cluster_pass";
 
     // Coduri cereri fișiere
     private static final int REQUEST_IMPORT_BACKUP = 501;
@@ -39,6 +43,7 @@ public class EcranSetariProprii {
     private EditText etMyCall, etMyGrid, etMyQth, etMyItuZone, etMyCqZone;
     private EditText etQrzUser, etQrzPass;
     private EditText etHamQthUser, etHamQthPass;
+    private EditText etClusterServer, etClusterPort, etClusterUser, etClusterPass;
 
     public EcranSetariProprii(Context context) {
         this.context = context;
@@ -159,6 +164,29 @@ public class EcranSetariProprii {
         btnTestHamQth.setLayoutParams(pBtnTestHam);
         btnTestHamQth.setOnClickListener(v -> testeazaConexiuneHamQth());
         llMain.addView(btnTestHamQth);
+
+        // --- DX CLUSTER SETTINGS ---
+        TextView tvClusterTitlu = new TextView(context);
+        tvClusterTitlu.setText("DX Cluster Settings");
+        tvClusterTitlu.setTextColor(Color.parseColor("#AAAAAA"));
+        tvClusterTitlu.setTextSize(14);
+        tvClusterTitlu.setPadding(0, 20, 0, 10);
+        llMain.addView(tvClusterTitlu);
+
+        etClusterServer = creeazaCampEditabil("Server (ex: dx.w1nr.net)", false);
+        llMain.addView(etClusterServer);
+
+        etClusterPort = creeazaCampEditabil("Port (ex: 7300 or 23)", false);
+        etClusterPort.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        llMain.addView(etClusterPort);
+
+        etClusterUser = creeazaCampEditabil("Username (optional)", false);
+        llMain.addView(etClusterUser);
+
+        etClusterPass = creeazaCampEditabil("Password (optional)", false);
+        etClusterPass.setInputType(android.text.InputType.TYPE_CLASS_TEXT |
+                android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        llMain.addView(etClusterPass);
 
         Button btnSave = new Button(context);
         btnSave.setText("💾 SAVE SETTINGS");
@@ -310,6 +338,10 @@ public class EcranSetariProprii {
         editor.putString(PREF_QRZ_PASS, etQrzPass.getText().toString().trim());
         editor.putString(PREF_HAMQTH_USER, etHamQthUser.getText().toString().trim());
         editor.putString(PREF_HAMQTH_PASS, etHamQthPass.getText().toString().trim());
+        editor.putString(PREF_CLUSTER_SERVER, etClusterServer.getText().toString().trim());
+        editor.putString(PREF_CLUSTER_PORT, etClusterPort.getText().toString().trim());
+        editor.putString(PREF_CLUSTER_USER, etClusterUser.getText().toString().trim());
+        editor.putString(PREF_CLUSTER_PASS, etClusterPass.getText().toString().trim());
         editor.apply();
         QrzLookupHelper.resetSesiune();
         HamQthLookupHelper.resetSesiune();
@@ -327,6 +359,10 @@ public class EcranSetariProprii {
         etQrzPass.setText(prefs.getString(PREF_QRZ_PASS, ""));
         etHamQthUser.setText(prefs.getString(PREF_HAMQTH_USER, ""));
         etHamQthPass.setText(prefs.getString(PREF_HAMQTH_PASS, ""));
+        etClusterServer.setText(prefs.getString(PREF_CLUSTER_SERVER, "dx.w1nr.net"));
+        etClusterPort.setText(prefs.getString(PREF_CLUSTER_PORT, "7300"));
+        etClusterUser.setText(prefs.getString(PREF_CLUSTER_USER, ""));
+        etClusterPass.setText(prefs.getString(PREF_CLUSTER_PASS, ""));
     }
 
     // ============================================================

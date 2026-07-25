@@ -68,10 +68,11 @@ public class MainActivity extends AppCompatActivity {
     private EcranEditorMacro managerEcranEditorMacro;
     private EcranLogger managerEcranLogger;
     private EcranSetariProprii managerEcranSetariProprii;
+    private EcranCluster managerEcranCluster;
 
     private DrawerLayout drawerLayout;
     private FrameLayout containerPrincipal;
-    private Button btnMeniuCAT, btnMeniuSettings, btnMeniuRtty, btnMeniuRttyPy, btnMeniuLogger, btnMeniuMySettings, btnMeniuExit;
+    private Button btnMeniuCAT, btnMeniuSettings, btnMeniuRtty, btnMeniuRttyPy, btnMeniuLogger, btnMeniuMySettings, btnMeniuCluster, btnMeniuExit;
 
     private boolean isReceiverRegistered = false;
 
@@ -130,7 +131,7 @@ public class MainActivity extends AppCompatActivity {
                 // 3. PROCESARE RĂSPUNSURI (RX)
                 if (cmd.length() >= 2) {
                     final String prefix = cmd.substring(0, 2);
-                    if (prefix.equals("FA")) {
+                    if (prefix.equals("FA") || prefix.equals("FD")) {
                         try {
                             String cifre = cmd.substring(2).replaceAll("[^0-9]", "");
                             if (!cifre.isEmpty()) {
@@ -156,6 +157,7 @@ public class MainActivity extends AppCompatActivity {
         managerEcranEditorMacro = new EcranEditorMacro(this);
         managerEcranLogger = new EcranLogger(this, radioManager);
         managerEcranSetariProprii = new EcranSetariProprii(this);
+        managerEcranCluster = new EcranCluster(this, radioManager);
 
         // CONEXIUNE RTTY -> LOGGER (Listener păstrat pentru compatibilitate,
         // dar logica principală este acum în EcranRttyDroid.adaugaIndicativCuClick)
@@ -229,6 +231,7 @@ public class MainActivity extends AppCompatActivity {
         btnMeniuRttyPy = creeazaButonMeniu("MACROS EDITOR", v -> comutaEcranMaster(4));
         btnMeniuLogger = creeazaButonMeniu("LOGGER", v -> comutaEcranMaster(5));
         btnMeniuMySettings = creeazaButonMeniu("MY SETTINGS", v -> comutaEcranMaster(6));
+        btnMeniuCluster = creeazaButonMeniu("DX CLUSTER", v -> comutaEcranMaster(7));
 
 // BUTON EXIT - Închidere completă cu eliberare resurse
         btnMeniuExit = new Button(this);
@@ -248,6 +251,7 @@ public class MainActivity extends AppCompatActivity {
         meniuLateral.addView(btnMeniuRttyPy);
         meniuLateral.addView(btnMeniuLogger);
         meniuLateral.addView(btnMeniuMySettings);
+        meniuLateral.addView(btnMeniuCluster);
         meniuLateral.addView(btnMeniuExit); // ← Adăugat la final
 
         // AFISARE VERSIUNE SI DATA BUILD
@@ -295,6 +299,7 @@ public class MainActivity extends AppCompatActivity {
             case 4: if (managerEcranEditorMacro != null) viewDeAfisat = managerEcranEditorMacro.getView(); break;
             case 5: if (managerEcranLogger != null) viewDeAfisat = managerEcranLogger.getView(); break;
             case 6: if (managerEcranSetariProprii != null) viewDeAfisat = managerEcranSetariProprii.getView(); break;
+            case 7: if (managerEcranCluster != null) viewDeAfisat = managerEcranCluster.getView(); break;
         }
 
         if (viewDeAfisat != null) {
@@ -307,6 +312,7 @@ public class MainActivity extends AppCompatActivity {
         btnMeniuRttyPy.setBackgroundColor(Color.parseColor(indexEcran == 4 ? "#BBDEFB" : "#E0E0E0"));
         btnMeniuLogger.setBackgroundColor(Color.parseColor(indexEcran == 5 ? "#BBDEFB" : "#E0E0E0"));
         btnMeniuMySettings.setBackgroundColor(Color.parseColor(indexEcran == 6 ? "#BBDEFB" : "#E0E0E0"));
+        btnMeniuCluster.setBackgroundColor(Color.parseColor(indexEcran == 7 ? "#BBDEFB" : "#E0E0E0"));
 
         drawerLayout.closeDrawer(GravityCompat.START);
     }
@@ -326,7 +332,11 @@ public class MainActivity extends AppCompatActivity {
                     if (managerEcranRtty != null) {
                         managerEcranRtty.eliberareResurse();
                     }
-                    // 2. Dezactivam receiver-ul USB
+                    // 2. Oprim resursele Cluster
+                    if (managerEcranCluster != null) {
+                        managerEcranCluster.eliberareResurse();
+                    }
+                    // 3. Dezactivam receiver-ul USB
                     safeUnregisterReceiver();
 
                     // 3. Oprim porturile seriale si conexiunile USB
@@ -401,6 +411,11 @@ public class MainActivity extends AppCompatActivity {
         // Oprim resursele RTTY (dacă nu au fost deja oprite prin EXIT)
         if (managerEcranRtty != null) {
             managerEcranRtty.eliberareResurse();
+        }
+
+        // Oprim resursele Cluster
+        if (managerEcranCluster != null) {
+            managerEcranCluster.eliberareResurse();
         }
 
         // Dezactivam receiver-ul USB
