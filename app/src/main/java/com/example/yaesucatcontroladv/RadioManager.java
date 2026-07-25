@@ -88,8 +88,10 @@ public class RadioManager {
             UsbDevice device = driver.getDevice();
 
             if (!manager.hasPermission(device)) {
-                int flags = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M ?
-                        PendingIntent.FLAG_IMMUTABLE : 0;
+                // FIX Android 12+: UsbManager needs FLAG_MUTABLE to add EXTRA_PERMISSION_GRANTED
+                int flags = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S ?
+                        PendingIntent.FLAG_MUTABLE : PendingIntent.FLAG_IMMUTABLE;
+                
                 PendingIntent pi = PendingIntent.getBroadcast(context, 0, new Intent(ACTION_USB_PERMISSION), flags);
                 manager.requestPermission(device, pi);
                 return;

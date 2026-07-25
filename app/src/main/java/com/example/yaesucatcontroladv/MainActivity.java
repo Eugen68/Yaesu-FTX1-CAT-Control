@@ -106,9 +106,6 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         if (getSupportActionBar() != null) getSupportActionBar().hide();
 
-        verificaPermisiuneOverlay();
-        ascundeButoaneNavigare();
-
         IntentFilter filter = new IntentFilter();
         filter.addAction(ACTION_USB_PERMISSION);
         filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
@@ -276,6 +273,10 @@ public class MainActivity extends AppCompatActivity {
 
         comutaEcranMaster(1);
         setContentView(drawerLayout);
+
+        // Chemăm verificările de permisiune și layout după ce am stabilit view-ul principal
+        verificaPermisiuneOverlay();
+        ascundeButoaneNavigare();
 
         getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN);
     }
