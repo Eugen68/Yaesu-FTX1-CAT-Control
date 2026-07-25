@@ -301,7 +301,7 @@ public class EcranComenzi {
         if (codMod.startsWith("01")) btnLSB.setBackgroundColor(Color.parseColor("#007ACC"));
         else if (codMod.startsWith("02")) btnUSB.setBackgroundColor(Color.parseColor("#007ACC"));
         else if (codMod.startsWith("03") || codMod.startsWith("07")) btnCW.setBackgroundColor(Color.parseColor("#2E7D32"));
-        else if (codMod.startsWith("06") || codMod.startsWith("09")) btnRTTYL.setBackgroundColor(Color.parseColor("#E65100"));
+        else if (codMod.startsWith("06") || codMod.startsWith("09") || codMod.startsWith("0C")) btnRTTYL.setBackgroundColor(Color.parseColor("#E65100"));
 
         containerButoaneCwExtra.setVisibility(esteCW ? View.VISIBLE : View.GONE);
     }

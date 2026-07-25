@@ -553,14 +553,53 @@ public class EcranCluster {
             long freqHz = (long) (spot.frequency * 1_000_000);
             // Folosim strict prefixul FA conform manualului și cerinței
             // Yaesu FA command requires fixed 9 digits (e.g., FA014205700;)
-            String catCmd = String.format(java.util.Locale.US, "FA%09d;", freqHz);
-            radioManager.trimiteComandaCAT(catCmd);
-            Toast.makeText(context, "Tuning la " + String.format(java.util.Locale.US, "%.5f", spot.frequency) + " MHz",
-                    Toast.LENGTH_SHORT).show();
+            String catCmdFreq = String.format(java.util.Locale.US, "FA%09d;", freqHz);
+            radioManager.trimiteComandaCAT(catCmdFreq);
+
+            // 1b. Sincronizăm modul de lucru
+            CatModeInfo modeInfo = mapSpotToCatMode(spot);
+            if (modeInfo != null) {
+                radioManager.trimiteComandaCAT("MD" + modeInfo.code + ";");
+            }
+
+            String msg = String.format(java.util.Locale.US, "Tuning la %.5f MHz", spot.frequency);
+            if (modeInfo != null) msg += " (" + modeInfo.label + ")";
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show();
         }
 
         // 2. Pregătește Logger-ul cu indicativul DX
         EcranRttyDroid.callsignBuffer = spot.dxCall;
+    }
+
+    private static class CatModeInfo {
+        final String code;
+        final String label;
+        CatModeInfo(String code, String label) {
+            this.code = code;
+            this.label = label;
+        }
+    }
+
+    private CatModeInfo mapSpotToCatMode(Spot spot) {
+        if (spot.mode == null) return null;
+        String m = spot.mode.toUpperCase();
+
+        // FTX-1: 03 = CW-U, 07 = CW-L
+        if (m.equals("CW")) return new CatModeInfo("03", "CW-U");
+        if (m.equals("RTTY")) return new CatModeInfo("06", "RTTY-L");
+        
+        // Moduri Digitale -> DATA-U
+        if (m.equals("FT8") || m.equals("FT4") || m.equals("JS8") || m.equals("PSK")) {
+            return new CatModeInfo("0C", "DATA-U");
+        }
+
+        // SSB (LSB/USB) - alegem în funcție de frecvență
+        if (m.equals("SSB")) {
+            if (spot.frequency < 10.0) return new CatModeInfo("01", "LSB");
+            else return new CatModeInfo("02", "USB");
+        }
+
+        return null;
     }
 
     /**
