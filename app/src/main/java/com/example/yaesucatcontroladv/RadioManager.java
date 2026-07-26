@@ -53,6 +53,7 @@ public class RadioManager {
     // Interfata pentru CAT
     public interface CatDataListener {
         void onCatCommandReceived(String cmd);
+        void onConnectionStateChanged(boolean connected);
     }
     private CatDataListener catListener;
 
@@ -75,6 +76,10 @@ public class RadioManager {
     }
 
     public void conecteazaStatie() {
+        if (isConectat()) {
+            Log.d(TAG, "Stația este deja conectată.");
+            return;
+        }
         try {
             UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);
             List<UsbSerialDriver> drivers = UsbSerialProber.getDefaultProber().findAllDrivers(manager);
@@ -153,6 +158,7 @@ public class RadioManager {
             // portul ramane deschis (setDTR/setRTS tot functioneaza), dar nu mai lansam
             // un thread de citire inutil care concura cu cel de CAT pentru aceeasi conexiune.
             porneteIoManagerCAT();
+            if (catListener != null) catListener.onConnectionStateChanged(true);
 
             interogheazaStareStatie();
         } catch (Exception e) {
@@ -194,6 +200,7 @@ public class RadioManager {
                 }
 
                 Log.e(TAG, "CAT IoManager oprit (deconectare/eroare)", e);
+                if (catListener != null) catListener.onConnectionStateChanged(false);
                 handlerUi.post(() -> Toast.makeText(context,
                         "Conexiune CAT pierduta: " + e.getMessage(), Toast.LENGTH_SHORT).show());
             }
@@ -292,6 +299,10 @@ public class RadioManager {
         return dataPort;
     }
 
+    public boolean isConectat() {
+        return catPort != null && catPort.isOpen();
+    }
+
     // OPTIMIZARE: oprim intai IoManager-ele - stop() e SINCRON cu privire la starea
     // interna (biblioteca gestioneaza tranzitia RUNNING -> STOPPING -> STOPPED si
     // orice citire aflata in desfasurare) - si ABIA DUPA aceea inchidem porturile.
@@ -299,6 +310,7 @@ public class RadioManager {
     // thread), care putea produce IOException/crash la deconectare rapida.
     public void opresteToat() {
         intentionalDisconnect = true;
+        if (catListener != null) catListener.onConnectionStateChanged(false);
         if (catIoManager != null) {
             catIoManager.stop();
             catIoManager = null;

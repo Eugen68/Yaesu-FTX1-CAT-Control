@@ -55,7 +55,11 @@ public class EcranComenzi {
         LinearLayout.LayoutParams pConn = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 140);
         pConn.setMargins(0, 0, 0, 30);
         btnConnect.setLayoutParams(pConn);
-        btnConnect.setOnClickListener(v -> radioManager.conecteazaStatie());
+        btnConnect.setOnClickListener(v -> {
+            if (radioManager != null && !radioManager.isConectat()) {
+                radioManager.conecteazaStatie();
+            }
+        });
         llCAT.addView(btnConnect);
 
         // --- S-METRU GRAFIC ---
@@ -304,5 +308,16 @@ public class EcranComenzi {
         else if (codMod.startsWith("06") || codMod.startsWith("09") || codMod.startsWith("0C")) btnRTTYL.setBackgroundColor(Color.parseColor("#E65100"));
 
         containerButoaneCwExtra.setVisibility(esteCW ? View.VISIBLE : View.GONE);
+    }
+
+    /**
+     * Actualizează starea vizuală a butonului de conectare în funcție de link-ul fizic USB.
+     */
+    public void setStareConexiune(boolean connected) {
+        if (!connected) {
+            btnConnect.setText("CONNECT RADIO STATION");
+            btnConnect.setBackgroundColor(Color.parseColor("#007ACC"));
+            containerButoaneCwExtra.setVisibility(View.GONE);
+        }
     }
 } // Ultima acoladă din fișier, cea care închide corect toată clasa EcranComenzi!

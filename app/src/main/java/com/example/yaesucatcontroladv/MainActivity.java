@@ -16,6 +16,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -122,39 +123,51 @@ public class MainActivity extends AppCompatActivity {
 
         radioManager = new RadioManager(this);
 
-        radioManager.setCatDataListener(cmd -> {
-            runOnUiThread(() -> {
-                // 1. LOGARE CENTRALĂ: Trimitem orice comandă (TX sau RX) direct în Monitorul din Setări
-                if (managerEcranSetari != null) {
-                    // Dacă e RX, adăugăm manual punctul și virgula (pe care RadioManager le elimină la parsare)
-                    String logText = cmd.startsWith("TX ->") ? cmd : (cmd + ";");
-                    managerEcranSetari.raporteazaComandaInLog(logText);
-                }
-
-                // 2. Dacă e TX, nu mai procesăm parsarea de răspuns
-                if (cmd.startsWith("TX ->")) return;
-
-                // 3. PROCESARE RĂSPUNSURI (RX)
-                if (cmd.length() >= 2) {
-                    final String prefix = cmd.substring(0, 2);
-                    if (prefix.equals("FA") || prefix.equals("FD")) {
-                        try {
-                            String cifre = cmd.substring(2).replaceAll("[^0-9]", "");
-                            if (!cifre.isEmpty()) {
-                                StareRadio.setFrecventaHz(Long.parseLong(cifre));
-                            }
-                        } catch (Exception ignored) {}
-                    } else if (prefix.equals("MD")) {
-                        StareRadio.setModText(cmd.substring(2));
-                    }
-                    if (managerEcranComenzi != null) {
-                        managerEcranComenzi.proceseazaDateCATInEcran(prefix, cmd);
-                    }
+        radioManager.setCatDataListener(new RadioManager.CatDataListener() {
+            @Override
+            public void onCatCommandReceived(String cmd) {
+                runOnUiThread(() -> {
+                    // 1. LOGARE CENTRALĂ: Trimitem orice comandă (TX sau RX) direct în Monitorul din Setări
                     if (managerEcranSetari != null) {
-                        managerEcranSetari.proceseazaDateCATInSetari(prefix, cmd);
+                        // Dacă e RX, adăugăm manual punctul și virgula (pe care RadioManager le elimină la parsare)
+                        String logText = cmd.startsWith("TX ->") ? cmd : (cmd + ";");
+                        managerEcranSetari.raporteazaComandaInLog(logText);
                     }
-                }
-            });
+
+                    // 2. Dacă e TX, nu mai procesăm parsarea de răspuns
+                    if (cmd.startsWith("TX ->")) return;
+
+                    // 3. PROCESARE RĂSPUNSURI (RX)
+                    if (cmd.length() >= 2) {
+                        final String prefix = cmd.substring(0, 2);
+                        if (prefix.equals("FA") || prefix.equals("FD")) {
+                            try {
+                                String cifre = cmd.substring(2).replaceAll("[^0-9]", "");
+                                if (!cifre.isEmpty()) {
+                                    StareRadio.setFrecventaHz(Long.parseLong(cifre));
+                                }
+                            } catch (Exception ignored) {}
+                        } else if (prefix.equals("MD")) {
+                            StareRadio.setModText(cmd.substring(2));
+                        }
+                        if (managerEcranComenzi != null) {
+                            managerEcranComenzi.proceseazaDateCATInEcran(prefix, cmd);
+                        }
+                        if (managerEcranSetari != null) {
+                            managerEcranSetari.proceseazaDateCATInSetari(prefix, cmd);
+                        }
+                    }
+                });
+            }
+
+            @Override
+            public void onConnectionStateChanged(boolean connected) {
+                runOnUiThread(() -> {
+                    if (managerEcranComenzi != null) {
+                        managerEcranComenzi.setStareConexiune(connected);
+                    }
+                });
+            }
         });
 
         managerEcranComenzi = new EcranComenzi(this, radioManager);
@@ -334,10 +347,30 @@ public class MainActivity extends AppCompatActivity {
 // EXIT APLICATIE - Eliberare completa resurse + inchidere graceful
 // ============================================================
     private void exitAplicatie() {
+        // Creăm o bifă pentru închiderea stației
+        CheckBox cbShutdown = new CheckBox(this);
+        cbShutdown.setText("Shut-down Yaesu FTX1");
+        cbShutdown.setTextColor(Color.WHITE);
+        cbShutdown.setTextSize(14);
+        
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setPadding(dp(20), dp(10), dp(20), dp(5));
+        container.addView(cbShutdown);
+
         new AlertDialog.Builder(this)
                 .setTitle("Exit Confirmation")
                 .setMessage("Are you sure you want to close the application?\n\nAll USB and audio resources will be released.")
+                .setView(container)
                 .setPositiveButton("YES, CLOSE", (dialog, which) -> {
+                    // 0. Închidem stația dacă bifa este activată
+                    if (cbShutdown.isChecked() && radioManager != null) {
+                        radioManager.trimiteComandaCAT("PS0;");
+                        try {
+                            Thread.sleep(150); // Lăsăm timp stației să primească comanda
+                        } catch (InterruptedException ignored) {}
+                    }
+
                     // 1. Oprim resursele RTTY (AudioRecord, thread decodare, bitmap-uri)
                     if (managerEcranRtty != null) {
                         managerEcranRtty.eliberareResurse();
