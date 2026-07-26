@@ -110,7 +110,9 @@ public class MainActivity extends AppCompatActivity {
         filter.addAction(ACTION_USB_PERMISSION);
         filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            // FIX: Custom actions like USB_PERMISSION need EXPORTED on API 33+
+            // because they are triggered by the system's USB service.
+            registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED);
         } else {
             // No flag needed or available for API < 33
             android.util.Log.d("MAIN", "Registering receiver without flag (API < 33)");

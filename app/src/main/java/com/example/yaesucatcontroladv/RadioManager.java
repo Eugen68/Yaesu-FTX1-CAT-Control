@@ -92,7 +92,10 @@ public class RadioManager {
                 int flags = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S ?
                         PendingIntent.FLAG_MUTABLE : PendingIntent.FLAG_IMMUTABLE;
                 
-                PendingIntent pi = PendingIntent.getBroadcast(context, 0, new Intent(ACTION_USB_PERMISSION), flags);
+                Intent intent = new Intent(ACTION_USB_PERMISSION);
+                intent.setPackage(context.getPackageName()); // FIX: Android 14+ needs explicit intent for MUTABLE flags
+                
+                PendingIntent pi = PendingIntent.getBroadcast(context, 0, intent, flags);
                 manager.requestPermission(device, pi);
                 return;
             }
@@ -106,7 +109,9 @@ public class RadioManager {
 
             deschidePorturi(manager, device);
         } catch (Exception e) {
-            Toast.makeText(context, "Connection error: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            Log.e(TAG, "Exception in conecteazaStatie", e);
+            String errorMsg = e.getClass().getSimpleName() + ": " + e.getMessage();
+            Toast.makeText(context, "Connection error: [" + errorMsg + "]", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -114,7 +119,11 @@ public class RadioManager {
         try {
             intentionalDisconnect = false;
             UsbDeviceConnection connection = manager.openDevice(device);
-            if (connection == null) return;
+            if (connection == null) {
+                Log.e(TAG, "UsbManager.openDevice() returned NULL - checking permissions...");
+                Toast.makeText(context, "Unable to open USB device. Please reconnect.", Toast.LENGTH_LONG).show();
+                return;
+            }
 
             // 1. Configurare Port CAT
             catPort.open(connection);
