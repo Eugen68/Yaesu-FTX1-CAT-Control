@@ -12,6 +12,8 @@ import java.io.PrintWriter;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -37,6 +39,7 @@ public class ClusterManager {
     private Thread connectionThread;
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final ExecutorService commandExecutor;
 
     private String serverHost;
     private int serverPort;
@@ -45,6 +48,7 @@ public class ClusterManager {
 
     public ClusterManager(Context context) {
         this.context = context;
+        this.commandExecutor = Executors.newSingleThreadExecutor();
         loadSettings();
     }
 
@@ -122,7 +126,7 @@ public class ClusterManager {
             // Conectare socket (timeout mărit pentru routere/GSM)
             socket = new Socket();
             socket.connect(new java.net.InetSocketAddress(serverHost, serverPort), 20000); 
-            socket.setSoTimeout(30000);
+            socket.setSoTimeout(300000); // 5 minute timeout pentru citire (DX Cluster poate fi inactiv)
 
             reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             writer = new PrintWriter(socket.getOutputStream(), true);
@@ -137,25 +141,42 @@ public class ClusterManager {
             Log.d(TAG, "Autentificare finalizată. Încep citirea spoturilor...");
 
             // Citire spot-uri în buclă
-            String line;
-            while (isRunning.get() && (line = reader.readLine()) != null) {
-                if (!isRunning.get()) break;
-                
-                // Logăm liniile brute pentru debug în Logcat
-                Log.v(TAG, "RX: " + line);
+            while (isRunning.get()) {
+                try {
+                    String line = reader.readLine();
+                    if (line == null) {
+                        Log.d(TAG, "Serverul a închis conexiunea (EOF)");
+                        break;
+                    }
 
-                // Parsează linia ca spot
-                Spot spot = parseSpotLine(line);
-                if (spot != null) {
-                    mainHandler.post(() -> {
-                        if (listener != null) {
-                            listener.onSpotReceived(spot);
-                        }
-                    });
+                    if (!isRunning.get()) break;
+
+                    // Logăm liniile brute pentru debug în Logcat
+                    Log.v(TAG, "RX: " + line);
+
+                    // Parsează linia ca spot
+                    Spot spot = parseSpotLine(line);
+                    if (spot != null) {
+                        mainHandler.post(() -> {
+                            if (listener != null) {
+                                listener.onSpotReceived(spot);
+                            }
+                        });
+                    }
+                } catch (java.net.SocketTimeoutException e) {
+                    // Timeout-ul a expirat dar nu e eroare fatală. 
+                    // Continuăm să ascultăm.
+                    Log.d(TAG, "Read timeout (5 min). Still listening...");
                 }
             }
 
         } catch (Exception e) {
+            // Dacă am oprit intenționat conexiunea, ignorăm eroarea "Socket closed"
+            if (!isRunning.get()) {
+                Log.d(TAG, "Conexiune închisă intenționat. Ignorăm eroarea: " + e.getMessage());
+                return;
+            }
+
             String resolvedIp = "unknown";
             try { resolvedIp = java.net.InetAddress.getByName(serverHost).getHostAddress(); } catch (Exception ignored) {}
             
@@ -264,11 +285,23 @@ public class ClusterManager {
      * Trimite o comandă către server (ex: filtru).
      */
     public void sendCommand(String command) {
-        if (writer != null && isRunning.get()) {
-            writer.println(command);
-            writer.flush();
-            Log.d(TAG, "Comandă trimisă: " + command);
-        }
+        if (command == null || command.isEmpty()) return;
+
+        commandExecutor.execute(() -> {
+            if (writer != null && isRunning.get()) {
+                writer.println(command);
+                writer.flush();
+                Log.d(TAG, "Comandă trimisă: " + command);
+            }
+        });
+    }
+
+    /**
+     * Închide executorul și resursele la distrugerea managerului.
+     */
+    public void shutdown() {
+        disconnect();
+        commandExecutor.shutdownNow();
     }
 
     /**

@@ -77,8 +77,9 @@ public class RadioManager {
 
     public void conecteazaStatie() {
         if (isConectat()) {
-            Log.d(TAG, "Stația este deja conectată.");
-            return;
+            Log.d(TAG, "Stația apare conectată. Execut resetare pentru reconectare...");
+            opresteToat();
+            try { Thread.sleep(200); } catch (InterruptedException ignored) {}
         }
         try {
             UsbManager manager = (UsbManager) context.getSystemService(Context.USB_SERVICE);

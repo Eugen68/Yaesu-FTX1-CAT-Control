@@ -56,7 +56,7 @@ public class EcranComenzi {
         pConn.setMargins(0, 0, 0, 30);
         btnConnect.setLayoutParams(pConn);
         btnConnect.setOnClickListener(v -> {
-            if (radioManager != null && !radioManager.isConectat()) {
+            if (radioManager != null) {
                 radioManager.conecteazaStatie();
             }
         });

@@ -17,10 +17,14 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Ecranul principal pentru DX Cluster.
@@ -41,14 +45,17 @@ public class EcranCluster {
 
     // Elemente Filtre
     private LinearLayout panelFiltre;
-    private Spinner spBand, spMode;
+    private Button btnBand, btnMode;
     private EditText etSearch;
     private boolean filtersVisible = false;
 
     // Filtre Curente
-    private String filterBand = "All";
-    private String filterMode = "All";
+    private final Set<String> selectedBands = new HashSet<>();
+    private final Set<String> selectedModes = new HashSet<>();
     private String filterSearch = "";
+
+    private static final String[] ALL_BANDS = {"160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "2m"};
+    private static final String[] ALL_MODES = {"CW", "SSB", "FT8", "FT4", "RTTY", "PSK"};
 
     private final List<Spot> spoturi = new ArrayList<>();
     private static final int MAX_SPOTURI = 100; // Limită pentru a nu umple memoria
@@ -172,15 +179,26 @@ public class EcranCluster {
         // Row 1: Band & Mode
         LinearLayout rowF1 = new LinearLayout(context);
         rowF1.setOrientation(LinearLayout.HORIZONTAL);
-        
-        spBand = createFilterSpinner(Arrays.asList("All", "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "2m"));
-        spMode = createFilterSpinner(Arrays.asList("All", "CW", "SSB", "FT8", "FT4", "RTTY", "PSK"));
-        
-        rowF1.addView(spBand);
+
+        btnBand = new Button(context);
+        btnBand.setBackgroundColor(Color.parseColor("#333333"));
+        btnBand.setTextColor(Color.WHITE);
+        btnBand.setTextSize(12);
+        btnBand.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        btnBand.setOnClickListener(v -> showMultiSelectDialog("Select Bands", ALL_BANDS, selectedBands));
+
+        btnMode = new Button(context);
+        btnMode.setBackgroundColor(Color.parseColor("#333333"));
+        btnMode.setTextColor(Color.WHITE);
+        btnMode.setTextSize(12);
+        btnMode.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        btnMode.setOnClickListener(v -> showMultiSelectDialog("Select Modes", ALL_MODES, selectedModes));
+
+        rowF1.addView(btnBand);
         View spacerF = new View(context);
         spacerF.setLayoutParams(new LinearLayout.LayoutParams(20, 1));
         rowF1.addView(spacerF);
-        rowF1.addView(spMode);
+        rowF1.addView(btnMode);
         panelFiltre.addView(rowF1);
 
         // Row 2: Search
@@ -194,15 +212,41 @@ public class EcranCluster {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         pSearch.setMargins(0, 10, 0, 0);
         etSearch.setLayoutParams(pSearch);
+
+        // ============================================================
+        // BUTON X NATIV (apare doar când există text)
+        // ============================================================
+        etSearch.setCompoundDrawablePadding(10);
         etSearch.addTextChangedListener(new android.text.TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
             @Override public void afterTextChanged(android.text.Editable s) {
+                // Afișează/ascunde iconița X
+                if (s.length() > 0) {
+                    etSearch.setCompoundDrawablesWithIntrinsicBounds(null, null, createXIcon(), null);
+                } else {
+                    etSearch.setCompoundDrawablesWithIntrinsicBounds(null, null, null, null);
+                }
+
                 filterSearch = s.toString().trim().toUpperCase();
                 saveFilters();
                 refacereLista();
             }
         });
+
+        // Click pe iconița X pentru a goli câmpul
+        etSearch.setOnTouchListener((v, event) -> {
+            if (event.getAction() == android.view.MotionEvent.ACTION_UP) {
+                if (etSearch.getCompoundDrawables()[2] != null) {
+                    if (event.getRawX() >= (etSearch.getRight() - etSearch.getCompoundPaddingRight())) {
+                        etSearch.setText("");
+                        return true;
+                    }
+                }
+            }
+            return false;
+        });
+
         panelFiltre.addView(etSearch);
 
         viewPrincipal.addView(panelFiltre);
@@ -281,32 +325,44 @@ public class EcranCluster {
         loadFilters(); // Încarcă filtrele salvate
     }
 
-    private Spinner createFilterSpinner(List<String> items) {
-        Spinner s = new Spinner(context);
-        ArrayAdapter<String> adapter = new ArrayAdapter<String>(context, android.R.layout.simple_spinner_item, items) {
-            @androidx.annotation.NonNull
-            @Override
-            public View getView(int position, View convertView, @androidx.annotation.NonNull android.view.ViewGroup parent) {
-                View v = super.getView(position, convertView, parent);
-                ((TextView) v).setTextColor(Color.WHITE);
-                ((TextView) v).setTextSize(13);
-                return v;
-            }
-        };
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        s.setAdapter(adapter);
-        s.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        s.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
-                if (parent == spBand) filterBand = items.get(position);
-                else if (parent == spMode) filterMode = items.get(position);
-                saveFilters();
-                refacereLista();
-            }
-            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
-        });
-        return s;
+    private void showMultiSelectDialog(String title, String[] items, Set<String> selection) {
+        boolean[] checkedItems = new boolean[items.length];
+        for (int i = 0; i < items.length; i++) {
+            checkedItems[i] = selection.contains(items[i]);
+        }
+
+        new AlertDialog.Builder(context, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(title)
+                .setMultiChoiceItems(items, checkedItems, (dialog, which, isChecked) -> {
+                    checkedItems[which] = isChecked;
+                })
+                .setPositiveButton("OK", (dialog, which) -> {
+                    selection.clear();
+                    for (int i = 0; i < items.length; i++) {
+                        if (checkedItems[i]) {
+                            selection.add(items[i]);
+                        }
+                    }
+                    updateButtonLabels();
+                    saveFilters();
+                    refacereLista();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void updateButtonLabels() {
+        if (selectedBands.isEmpty()) {
+            btnBand.setText("ALL BANDS");
+        } else {
+            btnBand.setText(String.join(", ", selectedBands));
+        }
+
+        if (selectedModes.isEmpty()) {
+            btnMode.setText("ALL MODES");
+        } else {
+            btnMode.setText(String.join(", ", selectedModes));
+        }
     }
 
     private Button createQuickBtn(String text, String cmd) {
@@ -334,34 +390,31 @@ public class EcranCluster {
 
     private void saveFilters() {
         context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE).edit()
-                .putString(EcranSetariProprii.PREF_CLUSTER_FILTER_BAND, filterBand)
-                .putString(EcranSetariProprii.PREF_CLUSTER_FILTER_MODE, filterMode)
+                .putString(EcranSetariProprii.PREF_CLUSTER_FILTER_BAND, String.join(",", selectedBands))
+                .putString(EcranSetariProprii.PREF_CLUSTER_FILTER_MODE, String.join(",", selectedModes))
                 .putString(EcranSetariProprii.PREF_CLUSTER_FILTER_SEARCH, filterSearch)
                 .apply();
     }
 
     private void loadFilters() {
         android.content.SharedPreferences prefs = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
-        filterBand = prefs.getString(EcranSetariProprii.PREF_CLUSTER_FILTER_BAND, "All");
-        filterMode = prefs.getString(EcranSetariProprii.PREF_CLUSTER_FILTER_MODE, "All");
+        
+        String savedBands = prefs.getString(EcranSetariProprii.PREF_CLUSTER_FILTER_BAND, "");
+        selectedBands.clear();
+        if (!savedBands.isEmpty()) {
+            selectedBands.addAll(Arrays.asList(savedBands.split(",")));
+        }
+
+        String savedModes = prefs.getString(EcranSetariProprii.PREF_CLUSTER_FILTER_MODE, "");
+        selectedModes.clear();
+        if (!savedModes.isEmpty()) {
+            selectedModes.addAll(Arrays.asList(savedModes.split(",")));
+        }
+
         filterSearch = prefs.getString(EcranSetariProprii.PREF_CLUSTER_FILTER_SEARCH, "");
 
-        setSpinnerValue(spBand, filterBand);
-        setSpinnerValue(spMode, filterMode);
+        updateButtonLabels();
         etSearch.setText(filterSearch);
-    }
-
-    private void setSpinnerValue(Spinner s, String value) {
-        if (value == null) return;
-        @SuppressWarnings("unchecked")
-        ArrayAdapter<String> adapter = (ArrayAdapter<String>) s.getAdapter();
-        for (int i = 0; i < adapter.getCount(); i++) {
-            String item = adapter.getItem(i);
-            if (item != null && item.equals(value)) {
-                s.setSelection(i);
-                break;
-            }
-        }
     }
 
     private void refacereLista() {
@@ -374,8 +427,8 @@ public class EcranCluster {
     }
 
     private boolean respectaFiltrele(Spot s) {
-        if (!filterBand.equals("All") && !filterBand.equalsIgnoreCase(s.band)) return false;
-        if (!filterMode.equals("All") && !filterMode.equalsIgnoreCase(s.mode)) return false;
+        if (!selectedBands.isEmpty() && !selectedBands.contains(s.band)) return false;
+        if (!selectedModes.isEmpty() && !selectedModes.contains(s.mode)) return false;
         if (!filterSearch.isEmpty() && !s.dxCall.toUpperCase().startsWith(filterSearch)) return false;
         return true;
     }
@@ -623,7 +676,35 @@ public class EcranCluster {
      * Curăță resursele la închiderea aplicației.
      */
     public void eliberareResurse() {
-        clusterManager.disconnect();
+        clusterManager.shutdown();
         spoturi.clear();
+    }
+
+    /**
+     * Creează iconița X dinamic (fără resurse externe) - Stil RTTY Center.
+     */
+    private android.graphics.drawable.Drawable createXIcon() {
+        int size = 64; // dimensiune în pixeli
+        android.graphics.Bitmap bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
+
+        // Fundal roșu circular
+        android.graphics.Paint bgPaint = new android.graphics.Paint();
+        bgPaint.setColor(Color.parseColor("#B71C1C"));
+        bgPaint.setAntiAlias(true);
+        canvas.drawCircle(size / 2f, size / 2f, size / 2f, bgPaint);
+
+        // X alb în centru
+        android.graphics.Paint xPaint = new android.graphics.Paint();
+        xPaint.setColor(Color.WHITE);
+        xPaint.setStrokeWidth(6f);
+        xPaint.setAntiAlias(true);
+        xPaint.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+
+        float margin = size * 0.3f;
+        canvas.drawLine(margin, margin, size - margin, size - margin, xPaint);
+        canvas.drawLine(size - margin, margin, margin, size - margin, xPaint);
+
+        return new android.graphics.drawable.BitmapDrawable(context.getResources(), bitmap);
     }
 }
