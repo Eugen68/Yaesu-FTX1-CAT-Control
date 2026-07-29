@@ -85,6 +85,12 @@ public class EcranRttyDroid {
     private static final double BAUD_RTTY = 45.45;
     private static final double RCHEB_MIN = 0.985; // capatul larg al slider-ului (~115 Hz)
 
+    // Constanta de timp a integratorului final e legata de durata unui simbol
+    // (samplesPerBit), nu fixa - Chebyshev are nevoie de smoothing suplimentar
+    // (rezonatorul nu integreaza pe simbol), Matched Filter deja integreaza.
+    private static final double FRACTIUNE_INTEGRARE_CHEBYSHEV = 1.0 / 8.0; // tau ~= samplesPerBit/8
+    private static final double FRACTIUNE_INTEGRARE_MATCHED_FILTER = 1.0; // fara smoothing suplimentar (trece direct)
+
     // Matched Filter & SNR
     // OPTIMIZARE: nu mai pastram sabloanele sin/cos pe toata fereastra (O(N) per esantion),
     // ci doar constantele de rotatie pentru o corelatie glisanta recursiva O(1) per esantion
@@ -847,7 +853,7 @@ public class EcranRttyDroid {
             double mx1 = 0, mx2 = 0, sx1 = 0, sx2 = 0;
             double dcBlockerInVech = 0, dcBlockerOutVech = 0;
             double integratVech = 0;
-            double alfaIntegrator = 0.08;
+            double alfaIntegrator = calculeazaAlfaIntegrator(samplesPerBit);
             double nivelZgomotMediu = 0.05;
             boolean inFrame = false;
             double fazaCeasAcumulator = 0;
@@ -934,6 +940,7 @@ public class EcranRttyDroid {
                 if (solicitaResetFiltre) {
                     mx1 = 0; mx2 = 0; sx1 = 0; sx2 = 0;
                     integratVech = 0;
+                    alfaIntegrator = calculeazaAlfaIntegrator(samplesPerBit);
                     inFrame = false;
                     fazaCeasAcumulator = 0;
                     bitCounter = 0;
@@ -1187,6 +1194,14 @@ public class EcranRttyDroid {
         decodareRttyActiva = false;
         btnRttyAudioToggle.setText("START");
         btnRttyAudioToggle.setBackgroundColor(Color.parseColor("#E65100"));
+    }
+
+    private double calculeazaAlfaIntegrator(double samplesPerBit) {
+        double fractiune = folosesteMatchedFilter
+                ? FRACTIUNE_INTEGRARE_MATCHED_FILTER
+                : FRACTIUNE_INTEGRARE_CHEBYSHEV;
+        double tau = Math.max(1.0, samplesPerBit * fractiune);
+        return 1.0 / tau; // alfa = 1/tau pentru un IIR de ordinul 1
     }
 
     private void executaAutoTuneMecanic() {
