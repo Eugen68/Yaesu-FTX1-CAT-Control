@@ -866,6 +866,12 @@ public class EcranRttyDroid {
             // decat 0.6 la respingerea puseurilor scurte de zgomot).
             final int PRAG_CONFIRMARE_START = (int) Math.round(samplesPerBit * 0.7);
 
+            int contorEroriFramingConsecutive = 0;
+            // Numar de cadre invalide consecutive (stop-bit gresit) care declanseaza
+            // un reset complet al starii de decodare - semn de QRM/zgomot sustinut sau
+            // desincronizare majora, nu doar un cadru izolat corupt.
+            final int PRAG_ERORI_FRAMING_RESYNC = 5;
+
             // FUNCTIONALITATE NOUA: Noise Blanker - stare locala pe threadul de decodare.
             // nbNivelMediu urmareste amplitudinea "normala" recenta a semnalului audio brut
             // (medie EMA a |sample|), actualizata DOAR din esantioane NEsuprimate (ca sa nu
@@ -933,6 +939,7 @@ public class EcranRttyDroid {
                     bitCounter = 0;
                     currentByte = 0;
                     contorConfirmareStart = 0;
+                    contorEroriFramingConsecutive = 0;
                     nbNivelMediu = 0.05;
                     nbUltimulEsantionValid = 0;
                     if (folosesteMatchedFilter && mfBuffer != null) {
@@ -1145,7 +1152,19 @@ public class EcranRttyDroid {
                                 if (bitCurent == 1) currentByte |= (1 << bitCounter);
                                 bitCounter++;
                             } else {
-                                if (bitCurent == 1) proceseazaCodBaudot(currentByte & 0x1F);
+                                // Am ajuns la stop-bit (bitCounter == 5)
+                                if (bitCurent == 1) {
+                                    // Stop bit valid
+                                    proceseazaCodBaudot(currentByte & 0x1F);
+                                    contorEroriFramingConsecutive = 0;
+                                } else {
+                                    // Stop bit invalid (framing error)
+                                    contorEroriFramingConsecutive++;
+                                    if (contorEroriFramingConsecutive >= PRAG_ERORI_FRAMING_RESYNC) {
+                                        solicitaResetFiltre = true;
+                                        contorEroriFramingConsecutive = 0;
+                                    }
+                                }
                                 inFrame = false;
                             }
                         }
