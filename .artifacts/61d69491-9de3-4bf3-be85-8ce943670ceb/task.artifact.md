@@ -1,0 +1,8 @@
+- [x] Ștergerea fișierelor `.webp` duplicat din resurse
+    - [x] `mipmap-hdpi`
+    - [x] `mipmap-mdpi`
+    - [x] `mipmap-xhdpi`
+    - [x] `mipmap-xxhdpi`
+    - [x] `mipmap-xxxhdpi`
+- [x] Verificarea build-ului proiectului
+- [x] Sincronizarea Gradle (confirmată de build succes)
