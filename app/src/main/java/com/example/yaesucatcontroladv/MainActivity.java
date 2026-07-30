@@ -461,6 +461,11 @@ public class MainActivity extends AppCompatActivity {
             managerEcranCluster.eliberareResurse();
         }
 
+        // Oprim resursele CW Keyer
+        if (managerEcranComenzi != null) {
+            managerEcranComenzi.eliberareResurse();
+        }
+
         // Dezactivam receiver-ul USB
         safeUnregisterReceiver();
 

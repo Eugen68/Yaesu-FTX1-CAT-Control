@@ -4,18 +4,24 @@ import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
+
+import android.annotation.SuppressLint;
 
 public class EcranComenzi {
 
     private final Context context;
     private final RadioManager radioManager;
-    private ScrollView viewPrincipal;
+    private LinearLayout viewPrincipal;
+    private CwKeyer cwKeyer;
 
     // Elemente grafice care trebuie actualizate din exterior (prin mesaje CAT)
     private TextView tvSMeterValue;
@@ -23,6 +29,7 @@ public class EcranComenzi {
     private Button btnLSB, btnUSB, btnCW, btnRTTYL;
     private Button btnBkInToggle, btnApfToggle, btnWidthToggle, btnConnect;
     private LinearLayout containerButoaneCwExtra;
+    private LinearLayout containerCwKeyer;
 
     // Variabile de stare internă pentru butoane
     private boolean stareBkInOn = false;
@@ -30,21 +37,42 @@ public class EcranComenzi {
     private boolean stareWidth200On = false;
     private int modLucruCurent = 1; // 1 = Voce, 2 = CW
 
+    // Chei SharedPreferences pentru Keyer
+    private static final String PREF_CW_WPM = "cw_keyer_wpm";
+    private static final String PREF_CW_REV = "cw_keyer_rev";
+    private static final String PREF_CW_STR = "cw_keyer_str";
+    private static final String PREF_CW_IAMBIC_B = "cw_keyer_iambic_b";
+    private static final String PREF_CW_RTS = "cw_keyer_rts";
+
+    private boolean isInitialLoading = false;
+
     public EcranComenzi(Context context, RadioManager radioManager) {
         this.context = context;
         this.radioManager = radioManager;
+        this.cwKeyer = new CwKeyer(radioManager);
         construiesteInterfata();
+        incarcaSetariKeyer();
     }
 
-    public ScrollView getView() {
+    public View getView() {
         return viewPrincipal;
     }
 
     private void construiesteInterfata() {
-        viewPrincipal = new ScrollView(context);
+        viewPrincipal = new LinearLayout(context);
+        viewPrincipal.setOrientation(LinearLayout.VERTICAL);
+        viewPrincipal.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
+
+        ScrollView scrollArea = new ScrollView(context);
+        scrollArea.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
         LinearLayout llCAT = new LinearLayout(context);
         llCAT.setOrientation(LinearLayout.VERTICAL);
         llCAT.setPadding(30, 30, 30, 30);
+        scrollArea.addView(llCAT);
+        viewPrincipal.addView(scrollArea);
 
         // --- BUTTON STATIE CONECTARE ---
         btnConnect = new Button(context);
@@ -201,7 +229,174 @@ public class EcranComenzi {
         containerButoaneCwExtra.addView(randCw2);
 
         llCAT.addView(containerButoaneCwExtra);
-        viewPrincipal.addView(llCAT);
+
+        // --- CONSTRUIRE KEYER CW (FIXED AT BOTTOM) ---
+        construiesteInterfataKeyer();
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private void construiesteInterfataKeyer() {
+        containerCwKeyer = new LinearLayout(context);
+        containerCwKeyer.setOrientation(LinearLayout.VERTICAL);
+        containerCwKeyer.setBackgroundColor(Color.parseColor("#1A1A1A"));
+        containerCwKeyer.setPadding(20, 20, 20, 20);
+        containerCwKeyer.setVisibility(View.GONE); // Vizibil doar în modul CW
+        
+        // Rândul 1: Setări (REV, STR, LINE)
+        LinearLayout rSettings = new LinearLayout(context);
+        rSettings.setOrientation(LinearLayout.HORIZONTAL);
+        rSettings.setGravity(Gravity.CENTER_VERTICAL);
+        
+        CheckBox cbRev = new CheckBox(context);
+        cbRev.setText("REV");
+        cbRev.setTextColor(Color.YELLOW);
+        cbRev.setOnCheckedChangeListener((v, isChecked) -> {
+            cwKeyer.setReversed(isChecked);
+            if (!isInitialLoading) salveazaSetareKeyer(PREF_CW_REV, isChecked);
+        });
+        
+        CheckBox cbStr = new CheckBox(context);
+        cbStr.setText("STR");
+        cbStr.setTextColor(Color.CYAN);
+        cbStr.setOnCheckedChangeListener((v, isChecked) -> {
+            cwKeyer.setStraightKeyMode(isChecked);
+            if (!isInitialLoading) salveazaSetareKeyer(PREF_CW_STR, isChecked);
+        });
+
+        Button btnIambicMode = new Button(context);
+        btnIambicMode.setText("IAMBIC B");
+        btnIambicMode.setBackgroundColor(Color.parseColor("#424242"));
+        btnIambicMode.setTextColor(Color.WHITE);
+        btnIambicMode.setTextSize(10);
+        btnIambicMode.setLayoutParams(new LinearLayout.LayoutParams(0, 100, 1f));
+        btnIambicMode.setOnClickListener(v -> {
+            boolean isNowB = btnIambicMode.getText().toString().equals("IAMBIC B");
+            if (isNowB) {
+                btnIambicMode.setText("IAMBIC A");
+                cwKeyer.setIambicModeB(false);
+                salveazaSetareKeyer(PREF_CW_IAMBIC_B, false);
+            } else {
+                btnIambicMode.setText("IAMBIC B");
+                cwKeyer.setIambicModeB(true);
+                salveazaSetareKeyer(PREF_CW_IAMBIC_B, true);
+            }
+        });
+        
+        Button btnLine = new Button(context);
+        btnLine.setText("USE: RTS");
+        btnLine.setBackgroundColor(Color.parseColor("#424242"));
+        btnLine.setTextColor(Color.WHITE);
+        btnLine.setTextSize(10);
+        btnLine.setLayoutParams(new LinearLayout.LayoutParams(0, 100, 1.2f));
+        btnLine.setOnClickListener(v -> {
+            boolean useRtsNow = btnLine.getText().toString().contains("RTS");
+            if (useRtsNow) {
+                btnLine.setText("USE: DTR");
+                cwKeyer.setUseRts(false);
+                if (!isInitialLoading) salveazaSetareKeyer(PREF_CW_RTS, false);
+            } else {
+                btnLine.setText("USE: RTS");
+                cwKeyer.setUseRts(true);
+                if (!isInitialLoading) salveazaSetareKeyer(PREF_CW_RTS, true);
+            }
+        });
+
+        rSettings.addView(cbRev);
+        rSettings.addView(creeazaSpatiuOrizontal());
+        rSettings.addView(cbStr);
+        rSettings.addView(creeazaSpatiuOrizontal());
+        rSettings.addView(btnIambicMode);
+        rSettings.addView(creeazaSpatiuOrizontal());
+        rSettings.addView(btnLine);
+        containerCwKeyer.addView(rSettings);
+
+        // Rândul 2: Viteză (WPM Slider)
+        LinearLayout rWpm = new LinearLayout(context);
+        rWpm.setOrientation(LinearLayout.HORIZONTAL);
+        rWpm.setGravity(Gravity.CENTER_VERTICAL);
+        rWpm.setPadding(0, 10, 0, 10);
+
+        TextView tvWpm = new TextView(context);
+        tvWpm.setText("20 WPM");
+        tvWpm.setTextColor(Color.WHITE);
+        tvWpm.setTextSize(14);
+        tvWpm.setTypeface(null, Typeface.BOLD);
+        tvWpm.setLayoutParams(new LinearLayout.LayoutParams(180, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        SeekBar sbWpm = new SeekBar(context);
+        sbWpm.setMax(25); // 35 - 10 = 25
+        sbWpm.setProgress(10); // Implicit 20 (20 - 10 = 10)
+        sbWpm.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        sbWpm.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                int wpm = progress + 10;
+                tvWpm.setText(wpm + " WPM");
+                cwKeyer.setWpm(wpm);
+                if (fromUser) salveazaSetareKeyer(PREF_CW_WPM, wpm);
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+
+        rWpm.addView(tvWpm);
+        rWpm.addView(sbWpm);
+        containerCwKeyer.addView(rWpm);
+
+        // Rândul 3: Padelele (Paddles)
+        LinearLayout rPaddles = new LinearLayout(context);
+        rPaddles.setOrientation(LinearLayout.HORIZONTAL);
+        
+        Button paddleLeft = new Button(context);
+        paddleLeft.setText("LEFT");
+        paddleLeft.setBackgroundColor(Color.parseColor("#37474F"));
+        paddleLeft.setTextColor(Color.WHITE);
+        paddleLeft.setLayoutParams(new LinearLayout.LayoutParams(0, 300, 1f));
+        paddleLeft.setOnTouchListener((v, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                paddleLeft.setBackgroundColor(Color.parseColor("#00E676"));
+                cwKeyer.setLeftPaddle(true);
+                return true;
+            } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                paddleLeft.setBackgroundColor(Color.parseColor("#37474F"));
+                cwKeyer.setLeftPaddle(false);
+                return true;
+            }
+            return false;
+        });
+
+        Button paddleRight = new Button(context);
+        paddleRight.setText("RIGHT");
+        paddleRight.setBackgroundColor(Color.parseColor("#37474F"));
+        paddleRight.setTextColor(Color.WHITE);
+        paddleRight.setLayoutParams(new LinearLayout.LayoutParams(0, 300, 1f));
+        paddleRight.setOnTouchListener((v, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                paddleRight.setBackgroundColor(Color.parseColor("#00E676"));
+                cwKeyer.setRightPaddle(true);
+                return true;
+            } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                paddleRight.setBackgroundColor(Color.parseColor("#37474F"));
+                cwKeyer.setRightPaddle(false);
+                return true;
+            }
+            return false;
+        });
+
+        rPaddles.addView(paddleLeft);
+        View pSpacer = new View(context);
+        pSpacer.setLayoutParams(new LinearLayout.LayoutParams(10, 1));
+        rPaddles.addView(pSpacer);
+        rPaddles.addView(paddleRight);
+        containerCwKeyer.addView(rPaddles);
+
+        viewPrincipal.addView(containerCwKeyer);
+    }
+
+    private View creeazaSpatiuOrizontal() {
+        View v = new View(context);
+        v.setLayoutParams(new LinearLayout.LayoutParams(20, 1));
+        return v;
     }
 
     private LinearLayout creeazaRandButoane() {
@@ -308,16 +503,78 @@ public class EcranComenzi {
         else if (codMod.startsWith("06") || codMod.startsWith("09") || codMod.startsWith("0C")) btnRTTYL.setBackgroundColor(Color.parseColor("#E65100"));
 
         containerButoaneCwExtra.setVisibility(esteCW ? View.VISIBLE : View.GONE);
+        if (containerCwKeyer != null) {
+            containerCwKeyer.setVisibility(esteCW ? View.VISIBLE : View.GONE);
+        }
     }
 
     /**
      * Actualizează starea vizuală a butonului de conectare în funcție de link-ul fizic USB.
      */
+    private void salveazaSetareKeyer(String cheie, Object valoare) {
+        android.content.SharedPreferences.Editor editor = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE).edit();
+        if (valoare instanceof Integer) editor.putInt(cheie, (Integer) valoare);
+        else if (valoare instanceof Boolean) editor.putBoolean(cheie, (Boolean) valoare);
+        editor.apply();
+    }
+
+    private void incarcaSetariKeyer() {
+        isInitialLoading = true;
+        android.content.SharedPreferences prefs = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
+        
+        int wpm = prefs.getInt(PREF_CW_WPM, 20);
+        boolean rev = prefs.getBoolean(PREF_CW_REV, false);
+        boolean str = prefs.getBoolean(PREF_CW_STR, false);
+        boolean iambicB = prefs.getBoolean(PREF_CW_IAMBIC_B, true);
+        boolean rts = prefs.getBoolean(PREF_CW_RTS, true);
+
+        cwKeyer.setWpm(wpm);
+        cwKeyer.setReversed(rev);
+        cwKeyer.setStraightKeyMode(str);
+        cwKeyer.setIambicModeB(iambicB);
+        cwKeyer.setUseRts(rts);
+
+        // Actualizăm interfața grafică pentru a reflecta setările încărcate
+        if (containerCwKeyer != null) {
+            for (int i = 0; i < containerCwKeyer.getChildCount(); i++) {
+                View v = containerCwKeyer.getChildAt(i);
+                if (v instanceof LinearLayout) {
+                    LinearLayout row = (LinearLayout) v;
+                    for (int j = 0; j < row.getChildCount(); j++) {
+                        View child = row.getChildAt(j);
+                        if (child instanceof CheckBox) {
+                            CheckBox cb = (CheckBox) child;
+                            if (cb.getText().equals("REV")) cb.setChecked(rev);
+                            else if (cb.getText().equals("STR")) cb.setChecked(str);
+                        } else if (child instanceof Button) {
+                            Button b = (Button) child;
+                            if (b.getText().toString().contains("IAMBIC")) {
+                                b.setText(iambicB ? "IAMBIC B" : "IAMBIC A");
+                            } else if (b.getText().toString().startsWith("USE:")) {
+                                b.setText(rts ? "USE: RTS" : "USE: DTR");
+                            }
+                        } else if (child instanceof SeekBar) {
+                            ((SeekBar) child).setProgress(wpm - 10);
+                        }
+                    }
+                }
+            }
+        }
+        isInitialLoading = false;
+    }
+
     public void setStareConexiune(boolean connected) {
         if (!connected) {
             btnConnect.setText("CONNECT RADIO STATION");
             btnConnect.setBackgroundColor(Color.parseColor("#007ACC"));
             containerButoaneCwExtra.setVisibility(View.GONE);
+            if (containerCwKeyer != null) containerCwKeyer.setVisibility(View.GONE);
+        }
+    }
+
+    public void eliberareResurse() {
+        if (cwKeyer != null) {
+            cwKeyer.shutdown();
         }
     }
 } // Ultima acoladă din fișier, cea care închide corect toată clasa EcranComenzi!
