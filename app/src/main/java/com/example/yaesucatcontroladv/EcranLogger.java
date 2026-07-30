@@ -418,7 +418,7 @@ public class EcranLogger {
         }
         SharedPreferences prefs = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
         String user = prefs.getString(EcranSetariProprii.PREF_QRZ_USER, "");
-        String pass = prefs.getString(EcranSetariProprii.PREF_QRZ_PASS, "");
+        String pass = SecurePrefsHelper.getPassword(context, EcranSetariProprii.PREF_QRZ_PASS, "");
         if (user.isEmpty() || pass.isEmpty()) {
             Toast.makeText(context, "Configure QRZ.com username/password in the MY SETTINGS tab.", Toast.LENGTH_LONG).show();
             return;
@@ -429,7 +429,7 @@ public class EcranLogger {
     private void executaCautareQrz(String call) {
         SharedPreferences prefs = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
         String userQrz = prefs.getString(EcranSetariProprii.PREF_QRZ_USER, "");
-        String passQrz = prefs.getString(EcranSetariProprii.PREF_QRZ_PASS, "");
+        String passQrz = SecurePrefsHelper.getPassword(context, EcranSetariProprii.PREF_QRZ_PASS, "");
         if (userQrz.isEmpty() || passQrz.isEmpty()) {
             Toast.makeText(context, "Configure QRZ.com in MY SETTINGS", Toast.LENGTH_SHORT).show();
             return;
@@ -468,7 +468,7 @@ public class EcranLogger {
     private void cautaPeHamQthPentruGrid(String call) {
         SharedPreferences prefs = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
         String userHam = prefs.getString(EcranSetariProprii.PREF_HAMQTH_USER, "");
-        String passHam = prefs.getString(EcranSetariProprii.PREF_HAMQTH_PASS, "");
+        String passHam = SecurePrefsHelper.getPassword(context, EcranSetariProprii.PREF_HAMQTH_PASS, "");
         if (userHam.isEmpty() || passHam.isEmpty()) {
             Toast.makeText(context, "Configure HamQTH.com in MY SETTINGS for grid!", Toast.LENGTH_LONG).show();
             return;

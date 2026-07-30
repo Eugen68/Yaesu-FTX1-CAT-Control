@@ -15,6 +15,12 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
+
+import org.json.JSONObject;
+
+import java.io.InputStream;
+
 public class EcranSetariProprii {
     // Chei SharedPreferences
     public static final String PREFS_NAME = "yaesu_prefs";
@@ -53,7 +59,33 @@ public class EcranSetariProprii {
     public EcranSetariProprii(Context context) {
         this.context = context;
         construiesteInterfata();
+        migreazaParoleLaSecureStorage();
         incarcaSetarile();
+    }
+
+    /**
+     * Migrează parolele din SharedPreferences în clar către EncryptedSharedPreferences (Secure Storage).
+     * După migrare, valorile în clar sunt șterse.
+     */
+    private void migreazaParoleLaSecureStorage() {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        
+        String[] keysToMigrate = {PREF_QRZ_PASS, PREF_HAMQTH_PASS, PREF_CLUSTER_PASS};
+        boolean needsApply = false;
+        SharedPreferences.Editor editor = prefs.edit();
+
+        for (String key : keysToMigrate) {
+            String plainTextPass = prefs.getString(key, null);
+            if (plainTextPass != null && !plainTextPass.isEmpty()) {
+                SecurePrefsHelper.savePassword(context, key, plainTextPass);
+                editor.remove(key);
+                needsApply = true;
+            }
+        }
+        
+        if (needsApply) {
+            editor.apply();
+        }
     }
 
     public ScrollView getView() {
@@ -340,13 +372,16 @@ public class EcranSetariProprii {
         editor.putString(PREF_MY_ITU_ZONE, etMyItuZone.getText().toString().trim());
         editor.putString(PREF_MY_CQ_ZONE, etMyCqZone.getText().toString().trim());
         editor.putString(PREF_QRZ_USER, etQrzUser.getText().toString().trim());
-        editor.putString(PREF_QRZ_PASS, etQrzPass.getText().toString().trim());
+        
+        // Cifrare parole
+        SecurePrefsHelper.savePassword(context, PREF_QRZ_PASS, etQrzPass.getText().toString().trim());
+        SecurePrefsHelper.savePassword(context, PREF_HAMQTH_PASS, etHamQthPass.getText().toString().trim());
+        SecurePrefsHelper.savePassword(context, PREF_CLUSTER_PASS, etClusterPass.getText().toString().trim());
+
         editor.putString(PREF_HAMQTH_USER, etHamQthUser.getText().toString().trim());
-        editor.putString(PREF_HAMQTH_PASS, etHamQthPass.getText().toString().trim());
         editor.putString(PREF_CLUSTER_SERVER, etClusterServer.getText().toString().trim());
         editor.putString(PREF_CLUSTER_PORT, etClusterPort.getText().toString().trim());
         editor.putString(PREF_CLUSTER_USER, etClusterUser.getText().toString().trim());
-        editor.putString(PREF_CLUSTER_PASS, etClusterPass.getText().toString().trim());
         editor.apply();
         QrzLookupHelper.resetSesiune();
         HamQthLookupHelper.resetSesiune();
@@ -361,13 +396,16 @@ public class EcranSetariProprii {
         etMyItuZone.setText(prefs.getString(PREF_MY_ITU_ZONE, ""));
         etMyCqZone.setText(prefs.getString(PREF_MY_CQ_ZONE, ""));
         etQrzUser.setText(prefs.getString(PREF_QRZ_USER, ""));
-        etQrzPass.setText(prefs.getString(PREF_QRZ_PASS, ""));
+        
+        // Citire din Secure Storage
+        etQrzPass.setText(SecurePrefsHelper.getPassword(context, PREF_QRZ_PASS, ""));
+        etHamQthPass.setText(SecurePrefsHelper.getPassword(context, PREF_HAMQTH_PASS, ""));
+        etClusterPass.setText(SecurePrefsHelper.getPassword(context, PREF_CLUSTER_PASS, ""));
+
         etHamQthUser.setText(prefs.getString(PREF_HAMQTH_USER, ""));
-        etHamQthPass.setText(prefs.getString(PREF_HAMQTH_PASS, ""));
         etClusterServer.setText(prefs.getString(PREF_CLUSTER_SERVER, "dx.w1nr.net"));
         etClusterPort.setText(prefs.getString(PREF_CLUSTER_PORT, "7300"));
         etClusterUser.setText(prefs.getString(PREF_CLUSTER_USER, ""));
-        etClusterPass.setText(prefs.getString(PREF_CLUSTER_PASS, ""));
     }
 
     // ============================================================
@@ -464,9 +502,26 @@ public class EcranSetariProprii {
     // EXPORT / IMPORT BACKUP (JSON)
     // ============================================================
     private void executaExportBackup() {
+        final EditText etPass = new EditText(context);
+        etPass.setHint("Backup Password (Optional)");
+        etPass.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        
+        new AlertDialog.Builder(context)
+                .setTitle("Secure Backup")
+                .setMessage("Choose a password to protect your credentials in the backup file. If left empty, passwords will NOT be included.")
+                .setView(etPass)
+                .setPositiveButton("EXPORT", (dialog, which) -> {
+                    String password = etPass.getText().toString().trim();
+                    iniciaExport(password);
+                })
+                .setNegativeButton("CANCEL", null)
+                .show();
+    }
+
+    private void iniciaExport(String backupPassword) {
         new Thread(() -> {
             try {
-                String nume = BackupHelper.exporta(context, new QsoDbHelper(context));
+                String nume = BackupHelper.exporta(context, new QsoDbHelper(context), backupPassword);
                 ((Activity) context).runOnUiThread(() ->
                         Toast.makeText(context, "Backup exported:\n" + nume, Toast.LENGTH_LONG).show());
             } catch (Exception e) {
@@ -515,21 +570,20 @@ public class EcranSetariProprii {
         if (uri == null) return;
 
         if (requestCode == REQUEST_IMPORT_BACKUP) {
-            new Thread(() -> {
-                try {
-                    BackupHelper.RezultatImport rez = BackupHelper.importa(context, new QsoDbHelper(context), uri);
-                    ((Activity) context).runOnUiThread(() -> {
-                        String msg = String.format("Import completed:\n%d settings\n%d macros\n%d QSOs",
-                                rez.setariRestaurate ? 1 : 0, rez.macroRestaurate, rez.qsoImportate);
-                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show();
-                        if (rez.setariRestaurate) incarcaSetarile();
-                    });
-                } catch (Exception e) {
-                    ((Activity) context).runOnUiThread(() ->
-                            Toast.makeText(context, "Error importing backup:\n" + e.getMessage(), Toast.LENGTH_LONG).show());
+            // Verificăm dacă fișierul este cifrat citind doar o parte din el sau tot header-ul
+            try {
+                String continut = citesteContinutUri(uri);
+                JSONObject radacina = new JSONObject(continut);
+                boolean isCifrat = radacina.optBoolean("cifrat", false);
+                
+                if (isCifrat) {
+                    solicitaParolaImport(uri);
+                } else {
+                    iniciaImport(uri, null);
                 }
-            }).start();
-
+            } catch (Exception e) {
+                Toast.makeText(context, "Error parsing backup file", Toast.LENGTH_SHORT).show();
+            }
         } else if (requestCode == REQUEST_IMPORT_ADIF) {
             new Thread(() -> {
                 try {
@@ -551,5 +605,52 @@ public class EcranSetariProprii {
                 }
             }).start();
         }
+    }
+
+    private void solicitaParolaImport(Uri uri) {
+        final EditText etPass = new EditText(context);
+        etPass.setHint("Backup Password");
+        etPass.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+
+        new AlertDialog.Builder(context)
+                .setTitle("Encrypted Backup Detected")
+                .setMessage("Please enter the password used to protect this backup file.")
+                .setView(etPass)
+                .setPositiveButton("RESTORE", (dialog, which) -> {
+                    String password = etPass.getText().toString().trim();
+                    iniciaImport(uri, password);
+                })
+                .setNegativeButton("CANCEL", null)
+                .show();
+    }
+
+    private void iniciaImport(Uri uri, String password) {
+        new Thread(() -> {
+            try {
+                BackupHelper.RezultatImport rez = BackupHelper.importa(context, new QsoDbHelper(context), uri, password);
+                ((Activity) context).runOnUiThread(() -> {
+                    String msg = String.format("Import completed:\n%d settings\n%d macros\n%d QSOs",
+                            rez.setariRestaurate ? 1 : 0, rez.macroRestaurate, rez.qsoImportate);
+                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show();
+                    if (rez.setariRestaurate) incarcaSetarile();
+                });
+            } catch (Exception e) {
+                ((Activity) context).runOnUiThread(() ->
+                        Toast.makeText(context, "Error importing backup:\n" + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        }).start();
+    }
+
+    private String citesteContinutUri(Uri uri) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        try (InputStream in = context.getContentResolver().openInputStream(uri)) {
+            if (in == null) return "";
+            byte[] buffer = new byte[4096];
+            int n;
+            while ((n = in.read(buffer)) != -1) {
+                sb.append(new String(buffer, 0, n, java.nio.charset.StandardCharsets.UTF_8));
+            }
+        }
+        return sb.toString();
     }
 }

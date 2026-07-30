@@ -72,10 +72,10 @@ public class ClusterManager {
             serverPort = 7300;
         }
         username = prefs.getString(EcranSetariProprii.PREF_CLUSTER_USER, "");
+        password = SecurePrefsHelper.getPassword(context, EcranSetariProprii.PREF_CLUSTER_PASS, "");
         if (username.isEmpty()) {
             username = prefs.getString(EcranSetariProprii.PREF_MY_CALL, "");
         }
-        password = prefs.getString(EcranSetariProprii.PREF_CLUSTER_PASS, "");
     }
 
     /**

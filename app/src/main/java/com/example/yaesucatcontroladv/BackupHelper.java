@@ -48,16 +48,31 @@ public class BackupHelper {
         public int macroRestaurate = 0;
     }
 
-    public static String exporta(Context context, QsoDbHelper dbHelper) throws Exception {
+    public static String exporta(Context context, QsoDbHelper dbHelper, String backupPassword) throws Exception {
         JSONObject radacina = new JSONObject();
-        radacina.put("versiune_backup", 4);
+        radacina.put("versiune_backup", 5); // Incrementat versiunea pentru suport criptare
 
         SharedPreferences prefs = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
         JSONObject setari = new JSONObject();
         for (String cheie : PREF_KEYS) {
-            setari.put(cheie, prefs.getString(cheie, ""));
+            String valoare = "";
+            // Verificăm dacă este o cheie de parolă
+            if (cheie.endsWith("_pass")) {
+                valoare = SecurePrefsHelper.getPassword(context, cheie, "");
+                if (!valoare.isEmpty() && backupPassword != null && !backupPassword.isEmpty()) {
+                    // Cifrăm parola pentru backup
+                    valoare = BackupCryptoHelper.encrypt(valoare, backupPassword);
+                } else if (backupPassword == null || backupPassword.isEmpty()) {
+                    // Dacă nu avem parolă de backup, nu exportăm parolele
+                    valoare = "";
+                }
+            } else {
+                valoare = prefs.getString(cheie, "");
+            }
+            setari.put(cheie, valoare);
         }
         radacina.put("setari", setari);
+        radacina.put("cifrat", backupPassword != null && !backupPassword.isEmpty());
 
         // Backup macro-uri RTTY
         SharedPreferences prefsMacros = context.getSharedPreferences("RTTY_MACROS", Context.MODE_PRIVATE);
@@ -137,7 +152,7 @@ public class BackupHelper {
         }
     }
 
-    public static RezultatImport importa(Context context, QsoDbHelper dbHelper, Uri uri) throws Exception {
+    public static RezultatImport importa(Context context, QsoDbHelper dbHelper, Uri uri, String backupPassword) throws Exception {
         StringBuilder sb = new StringBuilder();
         try (InputStream in = context.getContentResolver().openInputStream(uri)) {
             if (in == null) throw new Exception("Could not read the selected file.");
@@ -154,8 +169,32 @@ public class BackupHelper {
             JSONObject setari = radacina.getJSONObject("setari");
             SharedPreferences.Editor editor = context
                     .getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE).edit();
+            
+            boolean fisierCifrat = radacina.optBoolean("cifrat", false);
+
             for (String cheie : PREF_KEYS) {
-                if (setari.has(cheie)) editor.putString(cheie, setari.getString(cheie));
+                if (setari.has(cheie)) {
+                    String valoare = setari.getString(cheie);
+                    
+                    if (cheie.endsWith("_pass")) {
+                        if (fisierCifrat && backupPassword != null && !backupPassword.isEmpty() && !valoare.isEmpty()) {
+                            try {
+                                String parolaDecriptata = BackupCryptoHelper.decrypt(valoare, backupPassword);
+                                SecurePrefsHelper.savePassword(context, cheie, parolaDecriptata);
+                            } catch (Exception e) {
+                                // Parolă de backup greșită sau date corupte
+                                throw new Exception("Could not decrypt passwords. Check the backup password.");
+                            }
+                        } else if (!valoare.isEmpty() && !fisierCifrat) {
+                            // Backup vechi în clar - salvăm securizat
+                            SecurePrefsHelper.savePassword(context, cheie, valoare);
+                        }
+                        // Nu punem parolele în SharedPreferences standard
+                        editor.remove(cheie);
+                    } else {
+                        editor.putString(cheie, valoare);
+                    }
+                }
             }
             editor.apply();
             rezultat.setariRestaurate = true;
