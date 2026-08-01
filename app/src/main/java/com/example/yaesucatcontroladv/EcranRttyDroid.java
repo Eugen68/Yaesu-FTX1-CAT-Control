@@ -106,6 +106,7 @@ public class EcranRttyDroid {
     // ca sa poata fi folosita si de slider-ul "Latime Filtru" pentru a lega podeaua
     // minima de banda de rata reala de simbol (evitarea ISI la benzi prea inguste).
     private static final double BAUD_RTTY = 45.45;
+    private static final long BIT_DURATION_NANOS = (long) ((1.0 / BAUD_RTTY) * 1_000_000_000L); // ~22.002.200 ns
     private static final double RCHEB_MIN = 0.985; // capatul larg al slider-ului (~115 Hz)
 
     // Matched Filter & SNR
@@ -1576,6 +1577,29 @@ public class EcranRttyDroid {
         }
     }
 
+    /**
+     * Așteaptă până la momentul targetNanos folosind un sleep hibrid
+     * (milisecunde + busy-wait) pentru precizie maximă.
+     */
+    private void waitPreciseNanos(long targetNanos) {
+        long delta;
+        while ((delta = targetNanos - System.nanoTime()) > 0) {
+            if (delta > 3_000_000L) { // > 3ms
+                try {
+                    // Dormim dar lăsăm o rezervă de 2ms pentru a nu depăși momentul critic
+                    Thread.sleep((delta - 2_000_000L) / 1_000_000L);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            } else if (delta > 500_000L) { // Între 3ms și 0.5ms
+                // Cedăm controlul altor thread-uri pentru a evita Thermal Throttling (100% CPU)
+                Thread.yield();
+            }
+            // Sub 0.5ms busy-wait pur pentru precizie maximă
+        }
+    }
+
     private void comutaStarePttManual() {
         if (radioManager == null || radioManager.getDataPort() == null) return;
         try {
@@ -1653,68 +1677,102 @@ public class EcranRttyDroid {
      * fiecare mesaj asteapta terminarea celui anterior, niciodata transmisii concurente
      * pe acelasi port serial.
      */
+    /**
+     * Motorul principal de transmisie bazat pe "Continuous Clocking" (Metronom).
+     * Gestionează coada de mesaje, Live TX și Diddles cu sincronizare la nivel de nanosecundă.
+     */
     private void porneteWorkerTxRttyDacaNuRuleaza() {
-        if (!workerTxRttyActiv.compareAndSet(false, true)) return; // deja ruleaza un worker
+        if (!workerTxRttyActiv.compareAndSet(false, true)) return;
+        
         threadWorkerTxRtty = new Thread(() -> {
+            long anchorTimeNanos = System.nanoTime();
+            String textCurent = "";
+            int indexCaracter = 0;
             boolean inBurst = false;
+
             try {
                 while (!opreteTxRttySolicitata) {
-                    String mesaj = coadaMesajeTxRtty.poll();
-                    if (mesaj != null) {
-                        // Început de rafală (burst) de text - trimitem pre-ambulă DOAR o dată
-                        if (!inBurst) {
-                            try {
+                    // PROTECȚIE ANTI-LAG: Dacă ancora a rămas prea mult în urmă (> 15ms), 
+                    // resincronizăm cu timpul real pentru a evita rafală de biți "fast-forward".
+                    if (System.nanoTime() - anchorTimeNanos > 15_000_000L) {
+                        anchorTimeNanos = System.nanoTime();
+                        //android.util.Log.d("RTTY_TX", "Drift resync applied");
+                    }
+
+                    // 1. GESTIONARE SURSĂ DATE
+                    if (indexCaracter >= textCurent.length()) {
+                        String urmatorulMesaj = coadaMesajeTxRtty.poll();
+                        if (urmatorulMesaj != null) {
+                            textCurent = urmatorulMesaj;
+                            indexCaracter = 0;
+                            // S-a adăugat text -> marcăm începutul unei rafale (burst)
+                            if (!inBurst) {
                                 setHardwarePtt(true);
                                 isTransmittingRtty = true;
-                                
-                                long dur = 22002200L;
-                                long next = System.nanoTime();
-                                if (folosesteDiddle) {
-                                    next = trimiteOctetBaudotHardware(0x1F, next, dur);
-                                    next = trimiteOctetBaudotHardware(0x1F, next, dur);
-                                } else {
-                                    Thread.sleep(250);
-                                }
-                            } catch (Exception e) {
-                                android.util.Log.e("RTTY-TX", "Err preamble", e);
+                                actualizeazaUiTxStare(true);
+                                // Pre-ambulă: 2 Diddles pentru sincronizare
+                                anchorTimeNanos = trimiteCodBaudotMetronom(0x1F, anchorTimeNanos);
+                                anchorTimeNanos = trimiteCodBaudotMetronom(0x1F, anchorTimeNanos);
+                                inBurst = true;
                             }
-                            inBurst = true;
-                            actualizeazaUiTxStare(true);
+                        } else {
+                            // Coada e goală. Verificăm dacă păstrăm emisia (PTT manual / Diddle)
+                            textCurent = "";
+                            if (!isPttManualOn) break; // Ieșim din worker dacă nu mai e nimic de trimis
+                            inBurst = false; // Revenim la starea idle (Diddle)
                         }
-                        transmiteUnMesajRttyBaudotBlocant(mesaj);
-                        actualizeazaLabelSend();
-
-                        // DACĂ tocmai am trimis un bloc (Macro sau buton SEND), adăugăm un Diddle de final și o pauză scurtă.
-                        // Pentru litere individuale (tastare Live), nu adăugăm nicio pauză pentru a păstra fluiditatea.
-                        if (mesaj.length() > 1) {
-                            try {
-                                long dur = 22002200L;
-                                long next = System.nanoTime();
-                                trimiteOctetBaudotHardware(0x1F, next, dur); // Sync/Diddle final
-                                Thread.sleep(300); 
-                            } catch (Exception ignored) {}
-                        }
-                    } else if (isPttManualOn && folosesteDiddle) {
-                        // Mod Diddle: trimitem Letters Shift (0x1F) continuu în repaus
-                        isTransmittingRtty = true;
-                        try {
-                            setHardwarePtt(true);
-                            actualizeazaUiTxStare(true);
-                            long dur = 22002200L; // ~22ms pt 45.45 baud
-                            long next = System.nanoTime();
-                            trimiteOctetBaudotHardware(0x1F, next, dur);
-                            inBurst = false; // Revenim la starea idle (nu mai suntem în burst de text)
-                        } catch (Exception e) {
-                            android.util.Log.e("RTTY-TX", "Err diddle", e);
-                            break;
-                        }
-                    } else {
-                        // Nimic de trimis și PTT manual oprit -> ieșim din thread
-                        break;
                     }
+
+                    // 2. DETERMINARE CARACTER DE TRIMIS
+                    int codBaudot;
+                    boolean esteDiddle = textCurent.isEmpty();
+                    
+                    if (esteDiddle) {
+                        if (!folosesteDiddle) {
+                            // Dacă Diddle e oprit, stăm în Mark (Idle) fără bit-banging activ
+                            setHardwarePtt(true);
+                            setHardwareFsk(!regimReverseSoftware); // Mark tone (Idle)
+                            Thread.sleep(50); // Mică pauză de relaxare CPU
+                            anchorTimeNanos = System.nanoTime(); // Resetăm ancora după pauză
+                            continue;
+                        }
+                        codBaudot = 0x1F; // Letters Shift (Diddle standard)
+                    } else {
+                        // Avem text real
+                        char c = Character.toUpperCase(textCurent.charAt(indexCaracter));
+                        indexCaracter++;
+
+                        // Log în Terminal
+                        if (indexCaracter == 1) {
+                             logTxTerminal(textCurent);
+                        }
+                        
+                        // Encodăm caracterul (poate genera Shift + Cod)
+                        int[] coduri = txBaudotCodec.encode(c);
+                        for (int cod : coduri) {
+                            anchorTimeNanos = trimiteCodBaudotMetronom(cod, anchorTimeNanos);
+                        }
+
+                        // DACĂ am terminat un bloc (Macro/SEND), adăugăm pauză de demarcație
+                        if (indexCaracter >= textCurent.length() && textCurent.length() > 1) {
+                            actualizeazaLabelSend();
+                            // Sync final + pauză 300ms (aprox 14 biți)
+                            anchorTimeNanos = trimiteCodBaudotMetronom(0x1F, anchorTimeNanos);
+                            long targetDelay = anchorTimeNanos + 300_000_000L;
+                            while (System.nanoTime() < targetDelay && !opreteTxRttySolicitata) {
+                                if (targetDelay - System.nanoTime() > 5_000_000L) Thread.sleep(5);
+                            }
+                            anchorTimeNanos = System.nanoTime();
+                        }
+                        continue; 
+                    }
+
+                    // 3. TRANSMISIE CARACTER (Diddle)
+                    anchorTimeNanos = trimiteCodBaudotMetronom(codBaudot, anchorTimeNanos);
                 }
+            } catch (Exception e) {
+                android.util.Log.e("RTTY_METRONOM", "Eroare worker", e);
             } finally {
-                // CURĂȚARE FINALĂ: Oprim emisia doar dacă PTT-ul manual nu este pornit
                 if (!isPttManualOn) {
                     isTransmittingRtty = false;
                     setHardwarePtt(false);
@@ -1724,11 +1782,11 @@ public class EcranRttyDroid {
                 workerTxRttyActiv.set(false);
                 actualizeazaLabelSend();
             }
-        }, "RTTY-TX-Worker");
+        }, "RTTY-Metronom-Worker");
         threadWorkerTxRtty.start();
     }
 
-    private void transmiteUnMesajRttyBaudotBlocant(final String text) {
+    private void logTxTerminal(String text) {
         Activity activity = (Activity) context;
         if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
         activity.runOnUiThread(() -> {
@@ -1740,24 +1798,35 @@ public class EcranRttyDroid {
                 if (svRttyScroll != null) svRttyScroll.post(() -> svRttyScroll.fullScroll(View.FOCUS_DOWN));
             }
         });
+    }
 
-        try {
-            isTransmittingRtty = true;
-            txBaudotCodec.resetShift();
+    /**
+     * Trimite un cod Baudot de 5 biți cu timing precis 1-5-1.5 (Start-Data-Stop).
+     * @return Momentul de timp (nanos) la care s-a încheiat bitul de stop.
+     */
+    private long trimiteCodBaudotMetronom(int codBaudot, long startAnchorNanos) {
+        boolean reverse = regimReverseSoftware;
+        long timeNext = startAnchorNanos;
 
-            long dur = 22002200L;
-            long next = System.nanoTime();
-            for (int i = 0; i < text.length() && !opreteTxRttySolicitata; i++) {
-                char c = Character.toUpperCase(text.charAt(i));
-                for (int codBaudot : txBaudotCodec.encode(c)) {
-                    next = trimiteOctetBaudotHardware(codBaudot, next, dur);
-                }
-            }
-            // Mică pauză între mesaje din coadă pentru a asigura separarea biților de stop
-            Thread.sleep(50);
-        } catch (Exception e) {
-            android.util.Log.e("RTTY_TX", "Eroare loop FSK", e);
+        // 1. START BIT (Space)
+        setHardwareFsk(reverse);
+        timeNext += BIT_DURATION_NANOS;
+        waitPreciseNanos(timeNext);
+
+        // 2. DATA BITS (5 biți, LSB first)
+        for (int i = 0; i < 5; i++) {
+            boolean bitVal = ((codBaudot >> i) & 1) == 1;
+            setHardwareFsk(bitVal ? !reverse : reverse);
+            timeNext += BIT_DURATION_NANOS;
+            waitPreciseNanos(timeNext);
         }
+
+        // 3. STOP BIT (1.5 biți Mark)
+        setHardwareFsk(!reverse);
+        timeNext += (long) (BIT_DURATION_NANOS * 1.5);
+        waitPreciseNanos(timeNext);
+
+        return timeNext;
     }
 
     /**
@@ -1773,25 +1842,6 @@ public class EcranRttyDroid {
                 btnRttyPttToggle.setText(isTx ? "TX" : "PTT");
             }
         });
-    }
-
-    private long trimiteOctetBaudotHardware(int codBaudot, long n, long d) {
-        boolean reverse = regimReverseSoftware;
-        setHardwareFsk(reverse);
-        n += d;
-        while (System.nanoTime() < n);
-
-        for (int b = 0; b < 5; b++) {
-            boolean bitVal = ((codBaudot >> b) & 1) == 1;
-            setHardwareFsk(bitVal ? !reverse : reverse);
-            n += d;
-            while (System.nanoTime() < n);
-        }
-
-        setHardwareFsk(!reverse);
-        n += (long) (d * 1.5);
-        while (System.nanoTime() < n);
-        return n;
     }
 
     // ============================================================
