@@ -12,10 +12,14 @@ import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Editable;
+import android.text.InputType;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -29,7 +33,7 @@ import androidx.core.content.ContextCompat;
 public class EcranRttyDroid {
     private final Context context;
     private final RadioManager radioManager;
-    private ScrollView viewPrincipal;
+    private LinearLayout viewPrincipal;
     public static String callsignBuffer = "";
 
     // Elemente UI
@@ -64,6 +68,7 @@ public class EcranRttyDroid {
     // Coeficienti
     private double frecventaTunedBaza = 2125.0;
     private double qMarkA, qSpaceA;
+    private double afcRotRe = 1.0, afcRotIm = 0.0; // increment de rotatie per esantion: cos(w), sin(w)
     private double sampleRateFiltre = 48000.0;
     private double rCheb = 0.992;
     private volatile double pragSensibilitate = 0.05;
@@ -78,6 +83,24 @@ public class EcranRttyDroid {
     private LinearLayout rAndSliderNoiseBlanker;
     private SeekBar sbNoiseBlanker;
     private TextView tvNoiseBlankerValoare;
+
+    // DNR (Digital Noise Reduction) - filtru bandpass biquad
+    private volatile boolean folosesteDnr = false;
+    private volatile double latimeDnrHz = 600.0;
+    private double dnrB0 = 1.0, dnrB1 = 0.0, dnrB2 = 0.0;
+    private double dnrA1 = 0.0, dnrA2 = 0.0;
+    private Button btnDnr;
+    private LinearLayout rAndSliderDnr;
+    private SeekBar sbDnrLatime;
+    private TextView tvDnrValoare;
+
+    // SNR Gating - îngheață decizia de bit la energie insuficientă
+    private volatile boolean folosesteSnrGating = false;
+    private volatile double snrGatingK = 1.5;
+    private Button btnSnrGate;
+    private LinearLayout rAndSliderSnrGate;
+    private SeekBar sbSnrGateK;
+    private TextView tvSnrGateValoare;
 
     // OPTIMIZARE: constanta de clasa (nu doar variabila locala in threadul de decodare),
     // ca sa poata fi folosita si de slider-ul "Latime Filtru" pentru a lega podeaua
@@ -109,8 +132,37 @@ public class EcranRttyDroid {
     private final short[] vectorIstoricPeak = new short[512];
     private volatile boolean solicitaResetFiltre = false;
 
+    // Chei SharedPreferences pentru RTTY
+    private static final String PREF_RTTY_DNR_ON = "rtty_dnr_on";
+    private static final String PREF_RTTY_DNR_BW = "rtty_dnr_bw";
+    private static final String PREF_RTTY_SNRG_ON = "rtty_snrg_on";
+    private static final String PREF_RTTY_SNRG_K = "rtty_snrg_k";
+    private static final String PREF_RTTY_USE_RTS_PTT = "rtty_use_rts_ptt";
+
+    private boolean isInitialLoading = false;
+
     // Emisie
     private boolean isTransmittingRtty = false;
+    private boolean isPttManualOn = false; // Flag separat pentru PTT manual (buton)
+    private int lastLiveTxLength = 0;      // Urmărire caractere deja trimise "live"
+    private volatile boolean folosesteDiddle = true; // Emisie caractere de umplutură în idle
+    private volatile boolean folosesteRtsPtPtt = false; // False = DTR is PTT, RTS is FSK. True = RTS is PTT, DTR is FSK.
+    private CheckBox cbDiddle;
+    private Button btnToggleLine;
+    private LinearLayout rAndSetariAscunsePtt;
+
+    // Gestionare vizibilitate setări PTT (Long Press / Auto-hide)
+    private final Handler handlerPttSettings = new Handler(Looper.getMainLooper());
+    private final Runnable runnableAscundeSetariPtt = () -> {
+        if (rAndSetariAscunsePtt != null) rAndSetariAscunsePtt.setVisibility(View.GONE);
+    };
+
+    private void reseteazaTemporizatorSetari(int ms) {
+        handlerPttSettings.removeCallbacks(runnableAscundeSetariPtt);
+        if (rAndSetariAscunsePtt != null && rAndSetariAscunsePtt.getVisibility() == View.VISIBLE) {
+            handlerPttSettings.postDelayed(runnableAscundeSetariPtt, ms);
+        }
+    }
 
     // FUNCTIONALITATE NOUA: coada de mesaje pentru transmisie RTTY. Un singur thread
     // dedicat de transmisie (workerTxActiv) proceseaza mesajele STRICT secvential - daca
@@ -140,6 +192,7 @@ public class EcranRttyDroid {
         this.radioManager = radioManager;
         construiesteInterfata();
         callsignDetector = new CallsignDetector(context, tvRttyTerminal, etRttyInputLive, svRttyScroll);
+        incarcaSetariRtty();
     }
 
     private void initMatchedFilterTemplates(int sampleRate, double baud) {
@@ -208,7 +261,31 @@ public class EcranRttyDroid {
         mfSpacePowNIm = Math.sin(wSpaceN);
     }
 
+    /**
+     * Calculează coeficienții pentru filtrul bandpass biquad DNR (RBJ cookbook).
+     */
+    private void calculeazaCoeficientiDnr(double sampleRate) {
+        double shift = regimReverseSoftware ? -170.0 : 170.0;
+        double f0 = frecventaTunedBaza + shift / 2.0; // centrat între Mark și Space
+        double q = f0 / Math.max(latimeDnrHz, 1.0);
+        double w0 = 2.0 * Math.PI * f0 / sampleRate;
+        double alpha = Math.sin(w0) / (2.0 * q);
+        double cosW0 = Math.cos(w0);
+
+        double b0 = alpha, b1 = 0.0, b2 = -alpha;
+        double a0 = 1.0 + alpha, a1 = -2.0 * cosW0, a2 = 1.0 - alpha;
+
+        dnrB0 = b0 / a0; dnrB1 = b1 / a0; dnrB2 = b2 / a0;
+        dnrA1 = a1 / a0; dnrA2 = a2 / a0;
+    }
+
     private void sincronizeazaSetariReceptie() {
+        double wAfc = 2.0 * Math.PI * frecventaTunedBaza / sampleRateFiltre;
+        afcRotRe = Math.cos(wAfc);
+        afcRotIm = Math.sin(wAfc);
+
+        calculeazaCoeficientiDnr(sampleRateFiltre);
+
         qMarkA = 2.0 * Math.cos(2.0 * Math.PI * frecventaTunedBaza / sampleRateFiltre);
         double fSpace = frecventaTunedBaza + (regimReverseSoftware ? -170.0 : 170.0);
         qSpaceA = 2.0 * Math.cos(2.0 * Math.PI * fSpace / sampleRateFiltre);
@@ -230,7 +307,7 @@ public class EcranRttyDroid {
         solicitaResetFiltre = true;
     }
 
-    public ScrollView getView() {
+    public View getView() {
         actualizeazaListaMacro();
         return viewPrincipal;
     }
@@ -274,7 +351,13 @@ public class EcranRttyDroid {
 
                 tvMacro.setOnClickListener(v -> {
                     if (etRttyInputLive != null) {
-                        etRttyInputLive.setText(textFinal);
+                        // REFACTORIZARE: folosim append() in loc de setText() pentru a sustine fluxul Live.
+                        // Daca exista deja text, adaugam un spatiu inainte pentru claritate.
+                        String current = etRttyInputLive.getText().toString();
+                        if (!current.isEmpty() && !current.endsWith(" ")) {
+                            etRttyInputLive.append(" ");
+                        }
+                        etRttyInputLive.append(textFinal);
                         etRttyInputLive.setSelection(etRttyInputLive.getText().length());
                     }
                     tvMacro.setBackgroundColor(Color.parseColor("#33FFFFFF"));
@@ -290,11 +373,22 @@ public class EcranRttyDroid {
     }
 
     private void construiesteInterfata() {
-        viewPrincipal = new ScrollView(context);
+        viewPrincipal = new LinearLayout(context);
+        viewPrincipal.setOrientation(LinearLayout.VERTICAL);
         viewPrincipal.setBackgroundColor(Color.parseColor("#121212"));
-        LinearLayout llRttyMain = new LinearLayout(context);
-        llRttyMain.setOrientation(LinearLayout.VERTICAL);
-        llRttyMain.setPadding(30, 30, 30, 30);
+        viewPrincipal.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
+
+        // ZONA DE SUS - SCROLLABLE (Afișaj și Comenzi decodor)
+        ScrollView svTop = new ScrollView(context);
+        LinearLayout.LayoutParams pSvTop = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
+        svTop.setLayoutParams(pSvTop);
+
+        LinearLayout llTopContent = new LinearLayout(context);
+        llTopContent.setOrientation(LinearLayout.VERTICAL);
+        llTopContent.setPadding(30, 20, 30, 10);
+        svTop.addView(llTopContent);
 
         // HEADER
         tvFrecventaCurenta = new TextView(context);
@@ -305,13 +399,13 @@ public class EcranRttyDroid {
         tvFrecventaCurenta.setTypeface(null, Typeface.BOLD);
         tvFrecventaCurenta.setPadding(4, 0, 0, 4);
         tvFrecventaCurenta.setSingleLine(true);
-        llRttyMain.addView(tvFrecventaCurenta);
+        llTopContent.addView(tvFrecventaCurenta);
 
         // WATERFALL
         waterfall = new Waterfall(context);
         LinearLayout.LayoutParams pWater = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 260);
-        pWater.setMargins(0, 10, 0, 15);
+        pWater.setMargins(0, 5, 0, 10);
         waterfall.setLayoutParams(pWater);
         waterfall.setTunedFrequency((int) frecventaTunedBaza);
         waterfall.setShiftHz(170);
@@ -319,13 +413,13 @@ public class EcranRttyDroid {
             frecventaTunedBaza = frequencyHz;
             sincronizeazaSetariReceptie();
         });
-        llRttyMain.addView(waterfall);
+        llTopContent.addView(waterfall);
 
         // TERMINAL RX
         svRttyScroll = new ScrollView(context);
         LinearLayout.LayoutParams pSv = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 480);
-        pSv.setMargins(0, 0, 0, 20);
+                LinearLayout.LayoutParams.MATCH_PARENT, 420);
+        pSv.setMargins(0, 0, 0, 15);
         svRttyScroll.setLayoutParams(pSv);
         svRttyScroll.setBackgroundColor(Color.BLACK);
         svRttyScroll.setPadding(15, 15, 15, 15);
@@ -334,18 +428,9 @@ public class EcranRttyDroid {
         tvRttyTerminal.setTextColor(Color.parseColor("#00FF00"));
         tvRttyTerminal.setTextSize(14);
         tvRttyTerminal.setTypeface(Typeface.MONOSPACE);
-
-        // ============================================================
-        // CRITIC: Activează răspunsul la click pentru ClickableSpan
-        // ============================================================
         tvRttyTerminal.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
-        tvRttyTerminal.setHighlightColor(Color.TRANSPARENT); // Elimină fundalul gri la apăsare
+        tvRttyTerminal.setHighlightColor(Color.TRANSPARENT);
 
-        // FUNCTIONALITATE NOUA: la orice atingere/derulare manuala a ferestrei de terminal,
-        // oprim auto-scroll-ul (decodarea continua normal in fundal) ca utilizatorul sa
-        // poata citi mesaje mai vechi. Returnam "false" ca sa NU consumam evenimentul -
-        // ScrollView-ul si LinkMovementMethod-ul (pt. click pe indicative) tot functioneaza
-        // normal, doar "observam" interactiunea in plus.
         View.OnTouchListener listenerPauzaAutoScroll = (v, event) -> {
             if (callsignDetector != null) {
                 callsignDetector.inregistreazaInteractiuneManuala();
@@ -356,13 +441,13 @@ public class EcranRttyDroid {
         tvRttyTerminal.setOnTouchListener(listenerPauzaAutoScroll);
 
         svRttyScroll.addView(tvRttyTerminal);
-        llRttyMain.addView(svRttyScroll);
+        llTopContent.addView(svRttyScroll);
 
         // RAND 1: START | CLEAR | NORM/REV | A-TUNE
         LinearLayout rAndControaleRtty = new LinearLayout(context);
         rAndControaleRtty.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams pBtn = new LinearLayout.LayoutParams(0, 120, 1f);
-        pBtn.setMargins(4, 5, 4, 15);
+        LinearLayout.LayoutParams pBtn = new LinearLayout.LayoutParams(0, 110, 1f);
+        pBtn.setMargins(4, 2, 4, 10);
 
         btnRttyAudioToggle = new Button(context);
         btnRttyAudioToggle.setText("START");
@@ -411,15 +496,14 @@ public class EcranRttyDroid {
         btnAutoTune.setLayoutParams(pBtn);
         btnAutoTune.setOnClickListener(v -> executaAutoTuneMecanic());
         rAndControaleRtty.addView(btnAutoTune);
-        llRttyMain.addView(rAndControaleRtty);
+        llTopContent.addView(rAndControaleRtty);
 
         // RAND 2: TOGGLE DECODER & TRACK
         LinearLayout rAndDecoderToggle = new LinearLayout(context);
         rAndDecoderToggle.setOrientation(LinearLayout.HORIZONTAL);
-        rAndDecoderToggle.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams pRandDecoder = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pRandDecoder.setMargins(0, 5, 0, 15);
+        pRandDecoder.setMargins(0, 0, 0, 10);
         rAndDecoderToggle.setLayoutParams(pRandDecoder);
 
         btnDecoderToggle = new Button(context);
@@ -427,8 +511,9 @@ public class EcranRttyDroid {
         btnDecoderToggle.setBackgroundColor(Color.parseColor(folosesteMatchedFilter ? "#6A1B9A" : "#00695C"));
         btnDecoderToggle.setTextColor(Color.WHITE);
         btnDecoderToggle.setTypeface(null, Typeface.BOLD);
+        btnDecoderToggle.setTextSize(10);
         LinearLayout.LayoutParams pBtnDecoder = new LinearLayout.LayoutParams(0, 110, 1f);
-        pBtnDecoder.setMargins(10, 0, 10, 0);
+        pBtnDecoder.setMargins(5, 0, 5, 0);
         btnDecoderToggle.setLayoutParams(pBtnDecoder);
         btnDecoderToggle.setOnClickListener(v -> {
             folosesteMatchedFilter = !folosesteMatchedFilter;
@@ -445,10 +530,6 @@ public class EcranRttyDroid {
         });
         rAndDecoderToggle.addView(btnDecoderToggle);
 
-        // FUNCTIONALITATE NOUA: fostul buton unic "TRK:xxx" e acum impartit in doi butoni
-        // aseazati unul langa altul, ocupand IMPREUNA exact spatiul (weight 1f) pe care
-        // il ocupa inainte singurul buton TRK - restul randului (btnDecoderToggle) ramane
-        // neschimbat.
         LinearLayout llTrkSiNb = new LinearLayout(context);
         llTrkSiNb.setOrientation(LinearLayout.HORIZONTAL);
         LinearLayout.LayoutParams pLlTrkSiNb = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
@@ -459,8 +540,8 @@ public class EcranRttyDroid {
         btnTrackToggle.setBackgroundColor(Color.parseColor("#757575"));
         btnTrackToggle.setTextColor(Color.WHITE);
         btnTrackToggle.setTypeface(null, Typeface.BOLD);
-        LinearLayout.LayoutParams pBtnTrack = new LinearLayout.LayoutParams(0, 110, 0.5f);
-        pBtnTrack.setMargins(10, 0, 5, 0);
+        LinearLayout.LayoutParams pBtnTrack = new LinearLayout.LayoutParams(0, 110, 0.25f);
+        pBtnTrack.setMargins(5, 0, 2, 0);
         btnTrackToggle.setLayoutParams(pBtnTrack);
         btnTrackToggle.setOnClickListener(v -> {
             modUrmarireFrecventa = (modUrmarireFrecventa + 1) % 3;
@@ -477,20 +558,17 @@ public class EcranRttyDroid {
         });
         llTrkSiNb.addView(btnTrackToggle);
 
-        // Buton NOU: Noise Blanker. Tap scurt = on/off (gri/albastru). Apasare sustinuta
-        // peste 3 secunde = arata/ascunde slider-ul de prag, la fel ca un NB de transceiver.
         btnNoiseBlanker = new Button(context);
         btnNoiseBlanker.setText("NB");
         btnNoiseBlanker.setBackgroundColor(Color.parseColor("#757575"));
         btnNoiseBlanker.setTextColor(Color.WHITE);
         btnNoiseBlanker.setTypeface(null, Typeface.BOLD);
-        LinearLayout.LayoutParams pBtnNb = new LinearLayout.LayoutParams(0, 110, 0.5f);
-        pBtnNb.setMargins(5, 0, 10, 0);
+        LinearLayout.LayoutParams pBtnNb = new LinearLayout.LayoutParams(0, 110, 0.25f);
+        pBtnNb.setMargins(2, 0, 2, 0);
         btnNoiseBlanker.setLayoutParams(pBtnNb);
 
         final Handler handlerNbLongPress = new Handler(Looper.getMainLooper());
         final boolean[] sliderAfisatPrinHold = {false};
-        // FUNCTIONALITATE NOUA: slider-ul NB dispare singur dupa 5 secunde de inactivitate.
         Runnable ascundeSliderNbAutomat = () -> rAndSliderNoiseBlanker.setVisibility(View.GONE);
         Runnable actiuneHoldNb = () -> {
             sliderAfisatPrinHold[0] = true;
@@ -513,7 +591,6 @@ public class EcranRttyDroid {
                 case MotionEvent.ACTION_UP:
                     handlerNbLongPress.removeCallbacks(actiuneHoldNb);
                     if (!sliderAfisatPrinHold[0]) {
-                        // Tap scurt normal (nu a durat 3 secunde) -> comutam on/off
                         folosesteNoiseBlanker = !folosesteNoiseBlanker;
                         btnNoiseBlanker.setBackgroundColor(Color.parseColor(folosesteNoiseBlanker ? "#007ACC" : "#757575"));
                     }
@@ -528,54 +605,199 @@ public class EcranRttyDroid {
         });
         llTrkSiNb.addView(btnNoiseBlanker);
 
-        rAndDecoderToggle.addView(llTrkSiNb);
-        llRttyMain.addView(rAndDecoderToggle);
+        btnDnr = new Button(context);
+        btnDnr.setText("DNR");
+        btnDnr.setBackgroundColor(Color.parseColor("#757575"));
+        btnDnr.setTextColor(Color.WHITE);
+        btnDnr.setTypeface(null, Typeface.BOLD);
+        LinearLayout.LayoutParams pBtnDnr = new LinearLayout.LayoutParams(0, 110, 0.25f);
+        pBtnDnr.setMargins(2, 0, 2, 0);
+        btnDnr.setLayoutParams(pBtnDnr);
 
-        // SLIDER NOISE BLANKER (ascuns implicit - apare la apasare sustinuta pe butonul NB)
+        final Handler handlerDnrLongPress = new Handler(Looper.getMainLooper());
+        final boolean[] sliderDnrAfisat = {false};
+        Runnable ascundeSliderDnr = () -> rAndSliderDnr.setVisibility(View.GONE);
+        Runnable actiuneHoldDnr = () -> {
+            sliderDnrAfisat[0] = true;
+            if (rAndSliderDnr.getVisibility() == View.VISIBLE) {
+                rAndSliderDnr.setVisibility(View.GONE);
+                handlerDnrLongPress.removeCallbacks(ascundeSliderDnr);
+            } else {
+                rAndSliderDnr.setVisibility(View.VISIBLE);
+                handlerDnrLongPress.postDelayed(ascundeSliderDnr, 5000);
+            }
+        };
+        btnDnr.setOnTouchListener((v, event) -> {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    sliderDnrAfisat[0] = false;
+                    handlerDnrLongPress.postDelayed(actiuneHoldDnr, 3000);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    handlerDnrLongPress.removeCallbacks(actiuneHoldDnr);
+                    if (!sliderDnrAfisat[0]) {
+                        folosesteDnr = !folosesteDnr;
+                        btnDnr.setBackgroundColor(Color.parseColor(folosesteDnr ? "#00897B" : "#757575"));
+                        if (!isInitialLoading) salveazaSetareRtty(PREF_RTTY_DNR_ON, folosesteDnr);
+                    }
+                    v.performClick();
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    handlerDnrLongPress.removeCallbacks(actiuneHoldDnr);
+                    return true;
+                default:
+                    return false;
+            }
+        });
+        llTrkSiNb.addView(btnDnr);
+
+        btnSnrGate = new Button(context);
+        btnSnrGate.setText("SNR-G");
+        btnSnrGate.setBackgroundColor(Color.parseColor("#757575"));
+        btnSnrGate.setTextColor(Color.WHITE);
+        btnSnrGate.setTypeface(null, Typeface.BOLD);
+        btnSnrGate.setTextSize(9);
+        LinearLayout.LayoutParams pBtnSnrG = new LinearLayout.LayoutParams(0, 110, 0.25f);
+        pBtnSnrG.setMargins(2, 0, 5, 0);
+        btnSnrGate.setLayoutParams(pBtnSnrG);
+
+        final Handler handlerSnrGLongPress = new Handler(Looper.getMainLooper());
+        final boolean[] sliderSnrGAfisat = {false};
+        Runnable ascundeSliderSnrG = () -> rAndSliderSnrGate.setVisibility(View.GONE);
+        Runnable actiuneHoldSnrG = () -> {
+            sliderSnrGAfisat[0] = true;
+            if (rAndSliderSnrGate.getVisibility() == View.VISIBLE) {
+                rAndSliderSnrGate.setVisibility(View.GONE);
+                handlerSnrGLongPress.removeCallbacks(ascundeSliderSnrG);
+            } else {
+                rAndSliderSnrGate.setVisibility(View.VISIBLE);
+                handlerSnrGLongPress.postDelayed(ascundeSliderSnrG, 5000);
+            }
+        };
+        btnSnrGate.setOnTouchListener((v, event) -> {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    sliderSnrGAfisat[0] = false;
+                    handlerSnrGLongPress.postDelayed(actiuneHoldSnrG, 3000);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    handlerSnrGLongPress.removeCallbacks(actiuneHoldSnrG);
+                    if (!sliderSnrGAfisat[0]) {
+                        folosesteSnrGating = !folosesteSnrGating;
+                        btnSnrGate.setBackgroundColor(Color.parseColor(folosesteSnrGating ? "#00897B" : "#757575"));
+                        if (!isInitialLoading) salveazaSetareRtty(PREF_RTTY_SNRG_ON, folosesteSnrGating);
+                    }
+                    v.performClick();
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    handlerSnrGLongPress.removeCallbacks(actiuneHoldSnrG);
+                    return true;
+                default:
+                    return false;
+            }
+        });
+        llTrkSiNb.addView(btnSnrGate);
+        rAndDecoderToggle.addView(llTrkSiNb);
+        llTopContent.addView(rAndDecoderToggle);
+
+        // SLIDER NOISE BLANKER (ascuns implicit)
         rAndSliderNoiseBlanker = new LinearLayout(context);
         rAndSliderNoiseBlanker.setOrientation(LinearLayout.HORIZONTAL);
         rAndSliderNoiseBlanker.setVisibility(View.GONE);
         LinearLayout.LayoutParams pRandNb = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pRandNb.setMargins(0, 10, 0, 10);
+        pRandNb.setMargins(0, 5, 0, 10);
         rAndSliderNoiseBlanker.setLayoutParams(pRandNb);
-
         TextView tvNbLabel = new TextView(context);
         tvNbLabel.setText("Prag NB:");
         tvNbLabel.setTextColor(Color.WHITE);
         tvNbLabel.setTextSize(13);
         rAndSliderNoiseBlanker.addView(tvNbLabel);
-
         sbNoiseBlanker = new SeekBar(context);
         sbNoiseBlanker.setMax(20);
-        sbNoiseBlanker.setProgress(9); // corespunde ~5.0x, valoarea implicita a nbFactorPrag
-        LinearLayout.LayoutParams pSbNb = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        sbNoiseBlanker.setLayoutParams(pSbNb);
-
+        sbNoiseBlanker.setProgress(9);
+        sbNoiseBlanker.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         tvNoiseBlankerValoare = new TextView(context);
         tvNoiseBlankerValoare.setText("x5.0");
         tvNoiseBlankerValoare.setTextColor(Color.parseColor("#00FF00"));
         tvNoiseBlankerValoare.setTextSize(13);
         tvNoiseBlankerValoare.setTypeface(Typeface.MONOSPACE);
-
         sbNoiseBlanker.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                // Interval 2.0x (zgomotos, prinde doar pulsuri f. mari) - 12.0x (agresiv,
-                // risca sa taie si varfuri de semnal real) - progres 0..20.
                 nbFactorPrag = 2.0 + (progress * (10.0 / 20.0));
                 tvNoiseBlankerValoare.setText(String.format("x%.1f", nbFactorPrag));
             }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {
-                handlerNbLongPress.removeCallbacks(ascundeSliderNbAutomat);
-            }
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {
-                handlerNbLongPress.postDelayed(ascundeSliderNbAutomat, 5000);
-            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) { handlerNbLongPress.removeCallbacks(ascundeSliderNbAutomat); }
+            @Override public void onStopTrackingTouch(SeekBar seekBar) { handlerNbLongPress.postDelayed(ascundeSliderNbAutomat, 5000); }
         });
-
         rAndSliderNoiseBlanker.addView(sbNoiseBlanker);
         rAndSliderNoiseBlanker.addView(tvNoiseBlankerValoare);
-        llRttyMain.addView(rAndSliderNoiseBlanker);
+        llTopContent.addView(rAndSliderNoiseBlanker);
+
+        // SLIDER DNR
+        rAndSliderDnr = new LinearLayout(context);
+        rAndSliderDnr.setOrientation(LinearLayout.HORIZONTAL);
+        rAndSliderDnr.setVisibility(View.GONE);
+        rAndSliderDnr.setLayoutParams(pRandNb);
+        TextView tvDnrLabel = new TextView(context);
+        tvDnrLabel.setText("Lățime DNR:");
+        tvDnrLabel.setTextColor(Color.WHITE);
+        tvDnrLabel.setTextSize(13);
+        rAndSliderDnr.addView(tvDnrLabel);
+        sbDnrLatime = new SeekBar(context);
+        sbDnrLatime.setMax(20);
+        sbDnrLatime.setProgress(9);
+        sbDnrLatime.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        tvDnrValoare = new TextView(context);
+        tvDnrValoare.setText("~600 Hz");
+        tvDnrValoare.setTextColor(Color.parseColor("#00FF00"));
+        tvDnrValoare.setTextSize(13);
+        tvDnrValoare.setTypeface(Typeface.MONOSPACE);
+        sbDnrLatime.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                latimeDnrHz = 250.0 + progress * (1250.0 / 20.0);
+                tvDnrValoare.setText("~" + Math.round(latimeDnrHz) + " Hz");
+                calculeazaCoeficientiDnr(sampleRateFiltre);
+                if (fromUser) salveazaSetareRtty(PREF_RTTY_DNR_BW, progress);
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) { handlerDnrLongPress.removeCallbacks(ascundeSliderDnr); }
+            @Override public void onStopTrackingTouch(SeekBar seekBar) { handlerDnrLongPress.postDelayed(ascundeSliderDnr, 5000); }
+        });
+        rAndSliderDnr.addView(sbDnrLatime);
+        rAndSliderDnr.addView(tvDnrValoare);
+        llTopContent.addView(rAndSliderDnr);
+
+        // SLIDER SNR GATING
+        rAndSliderSnrGate = new LinearLayout(context);
+        rAndSliderSnrGate.setOrientation(LinearLayout.HORIZONTAL);
+        rAndSliderSnrGate.setVisibility(View.GONE);
+        rAndSliderSnrGate.setLayoutParams(pRandNb);
+        TextView tvSnrGLabel = new TextView(context);
+        tvSnrGLabel.setText("Prag SNR-G:");
+        tvSnrGLabel.setTextColor(Color.WHITE);
+        tvSnrGLabel.setTextSize(13);
+        rAndSliderSnrGate.addView(tvSnrGLabel);
+        sbSnrGateK = new SeekBar(context);
+        sbSnrGateK.setMax(20);
+        sbSnrGateK.setProgress(3);
+        sbSnrGateK.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        tvSnrGateValoare = new TextView(context);
+        tvSnrGateValoare.setText("x1.3");
+        tvSnrGateValoare.setTextColor(Color.parseColor("#00FF00"));
+        tvSnrGateValoare.setTextSize(13);
+        tvSnrGateValoare.setTypeface(Typeface.MONOSPACE);
+        sbSnrGateK.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                snrGatingK = 1.0 + progress * (2.0 / 20.0);
+                tvSnrGateValoare.setText(String.format("x%.1f", snrGatingK));
+                if (fromUser) salveazaSetareRtty(PREF_RTTY_SNRG_K, progress);
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) { handlerSnrGLongPress.removeCallbacks(ascundeSliderSnrG); }
+            @Override public void onStopTrackingTouch(SeekBar seekBar) { handlerSnrGLongPress.postDelayed(ascundeSliderSnrG, 5000); }
+        });
+        rAndSliderSnrGate.addView(sbSnrGateK);
+        rAndSliderSnrGate.addView(tvSnrGateValoare);
+        llTopContent.addView(rAndSliderSnrGate);
 
         // SLIDER SENSIBILITATE
         LinearLayout rAndSensibilitate = new LinearLayout(context);
@@ -583,30 +805,23 @@ public class EcranRttyDroid {
         rAndSensibilitate.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams pRandSens = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pRandSens.setMargins(0, 0, 0, 15);
+        pRandSens.setMargins(0, 0, 0, 10);
         rAndSensibilitate.setLayoutParams(pRandSens);
-
         TextView tvSensLabel = new TextView(context);
         tvSensLabel.setText("Sensibilitate:");
         tvSensLabel.setTextColor(Color.WHITE);
         tvSensLabel.setTextSize(13);
         rAndSensibilitate.addView(tvSensLabel);
-
         sbSensibilitate = new SeekBar(context);
         sbSensibilitate.setMax(20);
         sbSensibilitate.setProgress((int) Math.round(pragSensibilitate * 100));
-        LinearLayout.LayoutParams pSeek = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        pSeek.setMargins(15, 0, 15, 0);
-        sbSensibilitate.setLayoutParams(pSeek);
-        rAndSensibilitate.addView(sbSensibilitate);
-
+        sbSensibilitate.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         tvSensibilitateValoare = new TextView(context);
         tvSensibilitateValoare.setText(String.format("%d%%", (int) Math.round(pragSensibilitate * 100)));
         tvSensibilitateValoare.setTextColor(Color.parseColor("#00E5FF"));
         tvSensibilitateValoare.setTextSize(13);
-        tvSensibilitateValoare.setTypeface(null, Typeface.BOLD);
+        rAndSensibilitate.addView(sbSensibilitate);
         rAndSensibilitate.addView(tvSensibilitateValoare);
-
         sbSensibilitate.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 pragSensibilitate = progress / 100.0;
@@ -615,201 +830,229 @@ public class EcranRttyDroid {
             @Override public void onStartTrackingTouch(SeekBar seekBar) { }
             @Override public void onStopTrackingTouch(SeekBar seekBar) { }
         });
-        llRttyMain.addView(rAndSensibilitate);
+        llTopContent.addView(rAndSensibilitate);
 
         // SLIDER LATIME FILTRU
         LinearLayout rAndFiltru = new LinearLayout(context);
         rAndFiltru.setOrientation(LinearLayout.HORIZONTAL);
         rAndFiltru.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams pRandFiltru = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pRandFiltru.setMargins(0, 0, 0, 15);
-        rAndFiltru.setLayoutParams(pRandFiltru);
-
+        rAndFiltru.setLayoutParams(pRandSens);
         TextView tvFiltruLabel = new TextView(context);
         tvFiltruLabel.setText("Latime Filtru:");
         tvFiltruLabel.setTextColor(Color.WHITE);
         tvFiltruLabel.setTextSize(13);
         rAndFiltru.addView(tvFiltruLabel);
-
         sbLatimeFiltru = new SeekBar(context);
         sbLatimeFiltru.setMax(20);
         sbLatimeFiltru.setProgress(12);
-        LinearLayout.LayoutParams pSeekFiltru = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        pSeekFiltru.setMargins(15, 0, 15, 0);
-        sbLatimeFiltru.setLayoutParams(pSeekFiltru);
-        rAndFiltru.addView(sbLatimeFiltru);
-
+        sbLatimeFiltru.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         tvFiltruValoare = new TextView(context);
         tvFiltruValoare.setText("~60 Hz");
         tvFiltruValoare.setTextColor(Color.parseColor("#00E5FF"));
         tvFiltruValoare.setTextSize(13);
-        tvFiltruValoare.setTypeface(null, Typeface.BOLD);
+        rAndFiltru.addView(sbLatimeFiltru);
         rAndFiltru.addView(tvFiltruValoare);
-
         sbLatimeFiltru.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                // OPTIMIZARE 2: podeaua ingusta a slider-ului nu mai e fixa (~15 Hz), ci
-                // legata dinamic de rata reala de baud - sub ~1.2x rata de baud, filtrul
-                // devine mai lent decat ritmul simbolurilor si introduce ISI (distorsiune
-                // intre biti) in loc sa "curete" semnalul.
                 double bwMinHz = Math.max(20.0, BAUD_RTTY * 1.2);
                 double rChebMax = 1.0 - (bwMinHz * 2.0 * Math.PI / sampleRateFiltre);
                 rCheb = RCHEB_MIN + progress * ((rChebMax - RCHEB_MIN) / 20.0);
-
                 int bwHz = (int) Math.round((1.0 - rCheb) * sampleRateFiltre / (2 * Math.PI));
                 tvFiltruValoare.setText("~" + bwHz + " Hz");
-                // OPTIMIZARE 3: NU mai resetam filtrele la fiecare tick de drag (doar
-                // actualizam rCheb si afisajul) - resetul complet se intampla o singura
-                // data, la eliberarea degetului (onStopTrackingTouch), ca sa nu sacadam
-                // decodarea live cat utilizatorul cauta valoarea potrivita.
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) { }
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {
-                solicitaResetFiltre = true;
-            }
+            @Override public void onStopTrackingTouch(SeekBar seekBar) { solicitaResetFiltre = true; }
         });
-        llRttyMain.addView(rAndFiltru);
-
-        // OPTIMIZARE 1 (Varianta A): slider-ul "Latime Filtru" controleaza doar rCheb,
-        // folosit exclusiv de decodorul Chebyshev - matched filter-ul isi are propria
-        // "latime" fixa, determinata de durata ferestrei legata de rata de baud, nu de
-        // acest control. Il dezactivam vizual in modul Matched Filter, ca sa nu para ca
-        // ajusteaza ceva ce de fapt nu are niciun efect in acel mod.
+        llTopContent.addView(rAndFiltru);
         actualizeazaStareSliderLatime();
 
-        // CONTAINER PENTRU CAMPUL FSK + BUTON CLEAR (X)
-        LinearLayout rFskContainer = new LinearLayout(context);
-        rFskContainer.setOrientation(LinearLayout.HORIZONTAL);
-        rFskContainer.setGravity(Gravity.TOP); // Aliniem sus pentru a arata bine cand textul are mai multe randuri
-        LinearLayout.LayoutParams pFskContainer = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pFskContainer.setMargins(0, 5, 0, 10);
-        rFskContainer.setLayoutParams(pFskContainer);
+        viewPrincipal.addView(svTop);
 
-        // CAMP EDITARE FSK (multi-line cu wrap + buton X nativ)
+        // ZONA DE JOS - FIXĂ (Operare: Input, Butoane, Macrouri)
+        LinearLayout llBottomOperare = new LinearLayout(context);
+        llBottomOperare.setOrientation(LinearLayout.VERTICAL);
+        llBottomOperare.setPadding(30, 0, 30, 10);
+        llBottomOperare.setBackgroundColor(Color.parseColor("#1A1A1A"));
+
+        // RAND SETĂRI ASCUNSE (Diddle + RTS/DTR Toggle)
+        rAndSetariAscunsePtt = new LinearLayout(context);
+        rAndSetariAscunsePtt.setOrientation(LinearLayout.HORIZONTAL);
+        rAndSetariAscunsePtt.setGravity(Gravity.CENTER_VERTICAL);
+        rAndSetariAscunsePtt.setVisibility(View.GONE);
+        LinearLayout.LayoutParams pRandHidden = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pRandHidden.setMargins(0, 0, 0, 5);
+        rAndSetariAscunsePtt.setLayoutParams(pRandHidden);
+
+        cbDiddle = new CheckBox(context);
+        cbDiddle.setText("DIDDLE");
+        cbDiddle.setTextColor(Color.YELLOW);
+        cbDiddle.setChecked(folosesteDiddle);
+        cbDiddle.setOnCheckedChangeListener((v, isChecked) -> {
+            folosesteDiddle = isChecked;
+            if (isChecked && isPttManualOn) porneteWorkerTxRttyDacaNuRuleaza();
+            // Resetăm și prelungim timpul de vizibilitate (+3s față de cele 5s standard = 8s)
+            reseteazaTemporizatorSetari(8000);
+        });
+        rAndSetariAscunsePtt.addView(cbDiddle);
+
+        btnToggleLine = new Button(context);
+        btnToggleLine.setText(folosesteRtsPtPtt ? "USE: RTS" : "USE: DTR");
+        btnToggleLine.setBackgroundColor(Color.parseColor("#455A64"));
+        btnToggleLine.setTextColor(Color.WHITE);
+        btnToggleLine.setTextSize(10);
+        LinearLayout.LayoutParams pBtnLine = new LinearLayout.LayoutParams(0, 90, 1f);
+        pBtnLine.setMargins(20, 0, 0, 0);
+        btnToggleLine.setLayoutParams(pBtnLine);
+        btnToggleLine.setOnClickListener(v -> {
+            folosesteRtsPtPtt = !folosesteRtsPtPtt;
+            btnToggleLine.setText(folosesteRtsPtPtt ? "USE: RTS" : "USE: DTR");
+            salveazaSetareRtty(PREF_RTTY_USE_RTS_PTT, folosesteRtsPtPtt);
+            // Resetăm și prelungim timpul de vizibilitate
+            reseteazaTemporizatorSetari(8000);
+        });
+        rAndSetariAscunsePtt.addView(btnToggleLine);
+        llBottomOperare.addView(rAndSetariAscunsePtt);
+
+        // CAMP EDITARE FSK (multi-line)
         etRttyInputLive = new EditText(context);
         etRttyInputLive.setHint("Type live FSK text...");
         etRttyInputLive.setHintTextColor(Color.GRAY);
         etRttyInputLive.setTextColor(Color.WHITE);
         etRttyInputLive.setTextSize(14);
-        etRttyInputLive.setSingleLine(false);
         etRttyInputLive.setMinLines(2);
         etRttyInputLive.setMaxLines(4);
         etRttyInputLive.setGravity(Gravity.TOP | Gravity.START);
-        //etRttyInputLive.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        // Vechiul cod (doar o linie):
-        // NOUL COD (înlocuiește cu acesta):
-        etRttyInputLive.setInputType(android.text.InputType.TYPE_CLASS_TEXT |
-                android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE |
-                android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
-
-        // Filtrul AllCaps forțează majuscule chiar și la textul lipit (Paste) din clipboard
+        etRttyInputLive.setInputType(InputType.TYPE_CLASS_TEXT |
+                InputType.TYPE_TEXT_FLAG_MULTI_LINE |
+                InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
         etRttyInputLive.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.AllCaps()});
-        // ============================================================
-        // BUTON X NATIV (apare doar când există text)
-        // ============================================================
-        // Iconița X (folosim un caracter Unicode simplu, dar poți înlocui cu o iconiță drawable)
+        
         final android.graphics.drawable.Drawable clearIcon = new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT);
         etRttyInputLive.setCompoundDrawablesWithIntrinsicBounds(null, null, clearIcon, null);
         etRttyInputLive.setCompoundDrawablePadding(10);
-
-        // TextWatcher pentru a afișa/ascunde iconița X
         etRttyInputLive.addTextChangedListener(new android.text.TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-
-            @Override
-            public void onTextChanged(CharSequence s, int start, int before, int count) {}
-
-            @Override
-            public void afterTextChanged(android.text.Editable s) {
-                if (s.length() > 0) {
-                    // Arătăm iconița X (roșu aprins)
-                    android.graphics.drawable.Drawable xIcon = createXIcon();
-                    etRttyInputLive.setCompoundDrawablesWithIntrinsicBounds(null, null, xIcon, null);
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable s) {
+                String currentText = s.toString();
+                if (!currentText.isEmpty()) {
+                    etRttyInputLive.setCompoundDrawablesWithIntrinsicBounds(null, null, createXIcon(), null);
                 } else {
-                    // Ascundem iconița X
                     etRttyInputLive.setCompoundDrawablesWithIntrinsicBounds(null, null, null, null);
+                }
+                if (isPttManualOn) {
+                    if (currentText.length() > lastLiveTxLength) {
+                        adaugaInCoadaTransmisieRtty(currentText.substring(lastLiveTxLength));
+                        lastLiveTxLength = currentText.length();
+                    } else if (currentText.length() < lastLiveTxLength) {
+                        lastLiveTxLength = currentText.length();
+                    }
                 }
             }
         });
-
-        // Click pe iconița X pentru a goli câmpul
         etRttyInputLive.setOnTouchListener((v, event) -> {
-            if (event.getAction() == android.view.MotionEvent.ACTION_UP) {
+            if (event.getAction() == MotionEvent.ACTION_UP) {
                 if (event.getRawX() >= (etRttyInputLive.getRight() - etRttyInputLive.getCompoundPaddingRight())) {
                     etRttyInputLive.setText("");
+                    lastLiveTxLength = 0;
                     return true;
                 }
             }
             return false;
         });
-
         LinearLayout.LayoutParams pEtInput = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pEtInput.setMargins(0, 5, 0, 10);
+        pEtInput.setMargins(0, 5, 0, 5);
         etRttyInputLive.setLayoutParams(pEtInput);
-        llRttyMain.addView(etRttyInputLive);
+        llBottomOperare.addView(etRttyInputLive);
 
-        // Auto-scroll la campul de editare cand primeste focus
-        etRttyInputLive.setOnFocusChangeListener((v, hasFocus) -> {
-            if (hasFocus && svRttyScroll != null) {
-                svRttyScroll.postDelayed(() -> {
-                    svRttyScroll.smoothScrollTo(0, etRttyInputLive.getTop());
-                }, 200);
-            }
-        });
-
-        // BUTOANE SEND SI PTT (aliniate la dreapta)
+        // SEND & PTT BUTTONS
         LinearLayout rAndSendPtt = new LinearLayout(context);
         rAndSendPtt.setOrientation(LinearLayout.HORIZONTAL);
         rAndSendPtt.setGravity(Gravity.END);
-        LinearLayout.LayoutParams pRandSend = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pRandSend.setMargins(0, 0, 0, 15);
-        rAndSendPtt.setLayoutParams(pRandSend);
-
         btnRttySendLive = new Button(context);
         btnRttySendLive.setText("SEND");
         btnRttySendLive.setBackgroundColor(Color.parseColor("#2E7D32"));
         btnRttySendLive.setTextColor(Color.WHITE);
-        LinearLayout.LayoutParams pBtnSend = new LinearLayout.LayoutParams(0, 130, 0.9f);
-        pBtnSend.setMargins(10, 0, 10, 0);
-        btnRttySendLive.setLayoutParams(pBtnSend);
+        LinearLayout.LayoutParams pBtnS = new LinearLayout.LayoutParams(0, 120, 1f);
+        pBtnS.setMargins(0, 0, 10, 0);
+        btnRttySendLive.setLayoutParams(pBtnS);
         btnRttySendLive.setOnClickListener(v -> {
-            String txt = etRttyInputLive.getText().toString();
-            if (!txt.isEmpty()) {
-                adaugaInCoadaTransmisieRtty(txt);
+            if (isPttManualOn) {
                 etRttyInputLive.setText("");
+                lastLiveTxLength = 0;
+            } else {
+                String txt = etRttyInputLive.getText().toString();
+                if (!txt.isEmpty()) {
+                    adaugaInCoadaTransmisieRtty(txt);
+                    etRttyInputLive.setText("");
+                    lastLiveTxLength = 0;
+                }
             }
         });
-        rAndSendPtt.addView(btnRttySendLive);
-
+        
         btnRttyPttToggle = new Button(context);
         btnRttyPttToggle.setText("PTT");
         btnRttyPttToggle.setBackgroundColor(Color.parseColor("#424242"));
         btnRttyPttToggle.setTextColor(Color.WHITE);
-        btnRttyPttToggle.setLayoutParams(new LinearLayout.LayoutParams(0, 130, 0.9f));
-        btnRttyPttToggle.setOnClickListener(v -> comutaStarePttManual());
-        rAndSendPtt.addView(btnRttyPttToggle);
-        llRttyMain.addView(rAndSendPtt);
+        btnRttyPttToggle.setLayoutParams(new LinearLayout.LayoutParams(0, 120, 1f));
 
-        // FEREASTRA LISTA MACRO-URI (stil terminal)
+        final boolean[] settingAfisatPrinHold = {false};
+        Runnable actiuneHoldPtt = () -> {
+            if (!isPttManualOn) {
+                settingAfisatPrinHold[0] = true;
+                if (rAndSetariAscunsePtt.getVisibility() == View.VISIBLE) {
+                    rAndSetariAscunsePtt.setVisibility(View.GONE);
+                    handlerPttSettings.removeCallbacks(runnableAscundeSetariPtt);
+                } else {
+                    rAndSetariAscunsePtt.setVisibility(View.VISIBLE);
+                    reseteazaTemporizatorSetari(5000); // 5 secunde la prima afișare
+                }
+            }
+        };
+
+        btnRttyPttToggle.setOnTouchListener((v, event) -> {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    settingAfisatPrinHold[0] = false;
+                    handlerPttSettings.postDelayed(actiuneHoldPtt, 3000);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    handlerPttSettings.removeCallbacks(actiuneHoldPtt);
+                    if (!settingAfisatPrinHold[0]) {
+                        comutaStarePttManual();
+                        // Dacă setările sunt vizibile, prelungim timpul la apăsarea PTT
+                        reseteazaTemporizatorSetari(8000);
+                    }
+                    v.performClick();
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    handlerPttSettings.removeCallbacks(actiuneHoldPtt);
+                    return true;
+                default:
+                    return false;
+            }
+        });
+
+        rAndSendPtt.addView(btnRttySendLive);
+        rAndSendPtt.addView(btnRttyPttToggle);
+        llBottomOperare.addView(rAndSendPtt);
+
+        // MACRO LIST
         ScrollView svMacroList = new ScrollView(context);
         LinearLayout.LayoutParams pSvMacro = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 250);
-        pSvMacro.setMargins(0, 0, 0, 10);
+                LinearLayout.LayoutParams.MATCH_PARENT, 220);
+        pSvMacro.setMargins(0, 5, 0, 0);
         svMacroList.setLayoutParams(pSvMacro);
         svMacroList.setBackgroundColor(Color.BLACK);
-        svMacroList.setPadding(10, 10, 10, 10);
-
+        svMacroList.setPadding(10, 5, 10, 5);
         llMacroListContainer = new LinearLayout(context);
         llMacroListContainer.setOrientation(LinearLayout.VERTICAL);
         svMacroList.addView(llMacroListContainer);
-        llRttyMain.addView(svMacroList);
+        llBottomOperare.addView(svMacroList);
 
-        viewPrincipal.addView(llRttyMain);
+        viewPrincipal.addView(llBottomOperare);
     }
 
     // REFACTORIZARE: logica de detectare/afisare a indicativelor a fost mutata in
@@ -851,6 +1094,7 @@ public class EcranRttyDroid {
             double nivelZgomotMediu = 0.05;
             boolean inFrame = false;
             double fazaCeasAcumulator = 0;
+            double fazaVectRe = 1.0, fazaVectIm = 0.0; // Vector de faza complex (inlocuieste fazaAFC)
             int bitCounter = 0;
             int currentByte = 0;
 
@@ -880,7 +1124,8 @@ public class EcranRttyDroid {
             double nbUltimulEsantionValid = 0;
             final double NB_EMA_ALPHA = 0.0008;
 
-            double fazaAFC = 0;
+            double dnrX1 = 0, dnrX2 = 0, dnrY1 = 0, dnrY2 = 0; // stare filtru bandpass DNR
+
             double I_acc = 0, Q_acc = 0;
             double last_phase = 0;
             int samplesSinceLastAFC = 0;
@@ -936,12 +1181,15 @@ public class EcranRttyDroid {
                     integratVech = 0;
                     inFrame = false;
                     fazaCeasAcumulator = 0;
+                    fazaVectRe = 1.0; fazaVectIm = 0.0;
                     bitCounter = 0;
                     currentByte = 0;
                     contorConfirmareStart = 0;
                     contorEroriFramingConsecutive = 0;
                     nbNivelMediu = 0.05;
                     nbUltimulEsantionValid = 0;
+                    noiseFloor = 1e-9; // Resetăm și podeaua de zgomot pentru a recalibra SNR-G
+                    dnrX1 = 0; dnrX2 = 0; dnrY1 = 0; dnrY2 = 0;
                     if (folosesteMatchedFilter && mfBuffer != null) {
                         for (int k = 0; k < mfBuffer.length; k++) mfBuffer[k] = 0;
                         mfBufferPos = 0;
@@ -989,6 +1237,15 @@ public class EcranRttyDroid {
                         }
                     }
 
+                    // DNR: filtru bandpass biquad centrat Mark/Space - reduce zgomotul de banda larga
+                    if (folosesteDnr) {
+                        double dnrOut = dnrB0 * sample + dnrB1 * dnrX1 + dnrB2 * dnrX2
+                                - dnrA1 * dnrY1 - dnrA2 * dnrY2;
+                        dnrX2 = dnrX1; dnrX1 = sample;
+                        dnrY2 = dnrY1; dnrY1 = dnrOut;
+                        sample = dnrOut;
+                    }
+
                     double magMark = 0, magSpace = 0;
                     double diferentaBruta = 0.0;
 
@@ -1027,11 +1284,13 @@ public class EcranRttyDroid {
                     }
 
                     // AFC/PLL
-                    fazaAFC += 2.0 * Math.PI * frecventaTunedBaza / sampleRate;
-                    if (fazaAFC > 2.0 * Math.PI) fazaAFC -= 2.0 * Math.PI;
+                    double newPhaseRe = fazaVectRe * afcRotRe - fazaVectIm * afcRotIm;
+                    double newPhaseIm = fazaVectRe * afcRotIm + fazaVectIm * afcRotRe;
+                    fazaVectRe = newPhaseRe;
+                    fazaVectIm = newPhaseIm;
 
-                    I_acc += sample * Math.cos(fazaAFC);
-                    Q_acc += sample * Math.sin(fazaAFC);
+                    I_acc += sample * fazaVectRe;
+                    Q_acc += sample * fazaVectIm;
                     samplesSinceLastAFC++;
 
                     if (samplesSinceLastAFC >= fereastraAFCSamples) {
@@ -1064,6 +1323,12 @@ public class EcranRttyDroid {
                                 }
 
                                 if (modUrmarireFrecventa > 0) {
+                                    double wAfc = 2.0 * Math.PI * frecventaTunedBaza / sampleRate;
+                                    afcRotRe = Math.cos(wAfc);
+                                    afcRotIm = Math.sin(wAfc);
+
+                                    calculeazaCoeficientiDnr(sampleRate);
+
                                     qMarkA = 2.0 * Math.cos(2.0 * Math.PI * frecventaTunedBaza / sampleRate);
                                     double fSpace = frecventaTunedBaza + (regimReverseSoftware ? -170.0 : 170.0);
                                     qSpaceA = 2.0 * Math.cos(2.0 * Math.PI * fSpace / sampleRate);
@@ -1077,6 +1342,13 @@ public class EcranRttyDroid {
                         I_acc = 0; Q_acc = 0;
                         last_phase = current_phase;
                         samplesSinceLastAFC = 0;
+
+                        // Renormalizare anti-drift a vectorului de faza
+                        double normAfc = Math.sqrt(fazaVectRe * fazaVectRe + fazaVectIm * fazaVectIm);
+                        if (normAfc > 1e-9) {
+                            fazaVectRe /= normAfc;
+                            fazaVectIm /= normAfc;
+                        }
                     }
 
                     double magTotala = magMark + magSpace;
@@ -1089,7 +1361,13 @@ public class EcranRttyDroid {
 
                     nivelZgomotMediu = (0.0005 * magTotala) + (0.9995 * nivelZgomotMediu);
 
-                    double integratCurent = (alfaIntegrator * diferentaBruta) + ((1.0 - alfaIntegrator) * integratVech);
+                    // SNR Gating: îngheață integratorul dacă energia este prea mică
+                    double integratCurent;
+                    if (folosesteSnrGating && magTotala < noiseFloor * snrGatingK) {
+                        integratCurent = integratVech; // freeze
+                    } else {
+                        integratCurent = (alfaIntegrator * diferentaBruta) + ((1.0 - alfaIntegrator) * integratVech);
+                    }
                     integratVech = integratCurent;
 
                     // SNR LIVE
@@ -1266,22 +1544,75 @@ public class EcranRttyDroid {
         }
     }
 
+    /**
+     * Setează starea liniei dedicate pentru PTT.
+     */
+    private void setHardwarePtt(boolean active) {
+        if (radioManager == null || radioManager.getDataPort() == null) return;
+        try {
+            if (folosesteRtsPtPtt) {
+                radioManager.getDataPort().setRTS(active);
+            } else {
+                radioManager.getDataPort().setDTR(active);
+            }
+        } catch (Exception e) {
+            android.util.Log.e("RTTY_HW", "Err PTT line", e);
+        }
+    }
+
+    /**
+     * Setează starea liniei dedicate pentru modulația FSK (Mark/Space).
+     */
+    private void setHardwareFsk(boolean active) {
+        if (radioManager == null || radioManager.getDataPort() == null) return;
+        try {
+            if (folosesteRtsPtPtt) {
+                radioManager.getDataPort().setDTR(active);
+            } else {
+                radioManager.getDataPort().setRTS(active);
+            }
+        } catch (Exception e) {
+            android.util.Log.e("RTTY_HW", "Err FSK line", e);
+        }
+    }
+
     private void comutaStarePttManual() {
         if (radioManager == null || radioManager.getDataPort() == null) return;
         try {
-            // Dacă suntem în curs de emisie (fie manuală, fie din coadă), STOP TOTAL
-            if (isTransmittingRtty) {
+            // Toggle stare PTT manual
+            isPttManualOn = !isPttManualOn;
+
+            if (!isPttManualOn) {
+                // Trecem în RX
                 coadaMesajeTxRtty.clear();
                 opreteTxRttySolicitata = true;
+                
+                isTransmittingRtty = false;
+                setHardwarePtt(false);
+                setHardwareFsk(false);
+                
                 actualizeazaLabelSend();
-            }
+                btnRttyPttToggle.setBackgroundColor(Color.parseColor("#424242"));
+                btnRttyPttToggle.setText("PTT");
+            } else {
+                // Trecem în TX
+                opreteTxRttySolicitata = false; // Resetăm flag-ul de stop înainte de a porni
+                isTransmittingRtty = true;
+                setHardwarePtt(true);
+                
+                // Inițializăm urmărirea textului la lungimea actuală (ignorăm textul vechi din casetă)
+                lastLiveTxLength = etRttyInputLive.getText().length();
 
-            isTransmittingRtty = !isTransmittingRtty;
-            radioManager.getDataPort().setDTR(isTransmittingRtty);
-            btnRttyPttToggle.setBackgroundColor(Color.parseColor(isTransmittingRtty ? "#B71C1C" : "#424242"));
-            btnRttyPttToggle.setText(isTransmittingRtty ? "TX" : "PTT");
+                btnRttyPttToggle.setBackgroundColor(Color.parseColor("#B71C1C"));
+                btnRttyPttToggle.setText("TX");
+
+                // Pornim worker-ul pentru Diddle (dacă e activ)
+                porneteWorkerTxRttyDacaNuRuleaza();
+            }
         } catch (Exception e) {
             Toast.makeText(context, "Err PTT: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            isPttManualOn = false;
+            isTransmittingRtty = false;
         }
     }
 
@@ -1295,6 +1626,9 @@ public class EcranRttyDroid {
             Toast.makeText(context, "Porturile DATA nu sunt conectate!", Toast.LENGTH_SHORT).show();
             return;
         }
+        // Deblocăm motorul de transmisie în caz că a fost oprit anterior
+        opreteTxRttySolicitata = false;
+
         coadaMesajeTxRtty.add(text);
         actualizeazaLabelSend();
         porneteWorkerTxRttyDacaNuRuleaza();
@@ -1321,29 +1655,82 @@ public class EcranRttyDroid {
      */
     private void porneteWorkerTxRttyDacaNuRuleaza() {
         if (!workerTxRttyActiv.compareAndSet(false, true)) return; // deja ruleaza un worker
-        opreteTxRttySolicitata = false; // Resetăm flag-ul de stop pentru noua sesiune
         threadWorkerTxRtty = new Thread(() -> {
+            boolean inBurst = false;
             try {
-                String mesaj;
-                while (!opreteTxRttySolicitata && (mesaj = coadaMesajeTxRtty.poll()) != null) {
-                    transmiteUnMesajRttyBaudotBlocant(mesaj);
-                    actualizeazaLabelSend();
+                while (!opreteTxRttySolicitata) {
+                    String mesaj = coadaMesajeTxRtty.poll();
+                    if (mesaj != null) {
+                        // Început de rafală (burst) de text - trimitem pre-ambulă DOAR o dată
+                        if (!inBurst) {
+                            try {
+                                setHardwarePtt(true);
+                                isTransmittingRtty = true;
+                                
+                                long dur = 22002200L;
+                                long next = System.nanoTime();
+                                if (folosesteDiddle) {
+                                    next = trimiteOctetBaudotHardware(0x1F, next, dur);
+                                    next = trimiteOctetBaudotHardware(0x1F, next, dur);
+                                } else {
+                                    Thread.sleep(250);
+                                }
+                            } catch (Exception e) {
+                                android.util.Log.e("RTTY-TX", "Err preamble", e);
+                            }
+                            inBurst = true;
+                            actualizeazaUiTxStare(true);
+                        }
+                        transmiteUnMesajRttyBaudotBlocant(mesaj);
+                        actualizeazaLabelSend();
+
+                        // DACĂ tocmai am trimis un bloc (Macro sau buton SEND), adăugăm un Diddle de final și o pauză scurtă.
+                        // Pentru litere individuale (tastare Live), nu adăugăm nicio pauză pentru a păstra fluiditatea.
+                        if (mesaj.length() > 1) {
+                            try {
+                                long dur = 22002200L;
+                                long next = System.nanoTime();
+                                trimiteOctetBaudotHardware(0x1F, next, dur); // Sync/Diddle final
+                                Thread.sleep(300); 
+                            } catch (Exception ignored) {}
+                        }
+                    } else if (isPttManualOn && folosesteDiddle) {
+                        // Mod Diddle: trimitem Letters Shift (0x1F) continuu în repaus
+                        isTransmittingRtty = true;
+                        try {
+                            setHardwarePtt(true);
+                            actualizeazaUiTxStare(true);
+                            long dur = 22002200L; // ~22ms pt 45.45 baud
+                            long next = System.nanoTime();
+                            trimiteOctetBaudotHardware(0x1F, next, dur);
+                            inBurst = false; // Revenim la starea idle (nu mai suntem în burst de text)
+                        } catch (Exception e) {
+                            android.util.Log.e("RTTY-TX", "Err diddle", e);
+                            break;
+                        }
+                    } else {
+                        // Nimic de trimis și PTT manual oprit -> ieșim din thread
+                        break;
+                    }
                 }
             } finally {
+                // CURĂȚARE FINALĂ: Oprim emisia doar dacă PTT-ul manual nu este pornit
+                if (!isPttManualOn) {
+                    isTransmittingRtty = false;
+                    setHardwarePtt(false);
+                    setHardwareFsk(false);
+                    actualizeazaUiTxStare(false);
+                }
                 workerTxRttyActiv.set(false);
-                actualizeazaLabelSend(); // revine la "SEND" simplu cand coada s-a golit
+                actualizeazaLabelSend();
             }
         }, "RTTY-TX-Worker");
         threadWorkerTxRtty.start();
     }
 
-    /**
-     * Transmite EFECTIV un singur mesaj pe hardware - BLOCANT (ruleaza pe thread-ul
-     * worker-ului de coada, nu isi mai creeaza propriul thread ca inainte).
-     */
     private void transmiteUnMesajRttyBaudotBlocant(final String text) {
         Activity activity = (Activity) context;
-        if (activity.isFinishing() || activity.isDestroyed()) return;
+        if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
         activity.runOnUiThread(() -> {
             if (activity.isFinishing() || activity.isDestroyed()) return;
             if (tvRttyTerminal != null) {
@@ -1356,63 +1743,52 @@ public class EcranRttyDroid {
 
         try {
             isTransmittingRtty = true;
-            if (activity.isFinishing() || activity.isDestroyed()) return;
-            activity.runOnUiThread(() -> {
-                if (activity.isFinishing() || activity.isDestroyed()) return;
-                btnRttyPttToggle.setBackgroundColor(Color.parseColor("#B71C1C"));
-                btnRttyPttToggle.setText("TX");
-            });
-            radioManager.getDataPort().setDTR(true);
-            Thread.sleep(250);
             txBaudotCodec.resetShift();
 
             long dur = 22002200L;
             long next = System.nanoTime();
-            next = trimiteOctetBaudotHardware(0x1F, next, dur);
-            next = trimiteOctetBaudotHardware(0x1F, next, dur);
-            next = trimiteOctetBaudotHardware(0x1F, next, dur);
-
             for (int i = 0; i < text.length() && !opreteTxRttySolicitata; i++) {
                 char c = Character.toUpperCase(text.charAt(i));
                 for (int codBaudot : txBaudotCodec.encode(c)) {
                     next = trimiteOctetBaudotHardware(codBaudot, next, dur);
                 }
             }
-            Thread.sleep(150);
+            // Mică pauză între mesaje din coadă pentru a asigura separarea biților de stop
+            Thread.sleep(50);
         } catch (Exception e) {
             android.util.Log.e("RTTY_TX", "Eroare loop FSK", e);
-        } finally {
-            // CORECTIE: isTransmittingRtty=false si DTR off garantate acum si pe ramura de
-            // eroare (finally), nu doar pe drumul de succes ca inainte - evita ramanerea
-            // "blocata" in stare TX daca apare o exceptie in mijlocul transmisiei.
-            isTransmittingRtty = false;
-            if (!activity.isFinishing() && !activity.isDestroyed()) {
-                activity.runOnUiThread(() -> {
-                    if (activity.isFinishing() || activity.isDestroyed()) return;
-                    btnRttyPttToggle.setBackgroundColor(Color.parseColor("#424242"));
-                    btnRttyPttToggle.setText("PTT");
-                });
-            }
-            try {
-                radioManager.getDataPort().setDTR(false);
-            } catch (Exception ignored) {}
         }
     }
 
-    private long trimiteOctetBaudotHardware(int codBaudot, long n, long d) throws Exception {
+    /**
+     * Helper pentru a actualiza culoarea și textul butonului PTT pe thread-ul UI.
+     */
+    private void actualizeazaUiTxStare(boolean isTx) {
+        Activity activity = (Activity) context;
+        if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
+        activity.runOnUiThread(() -> {
+            if (activity.isFinishing() || activity.isDestroyed()) return;
+            if (btnRttyPttToggle != null) {
+                btnRttyPttToggle.setBackgroundColor(Color.parseColor(isTx ? "#B71C1C" : "#424242"));
+                btnRttyPttToggle.setText(isTx ? "TX" : "PTT");
+            }
+        });
+    }
+
+    private long trimiteOctetBaudotHardware(int codBaudot, long n, long d) {
         boolean reverse = regimReverseSoftware;
-        radioManager.getDataPort().setRTS(reverse);
+        setHardwareFsk(reverse);
         n += d;
         while (System.nanoTime() < n);
 
         for (int b = 0; b < 5; b++) {
             boolean bitVal = ((codBaudot >> b) & 1) == 1;
-            radioManager.getDataPort().setRTS(bitVal ? !reverse : reverse);
+            setHardwareFsk(bitVal ? !reverse : reverse);
             n += d;
             while (System.nanoTime() < n);
         }
 
-        radioManager.getDataPort().setRTS(!reverse);
+        setHardwareFsk(!reverse);
         n += (long) (d * 1.5);
         while (System.nanoTime() < n);
         return n;
@@ -1435,12 +1811,9 @@ public class EcranRttyDroid {
         coadaMesajeTxRtty.clear();
         opreteTxRttySolicitata = true;
         isTransmittingRtty = false;
-        if (radioManager != null && radioManager.getDataPort() != null) {
-            try {
-                radioManager.getDataPort().setDTR(false);
-                radioManager.getDataPort().setRTS(false);
-            } catch (Exception ignored) {}
-        }
+        setHardwarePtt(false);
+        setHardwareFsk(false);
+        
         Thread workerTx = threadWorkerTxRtty;
         if (workerTx != null && workerTx.isAlive()) {
             try { 
@@ -1464,6 +1837,53 @@ public class EcranRttyDroid {
 
         // 5. Golim buffer-ul de cuvinte
         callsignDetector.resetBuffer();
+    }
+
+    // ============================================================
+    // SALVARE / ÎNCĂRCARE SETĂRI AUDIO
+    // ============================================================
+    private void salveazaSetareRtty(String cheie, Object valoare) {
+        SharedPreferences.Editor editor = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE).edit();
+        if (valoare instanceof Integer) editor.putInt(cheie, (Integer) valoare);
+        else if (valoare instanceof Boolean) editor.putBoolean(cheie, (Boolean) valoare);
+        editor.apply();
+    }
+
+    private void incarcaSetariRtty() {
+        isInitialLoading = true;
+        SharedPreferences prefs = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
+
+        folosesteDnr = prefs.getBoolean(PREF_RTTY_DNR_ON, false);
+        int dnrBwProgress = prefs.getInt(PREF_RTTY_DNR_BW, 9); // ~600 Hz
+        latimeDnrHz = 250.0 + dnrBwProgress * (1250.0 / 20.0);
+
+        folosesteSnrGating = prefs.getBoolean(PREF_RTTY_SNRG_ON, false);
+        int snrGKProgress = prefs.getInt(PREF_RTTY_SNRG_K, 3); // ~x1.3
+        snrGatingK = 1.0 + snrGKProgress * (2.0 / 20.0);
+
+        folosesteRtsPtPtt = prefs.getBoolean(PREF_RTTY_USE_RTS_PTT, false);
+
+        // Actualizăm UI
+        if (btnDnr != null) {
+            btnDnr.setBackgroundColor(Color.parseColor(folosesteDnr ? "#00897B" : "#757575"));
+        }
+        if (sbDnrLatime != null) {
+            sbDnrLatime.setProgress(dnrBwProgress);
+            tvDnrValoare.setText("~" + Math.round(latimeDnrHz) + " Hz");
+        }
+        if (btnSnrGate != null) {
+            btnSnrGate.setBackgroundColor(Color.parseColor(folosesteSnrGating ? "#00897B" : "#757575"));
+        }
+        if (sbSnrGateK != null) {
+            sbSnrGateK.setProgress(snrGKProgress);
+            tvSnrGateValoare.setText(String.format("x%.1f", snrGatingK));
+        }
+        if (btnToggleLine != null) {
+            btnToggleLine.setText(folosesteRtsPtPtt ? "USE: RTS" : "USE: DTR");
+        }
+
+        calculeazaCoeficientiDnr(sampleRateFiltre);
+        isInitialLoading = false;
     }
 
     // ============================================================

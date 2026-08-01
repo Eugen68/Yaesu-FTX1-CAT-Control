@@ -21,6 +21,7 @@ public class CwKeyer {
     private boolean isStraightKeyMode = false;
     private boolean isIambicModeB = true; 
     private boolean useRts = true;
+    private volatile boolean isHardwareOutputEnabled = false; // Control acces hardware
 
     private volatile boolean paddleLeftPressed = false;
     private volatile boolean paddleRightPressed = false;
@@ -55,6 +56,11 @@ public class CwKeyer {
 
     public void setIambicModeB(boolean iambicModeB) {
         this.isIambicModeB = iambicModeB;
+    }
+
+    public void setHardwareOutputEnabled(boolean enabled) {
+        this.isHardwareOutputEnabled = enabled;
+        if (!enabled) setHardwareKey(false);
     }
 
     public void setUseRts(boolean useRts) {
@@ -171,6 +177,7 @@ public class CwKeyer {
     }
 
     private void setHardwareKey(boolean active) {
+        if (!isHardwareOutputEnabled) return; // Protecție împotriva conflictelor cu alte moduri
         if (radioManager == null) return;
         UsbSerialPort port = radioManager.getDataPort();
         if (port == null || !port.isOpen()) return;

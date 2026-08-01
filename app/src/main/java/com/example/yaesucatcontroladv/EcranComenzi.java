@@ -506,6 +506,11 @@ public class EcranComenzi {
         if (containerCwKeyer != null) {
             containerCwKeyer.setVisibility(esteCW ? View.VISIBLE : View.GONE);
         }
+        
+        // Activăm ieșirea hardware a Keyer-ului DOAR dacă suntem în CW
+        if (cwKeyer != null) {
+            cwKeyer.setHardwareOutputEnabled(esteCW);
+        }
     }
 
     /**
@@ -569,6 +574,7 @@ public class EcranComenzi {
             btnConnect.setBackgroundColor(Color.parseColor("#007ACC"));
             containerButoaneCwExtra.setVisibility(View.GONE);
             if (containerCwKeyer != null) containerCwKeyer.setVisibility(View.GONE);
+            if (cwKeyer != null) cwKeyer.setHardwareOutputEnabled(false);
         }
     }
 
