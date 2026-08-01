@@ -69,25 +69,30 @@ public class BaudotCodec {
     }
 
     /**
-     * Encodeaza un singur caracter (deja normalizat uppercase de apelant) in unul sau doua
-     * coduri Baudot de trimis in ordine: [cod-de-shift-optional, cod-propriu-zis-al-caracterului].
-     * Actualizeaza starea interna LTRS/FIGS in mod corespunzator.
+     * Encodeaza un singur caracter (deja normalizat uppercase de apelant) in unul sau mai multe
+     * coduri Baudot de trimis. Actualizeaza starea interna LTRS/FIGS.
      */
     public int[] encode(char c) {
-        if (c != ' ' && c != '\n' && c != '\r') {
-            boolean cereFigs = esteFigs(c);
-            if (cereFigs && shift == 'L') {
-                shift = 'F';
-                return new int[]{0x1B, codBaudotPentru(c)};
-            } else if (!cereFigs && shift == 'F') {
-                shift = 'L';
-                return new int[]{0x1F, codBaudotPentru(c)};
-            }
-        } else {
-            // Spatiu/newline/CR: nu trimitem cod de shift explicit (comportament original),
-            // doar resetam starea interna daca eram in FIGS.
-            if (shift == 'F') shift = 'L';
+        if (c == '\n' || c == '\r') {
+            // Standard RTTY: Carriage Return (2) + Line Feed (8)
+            shift = 'L';
+            return new int[]{2, 8};
         }
+
+        if (c == ' ') {
+            shift = 'L';
+            return new int[]{4};
+        }
+
+        boolean cereFigs = esteFigs(c);
+        if (cereFigs && shift == 'L') {
+            shift = 'F';
+            return new int[]{0x1B, codBaudotPentru(c)};
+        } else if (!cereFigs && shift == 'F') {
+            shift = 'L';
+            return new int[]{0x1F, codBaudotPentru(c)};
+        }
+        
         return new int[]{codBaudotPentru(c)};
     }
 }

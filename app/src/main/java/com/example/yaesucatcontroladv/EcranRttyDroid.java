@@ -139,6 +139,7 @@ public class EcranRttyDroid {
     private static final String PREF_RTTY_SNRG_ON = "rtty_snrg_on";
     private static final String PREF_RTTY_SNRG_K = "rtty_snrg_k";
     private static final String PREF_RTTY_USE_RTS_PTT = "rtty_use_rts_ptt";
+    private static final String PREF_RTTY_USE_MACRO_CR = "rtty_use_macro_cr";
 
     private boolean isInitialLoading = false;
 
@@ -147,8 +148,9 @@ public class EcranRttyDroid {
     private boolean isPttManualOn = false; // Flag separat pentru PTT manual (buton)
     private int lastLiveTxLength = 0;      // Urmărire caractere deja trimise "live"
     private volatile boolean folosesteDiddle = true; // Emisie caractere de umplutură în idle
-    private volatile boolean folosesteRtsPtPtt = false; // False = DTR is PTT, RTS is FSK. True = RTS is PTT, DTR is FSK.
-    private CheckBox cbDiddle;
+    private volatile boolean folosesteRtsPtPtt = false;
+    private volatile boolean folosesteMacroCr = true; // True = newline suffix, False = space suffix
+    private CheckBox cbDiddle, cbMacroCr;
     private Button btnToggleLine;
     private LinearLayout rAndSetariAscunsePtt;
 
@@ -352,13 +354,17 @@ public class EcranRttyDroid {
 
                 tvMacro.setOnClickListener(v -> {
                     if (etRttyInputLive != null) {
-                        // REFACTORIZARE: folosim append() in loc de setText() pentru a sustine fluxul Live.
-                        // Daca exista deja text, adaugam un spatiu inainte pentru claritate.
+                        // REFACTORIZARE: folosim append() si adaugam sufix inteligent (Spatiu sau Newline)
                         String current = etRttyInputLive.getText().toString();
-                        if (!current.isEmpty() && !current.endsWith(" ")) {
+                        
+                        // Prefix inteligent
+                        if (!current.isEmpty() && !current.endsWith(" ") && !current.endsWith("\n")) {
                             etRttyInputLive.append(" ");
                         }
-                        etRttyInputLive.append(textFinal);
+                        
+                        // Text Macro + Sufix selectat (Enter sau Spatiu)
+                        String sufix = folosesteMacroCr ? "\n" : " ";
+                        etRttyInputLive.append(textFinal + sufix);
                         etRttyInputLive.setSelection(etRttyInputLive.getText().length());
                     }
                     tvMacro.setBackgroundColor(Color.parseColor("#33FFFFFF"));
@@ -896,6 +902,21 @@ public class EcranRttyDroid {
             reseteazaTemporizatorSetari(8000);
         });
         rAndSetariAscunsePtt.addView(cbDiddle);
+
+        cbMacroCr = new CheckBox(context);
+        cbMacroCr.setText("M-CR");
+        cbMacroCr.setTextColor(Color.parseColor("#00E5FF"));
+        cbMacroCr.setChecked(folosesteMacroCr);
+        cbMacroCr.setOnCheckedChangeListener((v, isChecked) -> {
+            folosesteMacroCr = isChecked;
+            salveazaSetareRtty(PREF_RTTY_USE_MACRO_CR, folosesteMacroCr);
+            reseteazaTemporizatorSetari(8000);
+        });
+        LinearLayout.LayoutParams pCbCr = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pCbCr.setMargins(15, 0, 0, 0);
+        cbMacroCr.setLayoutParams(pCbCr);
+        rAndSetariAscunsePtt.addView(cbMacroCr);
 
         btnToggleLine = new Button(context);
         btnToggleLine.setText(folosesteRtsPtPtt ? "USE: RTS" : "USE: DTR");
@@ -1912,6 +1933,7 @@ public class EcranRttyDroid {
         snrGatingK = 1.0 + snrGKProgress * (2.0 / 20.0);
 
         folosesteRtsPtPtt = prefs.getBoolean(PREF_RTTY_USE_RTS_PTT, false);
+        folosesteMacroCr = prefs.getBoolean(PREF_RTTY_USE_MACRO_CR, true);
 
         // Actualizăm UI
         if (btnDnr != null) {
@@ -1930,6 +1952,9 @@ public class EcranRttyDroid {
         }
         if (btnToggleLine != null) {
             btnToggleLine.setText(folosesteRtsPtPtt ? "USE: RTS" : "USE: DTR");
+        }
+        if (cbMacroCr != null) {
+            cbMacroCr.setChecked(folosesteMacroCr);
         }
 
         calculeazaCoeficientiDnr(sampleRateFiltre);
