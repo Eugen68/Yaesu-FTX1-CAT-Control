@@ -28,6 +28,7 @@ public class EcranComenzi {
     private ProgressBar pbSMeter;
     private Button btnLSB, btnUSB, btnCW, btnRTTYL;
     private Button btnBkInToggle, btnApfToggle, btnWidthToggle, btnConnect;
+    private Button btnPaddleLeft, btnPaddleRight;
     private LinearLayout containerButoaneCwExtra;
     private LinearLayout containerCwKeyer;
 
@@ -145,7 +146,7 @@ public class EcranComenzi {
         // --- ETICHETĂ MESAJE CANALE ---
         TextView tvL = new TextView(context);
         tvL.setText("CW MESSAGES / DVS VOICE");
-        tvL.setTextColor(Color.BLACK);
+        tvL.setTextColor(Color.WHITE);
         tvL.setTypeface(null, Typeface.BOLD);
         tvL.setGravity(Gravity.CENTER);
         tvL.setPadding(0, 30, 0, 15);
@@ -228,6 +229,15 @@ public class EcranComenzi {
         randCw2.addView(btnWidthToggle);
         containerButoaneCwExtra.addView(randCw2);
 
+        // Etichetă CW KEYER
+        TextView tvKeyerLabel = new TextView(context);
+        tvKeyerLabel.setText("CW KEYER");
+        tvKeyerLabel.setTextColor(Color.WHITE);
+        tvKeyerLabel.setTypeface(null, Typeface.BOLD);
+        tvKeyerLabel.setGravity(Gravity.CENTER);
+        tvKeyerLabel.setPadding(0, 10, 0, 10);
+        containerButoaneCwExtra.addView(tvKeyerLabel);
+
         llCAT.addView(containerButoaneCwExtra);
 
         // --- CONSTRUIRE KEYER CW (FIXED AT BOTTOM) ---
@@ -252,6 +262,7 @@ public class EcranComenzi {
         cbRev.setTextColor(Color.YELLOW);
         cbRev.setOnCheckedChangeListener((v, isChecked) -> {
             cwKeyer.setReversed(isChecked);
+            actualizeazaEtichetePadele(isChecked);
             if (!isInitialLoading) salveazaSetareKeyer(PREF_CW_REV, isChecked);
         });
         
@@ -347,47 +358,47 @@ public class EcranComenzi {
         LinearLayout rPaddles = new LinearLayout(context);
         rPaddles.setOrientation(LinearLayout.HORIZONTAL);
         
-        Button paddleLeft = new Button(context);
-        paddleLeft.setText("LEFT");
-        paddleLeft.setBackgroundColor(Color.parseColor("#37474F"));
-        paddleLeft.setTextColor(Color.WHITE);
-        paddleLeft.setLayoutParams(new LinearLayout.LayoutParams(0, 300, 1f));
-        paddleLeft.setOnTouchListener((v, event) -> {
+        btnPaddleLeft = new Button(context);
+        btnPaddleLeft.setText("DIT");
+        btnPaddleLeft.setBackgroundColor(Color.parseColor("#37474F"));
+        btnPaddleLeft.setTextColor(Color.WHITE);
+        btnPaddleLeft.setLayoutParams(new LinearLayout.LayoutParams(0, 300, 1f));
+        btnPaddleLeft.setOnTouchListener((v, event) -> {
             if (event.getAction() == MotionEvent.ACTION_DOWN) {
-                paddleLeft.setBackgroundColor(Color.parseColor("#00E676"));
+                btnPaddleLeft.setBackgroundColor(Color.parseColor("#00E676"));
                 cwKeyer.setLeftPaddle(true);
                 return true;
             } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
-                paddleLeft.setBackgroundColor(Color.parseColor("#37474F"));
+                btnPaddleLeft.setBackgroundColor(Color.parseColor("#37474F"));
                 cwKeyer.setLeftPaddle(false);
                 return true;
             }
             return false;
         });
 
-        Button paddleRight = new Button(context);
-        paddleRight.setText("RIGHT");
-        paddleRight.setBackgroundColor(Color.parseColor("#37474F"));
-        paddleRight.setTextColor(Color.WHITE);
-        paddleRight.setLayoutParams(new LinearLayout.LayoutParams(0, 300, 1f));
-        paddleRight.setOnTouchListener((v, event) -> {
+        btnPaddleRight = new Button(context);
+        btnPaddleRight.setText("DAH");
+        btnPaddleRight.setBackgroundColor(Color.parseColor("#37474F"));
+        btnPaddleRight.setTextColor(Color.WHITE);
+        btnPaddleRight.setLayoutParams(new LinearLayout.LayoutParams(0, 300, 1f));
+        btnPaddleRight.setOnTouchListener((v, event) -> {
             if (event.getAction() == MotionEvent.ACTION_DOWN) {
-                paddleRight.setBackgroundColor(Color.parseColor("#00E676"));
+                btnPaddleRight.setBackgroundColor(Color.parseColor("#00E676"));
                 cwKeyer.setRightPaddle(true);
                 return true;
             } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
-                paddleRight.setBackgroundColor(Color.parseColor("#37474F"));
+                btnPaddleRight.setBackgroundColor(Color.parseColor("#37474F"));
                 cwKeyer.setRightPaddle(false);
                 return true;
             }
             return false;
         });
 
-        rPaddles.addView(paddleLeft);
+        rPaddles.addView(btnPaddleLeft);
         View pSpacer = new View(context);
         pSpacer.setLayoutParams(new LinearLayout.LayoutParams(10, 1));
         rPaddles.addView(pSpacer);
-        rPaddles.addView(paddleRight);
+        rPaddles.addView(btnPaddleRight);
         containerCwKeyer.addView(rPaddles);
 
         viewPrincipal.addView(containerCwKeyer);
@@ -539,6 +550,9 @@ public class EcranComenzi {
         cwKeyer.setIambicModeB(iambicB);
         cwKeyer.setUseRts(rts);
 
+        // Actualizăm etichetele padelelor
+        actualizeazaEtichetePadele(rev);
+
         // Actualizăm interfața grafică pentru a reflecta setările încărcate
         if (containerCwKeyer != null) {
             for (int i = 0; i < containerCwKeyer.getChildCount(); i++) {
@@ -566,6 +580,18 @@ public class EcranComenzi {
             }
         }
         isInitialLoading = false;
+    }
+
+    private void actualizeazaEtichetePadele(boolean reversed) {
+        if (btnPaddleLeft != null && btnPaddleRight != null) {
+            if (reversed) {
+                btnPaddleLeft.setText("DAH");
+                btnPaddleRight.setText("DIT");
+            } else {
+                btnPaddleLeft.setText("DIT");
+                btnPaddleRight.setText("DAH");
+            }
+        }
     }
 
     public void setStareConexiune(boolean connected) {

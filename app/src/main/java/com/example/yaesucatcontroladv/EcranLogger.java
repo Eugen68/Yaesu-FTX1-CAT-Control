@@ -18,6 +18,7 @@ import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
@@ -47,15 +48,26 @@ public class EcranLogger {
     private EditText etTimeOn;
     private EditText etName, etQth, etGrid, etPower, etComment, etMyGrid;
     private ListView lvIstoricQso;
-    private Button btnAdaugaQso;
+    private Button btnAdaugaQso, btnPreiaDinRadio;
     private Button btnAnuleazaEditare;
-    private TextView tvStareEditare;
+    private TextView tvStareEditare, tvTitluCeas;
 
     private Long idQsoInEditare = null;
     private String qsoDateInEditare = null;
 
+    private long lastQrzClickTime = 0;
+    private static final long DOUBLE_CLICK_TIME_DELTA = 500; // milisecunde
+
     private static final int REQUEST_CODE_LOCATION = 501;
     private final Handler handler = new Handler(Looper.getMainLooper());
+
+    private final Runnable runnableCeas = new Runnable() {
+        @Override
+        public void run() {
+            actualizeazaCeasHeader();
+            handler.postDelayed(this, 10000); // Actualizează la fiecare 10 secunde
+        }
+    };
 
     public EcranLogger(Context context, RadioManager radioManager) {
         this.context = context;
@@ -103,66 +115,76 @@ public class EcranLogger {
         viewPrincipal.setBackgroundColor(Color.parseColor("#121212"));
         viewPrincipal.setPadding(30, 30, 30, 0);
 
-        TextView tvTitlu = new TextView(context);
-        tvTitlu.setText("QSO LOGGER");
-        tvTitlu.setTextColor(Color.WHITE);
-        tvTitlu.setTextSize(18);
-        tvTitlu.setTypeface(null, Typeface.BOLD);
-        tvTitlu.setPadding(0, 0, 0, 20);
-        viewPrincipal.addView(tvTitlu);
+        tvTitluCeas = new TextView(context);
+        tvTitluCeas.setTextColor(Color.WHITE);
+        tvTitluCeas.setTextSize(16);
+        tvTitluCeas.setTypeface(null, Typeface.BOLD);
+        tvTitluCeas.setPadding(0, 0, 0, 20);
+        tvTitluCeas.setClickable(true);
+        tvTitluCeas.setOnClickListener(v -> {
+            SimpleDateFormat sdf = new SimpleDateFormat("HH:mm", Locale.US);
+            sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
+            etTimeOn.setText(sdf.format(Calendar.getInstance(TimeZone.getTimeZone("UTC")).getTime()));
+            Toast.makeText(context, "UTC Time Updated", Toast.LENGTH_SHORT).show();
+        });
+        viewPrincipal.addView(tvTitluCeas);
+        handler.post(runnableCeas);
 
-        etCall = creeazaEditText("Callsign", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
-        viewPrincipal.addView(etCall);
+        // RAND 1: Callsign (75%) + QRZ.COM (25%)
+        LinearLayout rAndCall = new LinearLayout(context);
+        rAndCall.setOrientation(LinearLayout.HORIZONTAL);
+        rAndCall.setGravity(Gravity.CENTER_VERTICAL);
+
+        etCall = new EditText(context);
+        etCall.setHint("Callsign");
+        etCall.setHintTextColor(Color.GRAY);
+        etCall.setTextColor(Color.WHITE);
+        etCall.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+        etCall.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.AllCaps()});
+        LinearLayout.LayoutParams pEtCall = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.75f);
+        etCall.setLayoutParams(pEtCall);
+        rAndCall.addView(etCall);
 
         Button btnCautaQrz = new Button(context);
-        btnCautaQrz.setText("SEARCH ON QRZ.COM");
+        btnCautaQrz.setText("QRZ.COM");
         btnCautaQrz.setBackgroundColor(Color.parseColor("#5D4037"));
         btnCautaQrz.setTextColor(Color.WHITE);
-        LinearLayout.LayoutParams pBtnQrz = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pBtnQrz.setMargins(0, 0, 0, 15);
+        btnCautaQrz.setTextSize(10);
+        LinearLayout.LayoutParams pBtnQrz = new LinearLayout.LayoutParams(0, 110, 0.25f);
+        pBtnQrz.setMargins(10, 0, 0, 0);
         btnCautaQrz.setLayoutParams(pBtnQrz);
-        btnCautaQrz.setOnClickListener(v -> initiazaCautareQrz());
-        viewPrincipal.addView(btnCautaQrz);
+        btnCautaQrz.setOnClickListener(v -> {
+            long clickTime = System.currentTimeMillis();
+            if (clickTime - lastQrzClickTime < DOUBLE_CLICK_TIME_DELTA) {
+                // DOUBLE CLICK -> Deschide Browser
+                String call = etCall.getText().toString().trim();
+                if (!call.isEmpty()) {
+                    String url = "https://www.qrz.com/db/" + call;
+                    android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_VIEW);
+                    i.setData(android.net.Uri.parse(url));
+                    context.startActivity(i);
+                }
+            } else {
+                // SINGLE CLICK -> Căutare XML existentă
+                initiazaCautareQrz();
+            }
+            lastQrzClickTime = clickTime;
+        });
+        rAndCall.addView(btnCautaQrz);
+        viewPrincipal.addView(rAndCall);
 
         LinearLayout rAndRst = new LinearLayout(context);
         rAndRst.setOrientation(LinearLayout.HORIZONTAL);
         etRstSent = creeazaEditTextPondere("RST Tx", InputType.TYPE_CLASS_TEXT);
-        etRstSent.setText("599");
+        etRstSent.setText("59");
         etRstRcvd = creeazaEditTextPondere("RST Rx", InputType.TYPE_CLASS_TEXT);
-        etRstRcvd.setText("599");
+        etRstRcvd.setText("59");
 
-        etTimeOn = creeazaEditTextPondere("UTC Time (HH:MM)", InputType.TYPE_CLASS_TEXT);
-        etTimeOn.setKeyListener(android.text.method.DigitsKeyListener.getInstance("0123456789:"));
-        etTimeOn.addTextChangedListener(new TextWatcher() {
-            private boolean modificandu = false;
-            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
-            @Override
-            public void afterTextChanged(Editable s) {
-                if (modificandu) return;
-                String doarCifre = s.toString().replaceAll("[^0-9]", "");
-                if (doarCifre.length() > 4) doarCifre = doarCifre.substring(0, 4);
-                StringBuilder formatat = new StringBuilder();
-                for (int i = 0; i < doarCifre.length(); i++) {
-                    if (i == 2) formatat.append(":");
-                    formatat.append(doarCifre.charAt(i));
-                }
-                String textNou = formatat.toString();
-                if (!s.toString().equals(textNou)) {
-                    modificandu = true;
-                    etTimeOn.removeTextChangedListener(this);
-                    etTimeOn.setText(textNou);
-                    etTimeOn.post(() -> {
-                        int lungimeReala = etTimeOn.getText().length();
-                        int pozitieDorita = textNou.length();
-                        etTimeOn.setSelection(Math.min(pozitieDorita, lungimeReala));
-                        etTimeOn.addTextChangedListener(this);
-                        modificandu = false;
-                    });
-                }
-            }
-        });
-
+        etTimeOn = creeazaEditTextPondere("UTC Time", InputType.TYPE_CLASS_TEXT);
+        etTimeOn.setFocusable(true);
+        etTimeOn.setClickable(true);
+        etTimeOn.setCursorVisible(true);
+        
         rAndRst.addView(etRstSent);
         rAndRst.addView(spatiuOrizontal());
         rAndRst.addView(etRstRcvd);
@@ -174,7 +196,29 @@ public class EcranLogger {
         rAndFrecventa.setOrientation(LinearLayout.HORIZONTAL);
         etFreq = creeazaEditTextPondere("Freq. (MHz)", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
         etBand = creeazaEditTextPondere("Band", InputType.TYPE_CLASS_TEXT);
-        etMode = creeazaEditTextPondere("Mode", InputType.TYPE_CLASS_TEXT);
+        etMode = creeazaEditTextPondere("Mode", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
+        etMode.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.AllCaps()});
+
+        // AUTO-BAND logic
+        etFreq.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable s) {
+                try {
+                    String val = s.toString();
+                    if (!val.isEmpty()) {
+                        double mhz = Double.parseDouble(val);
+                        long hz = (long) (mhz * 1_000_000);
+                        String banda = StareRadio.deriveazaBanda(hz);
+                        if (!banda.isEmpty()) etBand.setText(banda);
+                    } else {
+                        // Revine la hint (golește textul)
+                        etBand.setText("");
+                    }
+                } catch (Exception ignored) {}
+            }
+        });
+
         rAndFrecventa.addView(etFreq);
         rAndFrecventa.addView(spatiuOrizontal());
         rAndFrecventa.addView(etBand);
@@ -182,15 +226,44 @@ public class EcranLogger {
         rAndFrecventa.addView(etMode);
         viewPrincipal.addView(rAndFrecventa);
 
-        Button btnPreiaDinRadio = new Button(context);
-        btnPreiaDinRadio.setText("GET FREQ/MODE FROM RADIO");
+        // RAND BUTOANE: GET FREQ / CANCEL (50%) + ADD QSO / SAVE (50%)
+        LinearLayout rAndActionButtons = new LinearLayout(context);
+        rAndActionButtons.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams pBtnHalf = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+
+        btnPreiaDinRadio = new Button(context);
+        btnPreiaDinRadio.setText("GET FREQ/MODE");
         btnPreiaDinRadio.setBackgroundColor(Color.parseColor("#007ACC"));
         btnPreiaDinRadio.setTextColor(Color.WHITE);
-        LinearLayout.LayoutParams pBtnPreia = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pBtnPreia.setMargins(0, 0, 0, 15);
-        btnPreiaDinRadio.setLayoutParams(pBtnPreia);
+        btnPreiaDinRadio.setLayoutParams(pBtnHalf);
         btnPreiaDinRadio.setOnClickListener(v -> solicitaFrecventaSiModDinRadio());
-        viewPrincipal.addView(btnPreiaDinRadio);
+        rAndActionButtons.addView(btnPreiaDinRadio);
+
+        btnAnuleazaEditare = new Button(context);
+        btnAnuleazaEditare.setText("CANCEL EDIT QSO");
+        btnAnuleazaEditare.setBackgroundColor(Color.parseColor("#757575"));
+        btnAnuleazaEditare.setTextColor(Color.WHITE);
+        btnAnuleazaEditare.setLayoutParams(pBtnHalf);
+        btnAnuleazaEditare.setVisibility(View.GONE);
+        btnAnuleazaEditare.setOnClickListener(v -> iesiDinModEditare());
+        rAndActionButtons.addView(btnAnuleazaEditare);
+
+        rAndActionButtons.addView(spatiuOrizontal());
+
+        btnAdaugaQso = new Button(context);
+        btnAdaugaQso.setText("ADD QSO TO LOG");
+        btnAdaugaQso.setBackgroundColor(Color.parseColor("#2E7D32"));
+        btnAdaugaQso.setTextColor(Color.WHITE);
+        btnAdaugaQso.setTypeface(null, Typeface.BOLD);
+        btnAdaugaQso.setLayoutParams(pBtnHalf);
+        btnAdaugaQso.setOnClickListener(v -> salveazaQso());
+        rAndActionButtons.addView(btnAdaugaQso);
+
+        LinearLayout.LayoutParams pActionRow = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pActionRow.setMargins(0, 0, 0, 15);
+        rAndActionButtons.setLayoutParams(pActionRow);
+        viewPrincipal.addView(rAndActionButtons);
+
 
         LinearLayout rAndNume = new LinearLayout(context);
         rAndNume.setOrientation(LinearLayout.HORIZONTAL);
@@ -235,28 +308,6 @@ public class EcranLogger {
         tvStareEditare.setPadding(0, 0, 0, 8);
         tvStareEditare.setVisibility(View.GONE);
         viewPrincipal.addView(tvStareEditare);
-
-        btnAdaugaQso = new Button(context);
-        btnAdaugaQso.setText("ADD QSO TO LOG");
-        btnAdaugaQso.setBackgroundColor(Color.parseColor("#2E7D32"));
-        btnAdaugaQso.setTextColor(Color.WHITE);
-        btnAdaugaQso.setTypeface(null, Typeface.BOLD);
-        LinearLayout.LayoutParams pBtnAdauga = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pBtnAdauga.setMargins(0, 5, 0, 5);
-        btnAdaugaQso.setLayoutParams(pBtnAdauga);
-        btnAdaugaQso.setOnClickListener(v -> salveazaQso());
-        viewPrincipal.addView(btnAdaugaQso);
-
-        btnAnuleazaEditare = new Button(context);
-        btnAnuleazaEditare.setText("CANCEL EDIT / NEW QSO");
-        btnAnuleazaEditare.setBackgroundColor(Color.parseColor("#757575"));
-        btnAnuleazaEditare.setTextColor(Color.WHITE);
-        LinearLayout.LayoutParams pBtnAnuleaza = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pBtnAnuleaza.setMargins(0, 0, 0, 15);
-        btnAnuleazaEditare.setLayoutParams(pBtnAnuleaza);
-        btnAnuleazaEditare.setVisibility(View.GONE);
-        btnAnuleazaEditare.setOnClickListener(v -> iesiDinModEditare());
-        viewPrincipal.addView(btnAnuleazaEditare);
 
         TextView tvIstoricLabel = new TextView(context);
         tvIstoricLabel.setText("QSO History (long press to delete):");
@@ -389,8 +440,11 @@ public class EcranLogger {
         etComment.setText(q.comment);
         etPower.setText(q.power);
         etMyGrid.setText(q.myGridsquare);
+        
         btnAdaugaQso.setText("SAVE CHANGES");
         btnAnuleazaEditare.setVisibility(View.VISIBLE);
+        if (btnPreiaDinRadio != null) btnPreiaDinRadio.setVisibility(View.GONE);
+        
         tvStareEditare.setText("Editing QSO: " + q.call + " (" + q.qsoDate + ")");
         tvStareEditare.setVisibility(View.VISIBLE);
     }
@@ -403,10 +457,12 @@ public class EcranLogger {
         etQth.setText("");
         etGrid.setText("");
         etComment.setText("");
-        etRstSent.setText("599");
-        etRstRcvd.setText("599");
+        etRstSent.setText("59");
+        etRstRcvd.setText("59");
         btnAdaugaQso.setText("ADD QSO TO LOG");
         btnAnuleazaEditare.setVisibility(View.GONE);
+        if (btnPreiaDinRadio != null) btnPreiaDinRadio.setVisibility(View.VISIBLE);
+        
         tvStareEditare.setVisibility(View.GONE);
     }
 
@@ -567,7 +623,28 @@ public class EcranLogger {
                     dataFormatata, oraFormatata, callStr, freqStr, modeStr, rstSentStr, rstRcvdStr);
             linii.add(linie);
         }
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(context, android.R.layout.simple_list_item_1, linii);
+
+        ArrayAdapter<String> adapter = new ArrayAdapter<String>(context, android.R.layout.simple_list_item_1, linii) {
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                View view = super.getView(position, convertView, parent);
+                TextView tv = (TextView) view.findViewById(android.R.id.text1);
+                
+                // Stil text discret
+                tv.setTextColor(Color.parseColor("#E0E0E0"));
+                tv.setTextSize(11);
+                tv.setTypeface(Typeface.MONOSPACE);
+
+                // Alternanță culori (Zebra Striping)
+                if (position % 2 == 0) {
+                    view.setBackgroundColor(Color.parseColor("#1A1A1A"));
+                } else {
+                    view.setBackgroundColor(Color.parseColor("#222222"));
+                }
+                return view;
+            }
+        };
+
         lvIstoricQso.setAdapter(adapter);
         lvIstoricQso.setOnItemClickListener((parent, view, position, id) ->
                 intraInModEditare(qsouri.get(position)));
@@ -586,6 +663,20 @@ public class EcranLogger {
                     .show();
             return true;
         });
+    }
+
+    private void actualizeazaCeasHeader() {
+        SimpleDateFormat sdfUtc = new SimpleDateFormat("HH:mm", Locale.US);
+        sdfUtc.setTimeZone(TimeZone.getTimeZone("UTC"));
+        String utcStr = sdfUtc.format(Calendar.getInstance(TimeZone.getTimeZone("UTC")).getTime());
+
+        SimpleDateFormat sdfLocal = new SimpleDateFormat("HH:mm", Locale.US);
+        sdfLocal.setTimeZone(TimeZone.getDefault());
+        String localStr = sdfLocal.format(Calendar.getInstance().getTime());
+
+        if (tvTitluCeas != null) {
+            tvTitluCeas.setText(String.format("QSO LOGGER | UTC: %s | LOCAL: %s", utcStr, localStr));
+        }
     }
 
     public void preiaIndicativDinRtty(String callsign) {

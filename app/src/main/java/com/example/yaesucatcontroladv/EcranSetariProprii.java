@@ -316,7 +316,45 @@ public class EcranSetariProprii {
         rAndAdif.addView(btnImportAdif);
         llMain.addView(rAndAdif);
 
+        // ============================================================
+        // LINIA 3: SHARE ADIF LOG (EMAIL / CLOUD)
+        // ============================================================
+        Button btnShareAdif = new Button(context);
+        btnShareAdif.setText("✉️ SHARE ADIF LOG (EMAIL/CLOUD)");
+        btnShareAdif.setBackgroundColor(Color.parseColor("#1565C0"));
+        btnShareAdif.setTextColor(Color.WHITE);
+        btnShareAdif.setTypeface(null, Typeface.BOLD);
+        LinearLayout.LayoutParams pBtnShare = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 130);
+        pBtnShare.setMargins(4, 5, 4, 10);
+        btnShareAdif.setLayoutParams(pBtnShare);
+        btnShareAdif.setOnClickListener(v -> executaShareAdif());
+        llMain.addView(btnShareAdif);
+
         viewPrincipal.addView(llMain);
+    }
+
+    // ============================================================
+    // SHARE ADIF LOG LOGIC
+    // ============================================================
+    private void executaShareAdif() {
+        new Thread(() -> {
+            try {
+                Uri uri = AdifExporter.getShareableAdifUri(context, new QsoDbHelper(context));
+                
+                Intent intent = new Intent(Intent.ACTION_SEND);
+                intent.setType("text/plain");
+                intent.putExtra(Intent.EXTRA_STREAM, uri);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                
+                ((Activity) context).runOnUiThread(() -> {
+                    context.startActivity(Intent.createChooser(intent, "Share Log via..."));
+                });
+            } catch (Exception e) {
+                ((Activity) context).runOnUiThread(() ->
+                        Toast.makeText(context, "Error sharing log: " + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        }).start();
     }
 
     // ============================================================

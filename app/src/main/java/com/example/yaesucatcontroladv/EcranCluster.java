@@ -1,5 +1,6 @@
 package com.example.yaesucatcontroladv;
 
+import android.app.Activity;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -511,24 +512,31 @@ public class EcranCluster {
     }
 
     private void adaugaSpot(Spot spot) {
-        // Adăugăm în listă (la început, ca să fie cele mai noi sus)
-        spoturi.add(0, spot);
+        Activity activity = (Activity) context;
+        if (activity == null || activity.isFinishing() || activity.isDestroyed()) return;
 
-        // Limităm numărul de spoturi
-        if (spoturi.size() > MAX_SPOTURI) {
-            spoturi.remove(spoturi.size() - 1);
-        }
+        activity.runOnUiThread(() -> {
+            // Adăugăm în listă (la început, ca să fie cele mai noi sus)
+            spoturi.add(0, spot);
 
-        // Adăugăm în UI doar dacă respectă filtrele
-        if (respectaFiltrele(spot)) {
-            View spotView = creeazaSpotView(spot);
-            listaSpoturi.addView(spotView, 0);
-
-            // Limităm și numărul de View-uri din UI
-            if (listaSpoturi.getChildCount() > MAX_SPOTURI) {
-                listaSpoturi.removeViewAt(listaSpoturi.getChildCount() - 1);
+            // Limităm numărul de spoturi în memorie
+            if (spoturi.size() > MAX_SPOTURI) {
+                spoturi.remove(spoturi.size() - 1);
             }
-        }
+
+            // Adăugăm în UI doar dacă respectă filtrele
+            if (respectaFiltrele(spot)) {
+                View spotView = creeazaSpotView(spot);
+                if (listaSpoturi != null) {
+                    listaSpoturi.addView(spotView, 0);
+
+                    // Limităm și numărul de View-uri din UI
+                    if (listaSpoturi.getChildCount() > MAX_SPOTURI) {
+                        listaSpoturi.removeViewAt(listaSpoturi.getChildCount() - 1);
+                    }
+                }
+            }
+        });
     }
 
     private View creeazaSpotView(Spot spot) {
