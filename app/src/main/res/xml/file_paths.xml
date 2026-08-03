@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Permitem partajarea fișierelor din cache-ul intern al aplicației -->
+    <cache-path name="my_cache" path="." />
+    <!-- Permitem partajarea fișierelor din folderul privat al aplicației -->
+    <files-path name="my_logs" path="." />
+</paths>

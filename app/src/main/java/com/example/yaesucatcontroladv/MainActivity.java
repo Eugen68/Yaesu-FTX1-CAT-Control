@@ -291,9 +291,20 @@ public class MainActivity extends AppCompatActivity {
 
         // Chemăm verificările de permisiune și layout după ce am stabilit view-ul principal
         verificaPermisiuneOverlay();
+        verificaPermisiuneNotificari();
         ascundeButoaneNavigare();
 
         getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN);
+    }
+
+    private void verificaPermisiuneNotificari() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(this, 
+                    android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                androidx.core.app.ActivityCompat.requestPermissions(this, 
+                        new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 101);
+            }
+        }
     }
 
     private Button creeazaButonMeniu(String text, View.OnClickListener cl) {
@@ -456,9 +467,11 @@ public class MainActivity extends AppCompatActivity {
             managerEcranRtty.eliberareResurse();
         }
 
-        // Oprim resursele Cluster
-        if (managerEcranCluster != null) {
-            managerEcranCluster.eliberareResurse();
+        // Oprim resursele Cluster (doar dacă ieșim definitiv din aplicație)
+        if (isFinishing()) {
+            if (managerEcranCluster != null) managerEcranCluster.eliberareResurse();
+            // Ne asigurăm că oprim serviciul pentru a închide conexiunea și a elimina notificarea
+            stopService(new Intent(this, ClusterService.class));
         }
 
         // Oprim resursele CW Keyer

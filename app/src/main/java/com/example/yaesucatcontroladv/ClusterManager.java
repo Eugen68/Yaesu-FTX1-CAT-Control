@@ -10,10 +10,10 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -40,6 +40,7 @@ public class ClusterManager {
     private final AtomicBoolean isRunning = new AtomicBoolean(false);
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService commandExecutor;
+    private ScheduledExecutorService heartbeatScheduler;
 
     private String serverHost;
     private int serverPort;
@@ -90,8 +91,27 @@ public class ClusterManager {
         loadSettings(); // Reîncarcă setările (pot fi schimbate)
 
         isRunning.set(true);
+        startHeartbeat();
         connectionThread = new Thread(this::connectionLoop, "ClusterConnection");
         connectionThread.start();
+    }
+
+    private void startHeartbeat() {
+        stopHeartbeat();
+        heartbeatScheduler = Executors.newSingleThreadScheduledExecutor();
+        heartbeatScheduler.scheduleWithFixedDelay(() -> {
+            if (isConnected()) {
+                // Trimitem un Heartbeat (CRLF) pentru a menține socket-ul activ
+                sendCommand("\r\n");
+            }
+        }, 60, 60, TimeUnit.SECONDS);
+    }
+
+    private void stopHeartbeat() {
+        if (heartbeatScheduler != null) {
+            heartbeatScheduler.shutdownNow();
+            heartbeatScheduler = null;
+        }
     }
 
     /**
@@ -99,6 +119,7 @@ public class ClusterManager {
      */
     public void disconnect() {
         isRunning.set(false);
+        stopHeartbeat();
 
         try {
             if (socket != null && !socket.isClosed()) {
@@ -140,7 +161,7 @@ public class ClusterManager {
             notifyStatus(true, "Connected & Authenticated");
             Log.d(TAG, "Autentificare finalizată. Încep citirea spoturilor...");
 
-            // Citire spot-uri în buclă
+            // Citire spot-uri în buclă (blocking read)
             while (isRunning.get()) {
                 try {
                     String line = reader.readLine();
@@ -150,9 +171,6 @@ public class ClusterManager {
                     }
 
                     if (!isRunning.get()) break;
-
-                    // Logăm liniile brute pentru debug în Logcat
-                    Log.v(TAG, "RX: " + line);
 
                     // Parsează linia ca spot
                     Spot spot = parseSpotLine(line);
@@ -164,8 +182,6 @@ public class ClusterManager {
                         });
                     }
                 } catch (java.net.SocketTimeoutException e) {
-                    // Timeout-ul a expirat dar nu e eroare fatală. 
-                    // Continuăm să ascultăm.
                     Log.d(TAG, "Read timeout (5 min). Still listening...");
                 }
             }
