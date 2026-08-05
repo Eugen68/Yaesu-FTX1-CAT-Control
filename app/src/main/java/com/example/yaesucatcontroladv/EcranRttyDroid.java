@@ -1297,7 +1297,17 @@ public class EcranRttyDroid {
             // de mai jos - pe durata aproximativa a unui simbol RTTY (~22ms), evitand atat
             // framing-ul de gunoi cat si o discontinuitate brusca in integrator.
             final double SNR_GATING_MARK_BIAS_ALPHA = 0.001; // ~1000 esantioane (~20ms) pana converge
-            final double SNR_GATING_MARK_BIAS_FACTOR = 2.0;  // multiplu peste pragul "aproape de zero = Mark"
+
+            // CORECTIE: ținta era inainte "nivelZgomotMediu * pragSensibilitate * 2.0" -
+            // dar pragSensibilitate e sliderul de "Sensibilitate" din UI, ajustabil de
+            // utilizator intre 0% si 100%. Daca utilizatorul il seta la 0%, tinta devenea
+            // EXACT 0, integratorul deriva spre zero (nu spre Mark), iar decizia finala
+            // (Math.abs(integratCurent) < prag=0 -> fals; apoi integratCurent>0 -> 0>0 = fals)
+            // cadea pe SPACE - exact opusul bias-ului intentionat, la o setare complet
+            // valida de UI. Decuplam tinta de pragSensibilitate si folosim o marja FIXA,
+            // independenta de orice slider al utilizatorului, ca sa garanteze intotdeauna
+            // o valoare strict pozitiva.
+            final double SNR_GATING_MARK_BIAS_MARGINE = 0.1;
 
             noiseFloor = 1e-9;
 
@@ -1506,7 +1516,7 @@ public class EcranRttyDroid {
                     // fade (vezi comentariul de la SNR_GATING_MARK_BIAS_ALPHA mai sus).
                     double integratCurent;
                     if (folosesteSnrGating && magTotala < noiseFloor * snrGatingK) {
-                        double tintaMark = nivelZgomotMediu * pragSensibilitate * SNR_GATING_MARK_BIAS_FACTOR;
+                        double tintaMark = Math.max(nivelZgomotMediu, 1e-9) * SNR_GATING_MARK_BIAS_MARGINE;
                         integratCurent = integratVech + (tintaMark - integratVech) * SNR_GATING_MARK_BIAS_ALPHA;
                     } else {
                         integratCurent = (alfaIntegrator * diferentaBruta) + ((1.0 - alfaIntegrator) * integratVech);
