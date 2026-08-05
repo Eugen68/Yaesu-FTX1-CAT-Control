@@ -135,6 +135,11 @@ public class EcranRttyDroid {
     // ci doar constantele de rotatie pentru o corelatie glisanta recursiva O(1) per esantion
     // (echivalent matematic cu corelatia completa pe fereastra, actualizat incremental).
     private volatile boolean folosesteMatchedFilter = false;
+    // CIZELARE: punctul de esantionare al bitului pentru Matched Filter (fractie din
+    // durata unui bit, la care se face citirea) - vezi explicatia detaliata din
+    // bucla de decodare RTTY, langa PRAG_CONFIRMARE_START. Camp de clasa (nu constanta
+    // locala in thread-ul audio) tocmai ca sa poata fi ajustat live din UI (slider-ul
+    // "Latime Filtru", repurpozat pentru modul MF - vezi actualizeazaStareSliderLatime()).
     private double[] mfBuffer; // buffer circular cu ultimele mfSamplesPerBit esantioane (pt. x_iesit)
     private int mfBufferPos = 0;
     private int mfSamplesPerBit = 1056;
@@ -244,6 +249,13 @@ public class EcranRttyDroid {
      * doar de rezonatorul Chebyshev. In modul Matched Filter, rCheb nu are niciun efect
      * asupra decodarii - il dezactivam vizual, ca sa nu para ca ajusteaza ceva ce de
      * fapt nu face nimic in acel mod.
+     *
+     * ISTORIC: am incercat sa repurpozam acest slider in modul MF pentru a controla
+     * punctul de esantionare al bitului (0.45/0.50/0.55) - teste pe hardware real au
+     * aratat ca nicio valoare nu aducea o imbunatatire clara si vizibila fata de
+     * mijlocul fix (0.5), asa ca am simplificat inapoi: punctul de esantionare e acum
+     * o constanta fixa (PCT_ESANTIONARE = 0.5) in bucla de decodare, identica pentru
+     * ambii decodori, fara control din UI.
      */
     private void actualizeazaStareSliderLatime() {
         if (sbLatimeFiltru == null || tvFiltruValoare == null) return;
@@ -1216,6 +1228,17 @@ public class EcranRttyDroid {
             // decat 0.6 la respingerea puseurilor scurte de zgomot).
             final int PRAG_CONFIRMARE_START = (int) Math.round(samplesPerBit * 0.7);
 
+            // ISTORIC: am experimentat cu eșantionarea aproape de finalul bitului pentru
+            // Matched Filter (teoria: fereastra corelatorului, care are exact lungimea unui
+            // simbol, ar da o citire mai "pura" langa tranzitie decat la mijloc). Testat pe
+            // hardware real, ideea a stricat decodarea: marja de timp fata de jitter/drift
+            // (acumulat pe cei 7.5 biti ai unui caracter, plus intarzierea de grup a
+            // filtrelor DNR/NB) conteaza mult mai mult decat "puritatea" teoretica a
+            // ferestrei. Revenit definitiv la esantionare la mijlocul bitului (0.5) pentru
+            // AMBII decodori - ofera marja maxima si simetrica fata de orice eroare de timing.
+            final double PCT_ESANTIONARE = 0.5;
+
+
             int contorEroriFramingConsecutive = 0;
             // Numar de cadre invalide consecutive (stop-bit gresit) care declanseaza
             // un reset complet al starii de decodare - semn de QRM/zgomot sustinut sau
@@ -1542,7 +1565,9 @@ public class EcranRttyDroid {
                         }
                     } else {
                         fazaCeasAcumulator += 1.0;
-                        double punctEstantionareTinta = (bitCounter == 0) ? (samplesPerBit * 1.5) : samplesPerBit;
+                        double punctEstantionareTinta = (bitCounter == 0)
+                                ? (samplesPerBit * (1.0 + PCT_ESANTIONARE))
+                                : samplesPerBit;
 
                         if (fazaCeasAcumulator >= punctEstantionareTinta) {
                             fazaCeasAcumulator -= punctEstantionareTinta;
