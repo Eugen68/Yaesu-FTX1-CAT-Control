@@ -38,6 +38,14 @@ public class EcranRttyDroid {
 
     // Elemente UI
     private Waterfall waterfall;
+    // CIZELARE: constanta unica pentru factorul de subsampling audio -> waterfall
+    // (48000 Hz / 6 = 8000 Hz feed catre FFT-ul waterfall-ului). Inainte, valoarea "6"
+    // era hardcodata separat aici SI ca "SAMPLE_RATE = 8000" in Waterfall.java, fara
+    // nicio legatura explicita intre ele - o modificare facuta doar intr-un loc ar fi
+    // dezaliniat tacit axa de frecventa afisata fata de datele reale. Acum se calculeaza
+    // rata efectiva din aceasta constanta si se transmite explicit la constructia
+    // Waterfall-ului (vezi construiesteInterfata()).
+    private static final int WATERFALL_FACTOR_DECIMARE = 6;
     private TextView tvFrecventaCurenta;
     private SeekBar sbSensibilitate, sbLatimeFiltru;
     private TextView tvSensibilitateValoare, tvFiltruValoare;
@@ -93,6 +101,19 @@ public class EcranRttyDroid {
     private LinearLayout rAndSliderDnr;
     private SeekBar sbDnrLatime;
     private TextView tvDnrValoare;
+    // Garda anti-recursivitate: setProgress() apelat programatic (din interiorul
+    // clamp-ului de mai jos) re-declanseaza onProgressChanged - flag-ul opreste
+    // procesarea dubla a aceluiasi eveniment.
+    private boolean ajustareProgramaticaDnr = false;
+
+    // CIZELARE: Matched Filter-ul are nevoie de cel putin 2-3 armonici ale semnalului
+    // dreptunghiular RTTY (fundamentala 45.45 Hz) ca sa functioneze optim, adica o banda
+    // de cel putin ~225 Hz fata de centru. Sub acest prag, marginile filtrului biquad DNR
+    // (cu distorsiunea lui de faza/grup-delay specifica IIR) incep sa taie chiar din
+    // energia utila de la Mark/Space, distorsionand pulsurile RTTY (ISI) inainte ca MF
+    // sa aiba pe ce corela. Fortam un prag de siguranta putin mai generos (400 Hz) cat
+    // timp decodorul Matched Filter e activ.
+    private static final double DNR_LATIME_MIN_HZ_MATCHED_FILTER = 400.0;
 
     // SNR Gating - îngheață decizia de bit la energie insuficientă
     private volatile boolean folosesteSnrGating = false;
@@ -282,6 +303,47 @@ public class EcranRttyDroid {
         dnrA1 = a1 / a0; dnrA2 = a2 / a0;
     }
 
+    /**
+     * Progresul minim de slider (0-20) care garanteaza latimeDnrHz efectiv rezultat
+     * >= DNR_LATIME_MIN_HZ_MATCHED_FILTER, tinand cont ca slider-ul are pasi discreti
+     * de 62.5 Hz (1250/20) - vezi comentariul din aplicaClampDnrPentruMatchedFilter.
+     */
+    private int progresMinimDnrPentruMF() {
+        int progresMinim = (int) Math.ceil((DNR_LATIME_MIN_HZ_MATCHED_FILTER - 250.0) * 20.0 / 1250.0);
+        return Math.max(0, Math.min(20, progresMinim));
+    }
+
+    /**
+     * CIZELARE: cand decodorul Matched Filter e activ, forteaza latimea DNR la un
+     * minim de siguranta (DNR_LATIME_MIN_HZ_MATCHED_FILTER), ca marginile filtrului
+     * biquad sa nu taie din energia utila de la Mark/Space inainte ca MF sa aiba pe
+     * ce corela. Actualizeaza si UI-ul (slider + text) ca schimbarea sa fie vizibila
+     * pentru utilizator, nu doar aplicata silentios pe fundal.
+     *
+     * CORECTIE: progresul minim se calculeaza cu Math.ceil() in loc de Math.round().
+     * Slider-ul are pasi discreti de 62.5 Hz, iar 400 Hz nu cade exact pe un pas ->
+     * Math.round(2.4) da progres 2, adica 375 Hz dupa recalcularea facuta de
+     * onProgressChanged (sub prag!). Cu Math.ceil(2.4) = 3 obtinem 437.5 Hz, primul
+     * pas de slider care respecta efectiv pragul de 400 Hz.
+     *
+     * NOTA: aceasta metoda acopera comutarea decoderului; onProgressChanged de mai
+     * jos acopera separat cazul in care utilizatorul (sau alt cod) misca slider-ul
+     * sub prag DUPA ce Matched Filter e deja activ - cele doua se completeaza.
+     */
+    private void aplicaClampDnrPentruMatchedFilter() {
+        if (!folosesteMatchedFilter || latimeDnrHz >= DNR_LATIME_MIN_HZ_MATCHED_FILTER) return;
+
+        int progresMinim = progresMinimDnrPentruMF();
+        latimeDnrHz = 250.0 + progresMinim * (1250.0 / 20.0);
+        calculeazaCoeficientiDnr(sampleRateFiltre);
+
+        if (sbDnrLatime != null && tvDnrValoare != null) {
+            sbDnrLatime.setProgress(progresMinim);
+            tvDnrValoare.setText("~" + Math.round(latimeDnrHz) + " Hz");
+            salveazaSetareRtty(PREF_RTTY_DNR_BW, progresMinim);
+        }
+    }
+
     private void sincronizeazaSetariReceptie() {
         double wAfc = 2.0 * Math.PI * frecventaTunedBaza / sampleRateFiltre;
         afcRotRe = Math.cos(wAfc);
@@ -356,12 +418,12 @@ public class EcranRttyDroid {
                     if (etRttyInputLive != null) {
                         // REFACTORIZARE: folosim append() si adaugam sufix inteligent (Spatiu sau Newline)
                         String current = etRttyInputLive.getText().toString();
-                        
+
                         // Prefix inteligent
                         if (!current.isEmpty() && !current.endsWith(" ") && !current.endsWith("\n")) {
                             etRttyInputLive.append(" ");
                         }
-                        
+
                         // Text Macro + Sufix selectat (Enter sau Spatiu)
                         String sufix = folosesteMacroCr ? "\n" : " ";
                         etRttyInputLive.append(textFinal + sufix);
@@ -409,7 +471,7 @@ public class EcranRttyDroid {
         llTopContent.addView(tvFrecventaCurenta);
 
         // WATERFALL
-        waterfall = new Waterfall(context);
+        waterfall = new Waterfall(context, 48000 / WATERFALL_FACTOR_DECIMARE);
         LinearLayout.LayoutParams pWater = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 260);
         pWater.setMargins(0, 5, 0, 10);
@@ -530,6 +592,7 @@ public class EcranRttyDroid {
                 initMatchedFilterTemplates(48000, BAUD_RTTY);
             }
             recalculeazaShabloaneMF();
+            aplicaClampDnrPentruMatchedFilter();
             solicitaResetFiltre = true;
             actualizeazaStareSliderLatime();
             Toast.makeText(context, "Decoder: " + (folosesteMatchedFilter ? "Matched Filter" : "Chebyshev"),
@@ -762,10 +825,31 @@ public class EcranRttyDroid {
         tvDnrValoare.setTypeface(Typeface.MONOSPACE);
         sbDnrLatime.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                latimeDnrHz = 250.0 + progress * (1250.0 / 20.0);
+                // Garda: aceasta invocare a fost declansata chiar de setProgress() de mai jos -
+                // evitam sa procesam de doua ori acelasi eveniment (si sa suprascriem
+                // eronat latimeDnrHz cu valoarea NEclampata calculata la primul apel).
+                if (ajustareProgramaticaDnr) return;
+
+                // CIZELARE: cat timp Matched Filter e activ, nu lasa slider-ul (nici prin
+                // drag manual, nici prin setProgress() programatic din alta parte) sa coboare
+                // sub pragul minim de siguranta - altfel clamp-ul de la comutarea decoderului
+                // (aplicaClampDnrPentruMatchedFilter) poate fi ocolit oricand de o simpla
+                // miscare a slider-ului dupa aceea.
+                int progresEfectiv = progress;
+                if (folosesteMatchedFilter) {
+                    int progresMinim = progresMinimDnrPentruMF();
+                    if (progresEfectiv < progresMinim) {
+                        progresEfectiv = progresMinim;
+                        ajustareProgramaticaDnr = true;
+                        seekBar.setProgress(progresEfectiv); // repozitioneaza vizual thumb-ul la minimul permis
+                        ajustareProgramaticaDnr = false;
+                    }
+                }
+
+                latimeDnrHz = 250.0 + progresEfectiv * (1250.0 / 20.0);
                 tvDnrValoare.setText("~" + Math.round(latimeDnrHz) + " Hz");
                 calculeazaCoeficientiDnr(sampleRateFiltre);
-                if (fromUser) salveazaSetareRtty(PREF_RTTY_DNR_BW, progress);
+                if (fromUser) salveazaSetareRtty(PREF_RTTY_DNR_BW, progresEfectiv);
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) { handlerDnrLongPress.removeCallbacks(ascundeSliderDnr); }
             @Override public void onStopTrackingTouch(SeekBar seekBar) { handlerDnrLongPress.postDelayed(ascundeSliderDnr, 5000); }
@@ -949,7 +1033,7 @@ public class EcranRttyDroid {
                 InputType.TYPE_TEXT_FLAG_MULTI_LINE |
                 InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
         etRttyInputLive.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.AllCaps()});
-        
+
         final android.graphics.drawable.Drawable clearIcon = new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT);
         etRttyInputLive.setCompoundDrawablesWithIntrinsicBounds(null, null, clearIcon, null);
         etRttyInputLive.setCompoundDrawablePadding(10);
@@ -1013,7 +1097,7 @@ public class EcranRttyDroid {
                 }
             }
         });
-        
+
         btnRttyPttToggle = new Button(context);
         btnRttyPttToggle.setText("PTT");
         btnRttyPttToggle.setBackgroundColor(Color.parseColor("#424242"));
@@ -1180,6 +1264,17 @@ public class EcranRttyDroid {
             final double AFC_MAX_CORECTIE_HZ = 5.0;
             final double AFC_PRAG_OUTLIER_HZ = 20.0;
 
+            // CIZELARE: cand SNR Gating ingheata decizia (energie insuficienta), nu mai
+            // pastram pur si simplu semnul vechi al integratorului - daca fade-ul incepe
+            // chiar in mijlocul unei tranzitii Space->Mark, am ramane "blocati" fals pe
+            // Space pe toata durata fade-ului, ceea ce produce framing de gunoi quando
+            // semnalul revine (RTTY asteapta Mark = idle intre caractere). In loc sa
+            // "inghetam" valoarea, o derivam lin catre o tinta pozitiva (Mark) - suficient
+            // de departe de zero ca sa fie robusta indiferent de ramura din decizia de bit
+            // de mai jos - pe durata aproximativa a unui simbol RTTY (~22ms), evitand atat
+            // framing-ul de gunoi cat si o discontinuitate brusca in integrator.
+            final double SNR_GATING_MARK_BIAS_ALPHA = 0.001; // ~1000 esantioane (~20ms) pana converge
+            final double SNR_GATING_MARK_BIAS_FACTOR = 2.0;  // multiplu peste pragul "aproape de zero = Mark"
 
             noiseFloor = 1e-9;
 
@@ -1224,7 +1319,7 @@ public class EcranRttyDroid {
                 if (waterfall != null && read >= 3072) {
                     synchronized (vectorIstoricPeak) {
                         for (int j = 0; j < 512; j++) {
-                            short sample = audioBuffer[j * 6];
+                            short sample = audioBuffer[j * WATERFALL_FACTOR_DECIMARE];
                             miniBufferFft[j] = sample;
                             vectorIstoricPeak[j] = sample;
                         }
@@ -1383,10 +1478,13 @@ public class EcranRttyDroid {
 
                     nivelZgomotMediu = (0.0005 * magTotala) + (0.9995 * nivelZgomotMediu);
 
-                    // SNR Gating: îngheață integratorul dacă energia este prea mică
+                    // SNR Gating: energie insuficienta -> derivam lin spre Mark (idle RTTY),
+                    // in loc sa inghetam pe orice semn avea integratorul chiar inainte de
+                    // fade (vezi comentariul de la SNR_GATING_MARK_BIAS_ALPHA mai sus).
                     double integratCurent;
                     if (folosesteSnrGating && magTotala < noiseFloor * snrGatingK) {
-                        integratCurent = integratVech; // freeze
+                        double tintaMark = nivelZgomotMediu * pragSensibilitate * SNR_GATING_MARK_BIAS_FACTOR;
+                        integratCurent = integratVech + (tintaMark - integratVech) * SNR_GATING_MARK_BIAS_ALPHA;
                     } else {
                         integratCurent = (alfaIntegrator * diferentaBruta) + ((1.0 - alfaIntegrator) * integratVech);
                     }
@@ -1501,12 +1599,22 @@ public class EcranRttyDroid {
             float[] magnitudeMediata = null;
             int cadreAcumulate = 0;
 
+            // CORECTIE: instanta proprie de SimpleFFT, locala acestui thread de Auto-Tune,
+            // in loc de fosta metoda statica SimpleFFT.magnitudeSpectrum() care partaja o
+            // singura instanta (cu buffere interne mutabile) cu thread-ul de receptie RTTY -
+            // vezi comentariul din SimpleFFT.java. Fiind locala, e implicit thread-safe: nu
+            // exista nicio cale prin care alt thread sa scrie concurent in bufferele ei.
+            SimpleFFT fftAutoTune = new SimpleFFT(512);
+            double[] magBufferAutoTune = new double[256];
+
             for (int cadru = 0; cadru < NUMAR_CADRE_MEDIATE; cadru++) {
                 short[] snapshot = new short[512];
                 synchronized (vectorIstoricPeak) {
                     System.arraycopy(vectorIstoricPeak, 0, snapshot, 0, 512);
                 }
-                float[] magnitude = SimpleFFT.magnitudeSpectrum(snapshot);
+                fftAutoTune.calculeazaMagnitudine(snapshot, 0, magBufferAutoTune);
+                float[] magnitude = new float[magBufferAutoTune.length];
+                for (int i = 0; i < magnitude.length; i++) magnitude[i] = (float) magBufferAutoTune[i];
                 if (magnitudeMediata == null) magnitudeMediata = new float[magnitude.length];
                 for (int i = 0; i < magnitude.length; i++) magnitudeMediata[i] += magnitude[i];
                 cadreAcumulate++;
@@ -1631,11 +1739,11 @@ public class EcranRttyDroid {
                 // Trecem în RX
                 coadaMesajeTxRtty.clear();
                 opreteTxRttySolicitata = true;
-                
+
                 isTransmittingRtty = false;
                 setHardwarePtt(false);
                 setHardwareFsk(false);
-                
+
                 actualizeazaLabelSend();
                 btnRttyPttToggle.setBackgroundColor(Color.parseColor("#424242"));
                 btnRttyPttToggle.setText("PTT");
@@ -1644,7 +1752,7 @@ public class EcranRttyDroid {
                 opreteTxRttySolicitata = false; // Resetăm flag-ul de stop înainte de a porni
                 isTransmittingRtty = true;
                 setHardwarePtt(true);
-                
+
                 // Inițializăm urmărirea textului la lungimea actuală (ignorăm textul vechi din casetă)
                 lastLiveTxLength = etRttyInputLive.getText().length();
 
@@ -1704,7 +1812,7 @@ public class EcranRttyDroid {
      */
     private void porneteWorkerTxRttyDacaNuRuleaza() {
         if (!workerTxRttyActiv.compareAndSet(false, true)) return;
-        
+
         threadWorkerTxRtty = new Thread(() -> {
             long anchorTimeNanos = System.nanoTime();
             String textCurent = "";
@@ -1713,7 +1821,7 @@ public class EcranRttyDroid {
 
             try {
                 while (!opreteTxRttySolicitata) {
-                    // PROTECȚIE ANTI-LAG: Dacă ancora a rămas prea mult în urmă (> 15ms), 
+                    // PROTECȚIE ANTI-LAG: Dacă ancora a rămas prea mult în urmă (> 15ms),
                     // resincronizăm cu timpul real pentru a evita rafală de biți "fast-forward".
                     if (System.nanoTime() - anchorTimeNanos > 15_000_000L) {
                         anchorTimeNanos = System.nanoTime();
@@ -1747,7 +1855,7 @@ public class EcranRttyDroid {
                     // 2. DETERMINARE CARACTER DE TRIMIS
                     int codBaudot;
                     boolean esteDiddle = textCurent.isEmpty();
-                    
+
                     if (esteDiddle) {
                         if (!folosesteDiddle) {
                             // Dacă Diddle e oprit, stăm în Mark (Idle) fără bit-banging activ
@@ -1765,9 +1873,9 @@ public class EcranRttyDroid {
 
                         // Log în Terminal
                         if (indexCaracter == 1) {
-                             logTxTerminal(textCurent);
+                            logTxTerminal(textCurent);
                         }
-                        
+
                         // Encodăm caracterul (poate genera Shift + Cod)
                         int[] coduri = txBaudotCodec.encode(c);
                         for (int cod : coduri) {
@@ -1785,7 +1893,7 @@ public class EcranRttyDroid {
                             }
                             anchorTimeNanos = System.nanoTime();
                         }
-                        continue; 
+                        continue;
                     }
 
                     // 3. TRANSMISIE CARACTER (Diddle)
@@ -1884,11 +1992,11 @@ public class EcranRttyDroid {
         isTransmittingRtty = false;
         setHardwarePtt(false);
         setHardwareFsk(false);
-        
+
         Thread workerTx = threadWorkerTxRtty;
         if (workerTx != null && workerTx.isAlive()) {
-            try { 
-                workerTx.join(500); 
+            try {
+                workerTx.join(500);
             } catch (InterruptedException ignored) {}
         }
 
@@ -1896,8 +2004,8 @@ public class EcranRttyDroid {
         // sa continuam imediat presupunand ca s-a oprit doar pentru ca am setat flag-ul.
         Thread decodThread = threadDecodareRtty;
         if (decodThread != null && decodThread.isAlive()) {
-            try { 
-                decodThread.join(500); 
+            try {
+                decodThread.join(500);
             } catch (InterruptedException ignored) {}
         }
 

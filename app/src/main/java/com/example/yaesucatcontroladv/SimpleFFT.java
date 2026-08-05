@@ -84,20 +84,20 @@ public class SimpleFFT {
         }
     }
 
-    private static SimpleFFT instantaStatica;
-
-    public static float[] magnitudeSpectrum(short[] audioIn) {
-        if (instantaStatica == null) {
-            instantaStatica = new SimpleFFT(512);
-        }
-
-        double[] magOut = new double[256];
-        instantaStatica.calculeazaMagnitudine(audioIn, 0, magOut);
-
-        float[] rezultat = new float[256];
-        for (int i = 0; i < 256; i++) {
-            rezultat[i] = (float) magOut[i];
-        }
-        return rezultat;
-    }
+    // CORECTIE (bug de concurenta descoperit la analiza): metoda statica veche
+    // "magnitudeSpectrum(short[])" folosea o SINGURA instanta statica partajata
+    // (instantaStatica), cu buffere interne mutabile (x[], y[]) refolosite intre
+    // apeluri pentru economie de memorie. Problema: aceasta metoda era apelata atat
+    // din thread-ul de receptie RTTY (Waterfall.pushSamples, continuu cat timp
+    // decodarea ruleaza), cat si dintr-un thread separat de Auto-Tune
+    // (executaAutoTuneMecanic), care ruleaza tipic EXACT in timp ce receptia e
+    // activa (Auto-Tune cere explicit ca decodareRttyActiva sa fie true). Cele doua
+    // thread-uri scriau concurent in aceleasi buffere x[]/y[] ale instantei
+    // partajate -> coruptie silentioasa a calculului FFT pe unul sau ambele thread-uri
+    // (fara nicio exceptie aruncata, doar spectru gresit intermitent).
+    //
+    // Solutia: nu mai exista instanta statica partajata. Fiecare apelant (Waterfall,
+    // Auto-Tune) isi tine PROPRIA instanta SimpleFFT (cost neglijabil, cateva KB de
+    // tabele cos/sin) si apeleaza direct calculeazaMagnitudine() pe instanta proprie -
+    // exact modelul deja folosit la BaudotCodec pentru starea LTRS/FIGS separata RX/TX.
 }
