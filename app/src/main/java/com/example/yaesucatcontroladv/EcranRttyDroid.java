@@ -1252,6 +1252,15 @@ public class EcranRttyDroid {
             double nbNivelMediu = 0.05;
             double nbUltimulEsantionValid = 0;
             final double NB_EMA_ALPHA = 0.0008;
+            // CIZELARE: supapa de siguranta - daca blanking-ul dureaza prea mult consecutiv,
+            // nu mai poate fi vorba de un puls real de zgomot impulsiv (QRN/ignition noise
+            // dureaza de regula sub 1-2ms) - e mai probabil un salt real de amplitudine
+            // (AGC-ul statiei reactionand, schimbare de RF/AF gain, retunare pe semnal mai
+            // puternic) pe care NB l-a interpretat gresit ca zgomot. Fortam acceptarea
+            // esantionului dupa acest prag, ca nbNivelMediu sa poata invata noul nivel si
+            // sa iasa din blocare, in loc sa ramana inghetat la nesfarsit.
+            int nbContorBlankConsecutiv = 0;
+            final int NB_MAX_BLANK_CONSECUTIV = 150; // ~3ms la 48kHz
 
             double dnrX1 = 0, dnrX2 = 0, dnrY1 = 0, dnrY2 = 0; // stare filtru bandpass DNR
 
@@ -1336,8 +1345,19 @@ public class EcranRttyDroid {
                     currentByte = 0;
                     contorConfirmareStart = 0;
                     contorEroriFramingConsecutive = 0;
-                    nbNivelMediu = 0.05;
-                    nbUltimulEsantionValid = 0;
+                    // CORECTIE: nbNivelMediu/nbUltimulEsantionValid NU se mai reseteaza aici.
+                    // Erau resetate la orice schimbare de setare neinrudita (latime DNR, latime
+                    // filtru Chebyshev etc.), aducandu-le la valoarea minuscula implicita 0.05 -
+                    // daca semnalul receptionat avea deja amplitudine normala peste
+                    // 0.05*nbFactorPrag (foarte probabil pe un semnal decent), PRIMUL esantion
+                    // de dupa reset era deja blocat de NB, iar nbNivelMediu ramanea inghetat la
+                    // 0.05 la nesfarsit (se actualizeaza DOAR din esantioane acceptate - daca
+                    // niciunul nu mai e acceptat, nu mai are din ce sa invete) - o blocare
+                    // completa si permanenta a decodarii pana la un restart de aplicatie. Nivelul
+                    // de amplitudine invatat de NB nu depinde de filtre/clock recovery, deci nu
+                    // are niciun motiv sa fie resetat aici (acelasi principiu ca la
+                    // nivelZgomotMediu, care nici el nu se reseteaza la solicitaResetFiltre).
+                    nbContorBlankConsecutiv = 0;
                     noiseFloor = 1e-9; // Resetăm și podeaua de zgomot pentru a recalibra SNR-G
                     dnrX1 = 0; dnrX2 = 0; dnrY1 = 0; dnrY2 = 0;
                     if (folosesteMatchedFilter && mfBuffer != null) {
@@ -1371,20 +1391,35 @@ public class EcranRttyDroid {
                     // FUNCTIONALITATE NOUA: Noise Blanker - suprima pulsurile scurte de
                     // zgomot impulsiv (QRN) INAINTE ca esantionul sa alimenteze AFC/
                     // Chebyshev/matched filter, ca tot lantul de decodare sa beneficieze.
+                    // CORECTIE (gaina si oul): nbNivelMediu se actualiza DOAR cat timp NB era
+                    // activ. Daca userul decoda o vreme cu NB OPRIT (implicit la pornire),
+                    // nbNivelMediu ramanea inghetat la valoarea minuscula initiala (0.05) -
+                    // la PRIMA activare a NB, pragul (0.05*nbFactorPrag) era aproape sigur sub
+                    // nivelul real al semnalului, blocand imediat primele esantioane, iar media
+                    // nu mai avea din ce sa invete nivelul real (se actualizeaza doar din
+                    // esantioane acceptate) - blocare completa, deterministica, la fiecare
+                    // prima activare a NB. Acum calibram nbNivelMediu mereu, din semnalul brut,
+                    // INDIFERENT daca gating-ul NB e activ - la activare, pragul e deja realist,
+                    // fara nicio fereastra de "orbire". Supapa de siguranta (NB_MAX_BLANK_
+                    // CONSECUTIV) ramane ca ultima plasa, pentru salturi bruste in timpul
+                    // receptiei (AGC statie, retunare), nu ca mecanism principal de calibrare.
+                    double sampleAbsNb = Math.abs(sample);
                     if (folosesteNoiseBlanker) {
-                        double sampleAbs = Math.abs(sample);
                         double pragNb = nbNivelMediu * nbFactorPrag;
-                        if (sampleAbs > pragNb) {
+                        if (sampleAbsNb > pragNb && nbContorBlankConsecutiv < NB_MAX_BLANK_CONSECUTIV) {
                             // Puls detectat: "hold" - repetam ultimul esantion valid, mai
                             // lin decat sa punem pe zero (evita un "click" spectral brusc).
                             sample = nbUltimulEsantionValid;
+                            nbContorBlankConsecutiv++;
                         } else {
                             nbUltimulEsantionValid = sample;
-                            // Actualizam media DOAR cu esantioane acceptate (ne-suprimate) -
-                            // altfel pulsul insusi ar umfla pragul, permitand pulsuri si mai
-                            // mari sa treaca nedetectate data viitoare.
-                            nbNivelMediu = (NB_EMA_ALPHA * sampleAbs) + ((1.0 - NB_EMA_ALPHA) * nbNivelMediu);
+                            nbNivelMediu = (NB_EMA_ALPHA * sampleAbsNb) + ((1.0 - NB_EMA_ALPHA) * nbNivelMediu);
+                            nbContorBlankConsecutiv = 0;
                         }
+                    } else {
+                        nbNivelMediu = (NB_EMA_ALPHA * sampleAbsNb) + ((1.0 - NB_EMA_ALPHA) * nbNivelMediu);
+                        nbUltimulEsantionValid = sample;
+                        nbContorBlankConsecutiv = 0;
                     }
 
                     // DNR: filtru bandpass biquad centrat Mark/Space - reduce zgomotul de banda larga
