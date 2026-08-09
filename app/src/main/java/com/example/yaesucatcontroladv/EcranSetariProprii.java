@@ -7,9 +7,15 @@ import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
+import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
+import android.widget.ArrayAdapter;
+import android.widget.AutoCompleteTextView;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.Filter;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -17,9 +23,13 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AlertDialog;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 
 public class EcranSetariProprii {
     // Chei SharedPreferences
@@ -33,10 +43,12 @@ public class EcranSetariProprii {
     public static final String PREF_QRZ_PASS = "qrz_pass";
     public static final String PREF_HAMQTH_USER = "hamqth_user";
     public static final String PREF_HAMQTH_PASS = "hamqth_pass";
-    public static final String PREF_CLUSTER_SERVER = "cluster_server";
-    public static final String PREF_CLUSTER_PORT = "cluster_port";
-    public static final String PREF_CLUSTER_USER = "cluster_user";
-    public static final String PREF_CLUSTER_PASS = "cluster_pass";
+    public static final String PREF_CLUSTER_SERVER = "cluster_server"; // acum stochează "ADRESA:port"
+    public static final String PREF_CLUSTER_PORT = "cluster_port"; // păstrat doar pentru compatibilitate/migrare
+    public static final String PREF_CLUSTER_LIST = "cluster_list"; // lista (JSON) de servere, fiecare cu userul propriu
+    public static final String PREF_CLUSTER_USER = "cluster_user"; // păstrat doar pentru compatibilitate/migrare (fostul user global)
+    public static final String PREF_CLUSTER_PASS = "cluster_pass"; // păstrat doar pentru compatibilitate/migrare (fosta parolă globală)
+    private static final String PREF_CLUSTER_CRED_MIGRATED = "cluster_cred_migrated_v2";
 
     // Chei Filtre Cluster
     public static final String PREF_CLUSTER_FILTER_BAND = "cluster_filter_band";
@@ -54,7 +66,14 @@ public class EcranSetariProprii {
     private EditText etMyCall, etMyGrid, etMyQth, etMyItuZone, etMyCqZone;
     private EditText etQrzUser, etQrzPass;
     private EditText etHamQthUser, etHamQthPass;
-    private EditText etClusterServer, etClusterPort, etClusterUser, etClusterPass;
+    private AutoCompleteTextView etClusterServer;
+    private ArrayAdapter<String> clusterAdapter;
+    private final List<String> clusterServerListLive = new ArrayList<>();
+    private EditText etClusterUser, etClusterPass;
+    // Ține minte adresa serverului așa cum era încărcată/selectată, ca să
+    // putem detecta dacă userul a EDITAT adresa (redenumire) sau a introdus
+    // una complet nouă.
+    private String clusterServerOriginal = "";
 
     public EcranSetariProprii(Context context) {
         this.context = context;
@@ -69,7 +88,7 @@ public class EcranSetariProprii {
      */
     private void migreazaParoleLaSecureStorage() {
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        
+
         String[] keysToMigrate = {PREF_QRZ_PASS, PREF_HAMQTH_PASS, PREF_CLUSTER_PASS};
         boolean needsApply = false;
         SharedPreferences.Editor editor = prefs.edit();
@@ -82,10 +101,247 @@ public class EcranSetariProprii {
                 needsApply = true;
             }
         }
-        
+
         if (needsApply) {
             editor.apply();
         }
+    }
+
+    /**
+     * O intrare din lista de clustere: adresa "ADRESA:port" + username-ul propriu
+     * acelui server. Parola NU stă aici (rămâne doar în JSON-ul listei, care e
+     * stocare simplă/neîncriptată) - ea e ținută separat, criptat, via
+     * SecurePrefsHelper, cu o cheie unică derivată din adresa serverului.
+     */
+    public static class ClusterEntry {
+        public String server;
+        public String user;
+
+        public ClusterEntry(String server, String user) {
+            this.server = server == null ? "" : server;
+            this.user = user == null ? "" : user;
+        }
+    }
+
+    /**
+     * Cheia folosită în Secure Storage pentru parola unui server anume.
+     * Publică și statică, ca s-o poată folosi și ClusterManager / BackupHelper.
+     */
+    public static String parolaKeyPentruServer(String server) {
+        return "cluster_pass::" + (server == null ? "" : server.trim().toLowerCase(Locale.US));
+    }
+
+    /**
+     * Caută username-ul salvat pentru un anumit server din listă. Întoarce
+     * șir gol dacă serverul nu e (încă) în listă.
+     */
+    public static String getUserPentruServer(Context context, String server) {
+        if (server == null || server.trim().isEmpty()) return "";
+        for (ClusterEntry e : getClusterEntries(context)) {
+            if (e.server.equalsIgnoreCase(server.trim())) return e.user;
+        }
+        return "";
+    }
+
+    /**
+     * Citește lista de clustere salvate (JSON) din SharedPreferences.
+     * Acceptă și formatul vechi (array de string-uri simple, fără user asociat),
+     * pentru compatibilitate cu instalările făcute înainte de credențialele
+     * per-server. Dacă lista e goală, întoarce un default rezonabil.
+     */
+    public static List<ClusterEntry> getClusterEntries(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        String json = prefs.getString(PREF_CLUSTER_LIST, "");
+        List<ClusterEntry> lista = new ArrayList<>();
+        if (!json.isEmpty()) {
+            try {
+                JSONArray arr = new JSONArray(json);
+                for (int i = 0; i < arr.length(); i++) {
+                    Object item = arr.get(i);
+                    if (item instanceof JSONObject) {
+                        JSONObject o = (JSONObject) item;
+                        lista.add(new ClusterEntry(o.optString("server", ""), o.optString("user", "")));
+                    } else {
+                        // Format vechi: doar adresa, fără user asociat
+                        lista.add(new ClusterEntry(String.valueOf(item), ""));
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        if (lista.isEmpty()) {
+            lista.add(new ClusterEntry("dx.w1nr.net:7300", ""));
+        }
+        return lista;
+    }
+
+    private static void saveClusterEntries(Context context, List<ClusterEntry> lista) {
+        JSONArray arr = new JSONArray();
+        for (ClusterEntry e : lista) {
+            JSONObject o = new JSONObject();
+            try {
+                o.put("server", e.server);
+                o.put("user", e.user);
+            } catch (Exception ignored) {}
+            arr.put(o);
+        }
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putString(PREF_CLUSTER_LIST, arr.toString())
+                .apply();
+    }
+
+    /**
+     * Migrează adresa serverului de cluster din formatul vechi (Server și Port
+     * separate) în noul format unic "ADRESA:port", și migrează o singură dată
+     * user/parolă globale (versiunea dinaintea credențialelor per-server) în
+     * intrarea curentă din listă.
+     */
+    private void migreazaAdresaCluster() {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+
+        // 1) Combinăm Server+Port dacă sunt încă separate (versiuni foarte vechi)
+        String server = prefs.getString(PREF_CLUSTER_SERVER, "");
+        if (!server.isEmpty() && !server.contains(":")) {
+            String port = prefs.getString(PREF_CLUSTER_PORT, "7300");
+            server = server + ":" + port;
+            prefs.edit().putString(PREF_CLUSTER_SERVER, server).apply();
+        }
+
+        // 2) Migrăm user/pass globale vechi în intrarea curentă din listă (o singură dată)
+        if (!prefs.getBoolean(PREF_CLUSTER_CRED_MIGRATED, false)) {
+            String oldUser = prefs.getString(PREF_CLUSTER_USER, "");
+            String oldPass = SecurePrefsHelper.getPassword(context, PREF_CLUSTER_PASS, "");
+
+            if (!server.isEmpty() && (!oldUser.isEmpty() || !oldPass.isEmpty())) {
+                List<ClusterEntry> entries = getClusterEntries(context);
+                boolean gasit = false;
+                for (ClusterEntry e : entries) {
+                    if (e.server.equalsIgnoreCase(server)) {
+                        gasit = true;
+                        if (e.user.isEmpty() && !oldUser.isEmpty()) e.user = oldUser;
+                        break;
+                    }
+                }
+                if (!gasit) entries.add(0, new ClusterEntry(server, oldUser));
+                saveClusterEntries(context, entries);
+
+                if (!oldPass.isEmpty()) {
+                    SecurePrefsHelper.savePassword(context, parolaKeyPentruServer(server), oldPass);
+                }
+            }
+            // Curățăm cheile vechi globale ca să nu re-migrăm greșit la un restore ulterior
+            prefs.edit().remove(PREF_CLUSTER_USER).putBoolean(PREF_CLUSTER_CRED_MIGRATED, true).apply();
+            SecurePrefsHelper.savePassword(context, PREF_CLUSTER_PASS, "");
+        }
+
+        refreshClusterAdapter();
+    }
+
+    /**
+     * Adaugă (sau actualizează, dacă adresa există deja) o intrare în lista de
+     * clustere, cu username-ul propriu acelui server, și o mută în capul
+     * listei. Așa se "populează de la tastatură" lista - orice adresă nouă
+     * salvată rămâne disponibilă și data viitoare, împreună cu user-ul ei.
+     */
+    private void addOrUpdateClusterEntry(String server, String user) {
+        if (server == null || server.trim().isEmpty()) return;
+        List<ClusterEntry> lista = getClusterEntries(context);
+        lista.removeIf(e -> e.server.equalsIgnoreCase(server));
+        lista.add(0, new ClusterEntry(server, user));
+        while (lista.size() > 15) {
+            lista.remove(lista.size() - 1);
+        }
+        saveClusterEntries(context, lista);
+        refreshClusterAdapter();
+    }
+
+    private void refreshClusterAdapter() {
+        clusterServerListLive.clear();
+        for (ClusterEntry e : getClusterEntries(context)) clusterServerListLive.add(e.server);
+
+        if (clusterAdapter == null) {
+            // Adapter custom care NU filtrează sugestiile după textul deja scris
+            // în câmp (comportamentul default al AutoCompleteTextView) - vrem ca
+            // săgeata să arate mereu lista COMPLETĂ, indiferent ce e în câmp.
+            clusterAdapter = new ArrayAdapter<String>(
+                    context, android.R.layout.simple_dropdown_item_1line, clusterServerListLive) {
+                @Override
+                public Filter getFilter() {
+                    return new Filter() {
+                        @Override
+                        protected FilterResults performFiltering(CharSequence constraint) {
+                            FilterResults results = new FilterResults();
+                            results.values = clusterServerListLive;
+                            results.count = clusterServerListLive.size();
+                            return results;
+                        }
+
+                        @Override
+                        protected void publishResults(CharSequence constraint, FilterResults results) {
+                            notifyDataSetChanged();
+                        }
+                    };
+                }
+            };
+            etClusterServer.setAdapter(clusterAdapter);
+        } else {
+            clusterAdapter.notifyDataSetChanged();
+        }
+    }
+
+    /**
+     * Completează câmpurile Username/Password cu credențialele salvate pentru
+     * serverul dat (sau le golește, dacă serverul e nou și n-are încă nimic
+     * salvat).
+     */
+    private void incarcaCredentialePentruServer(String server) {
+        etClusterUser.setText(getUserPentruServer(context, server));
+        etClusterPass.setText(SecurePrefsHelper.getPassword(context, parolaKeyPentruServer(server), ""));
+    }
+
+    /**
+     * Șterge (cu confirmare) serverul aflat acum în câmp din lista dropdown,
+     * împreună cu user/parola salvate pentru el. Dacă era chiar serverul activ,
+     * golim și câmpurile, ca userul să aleagă/scrie altul.
+     */
+    private void stergeServerulCurent() {
+        String server = etClusterServer.getText().toString().trim();
+        if (server.isEmpty()) {
+            Toast.makeText(context, "No server selected", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        List<ClusterEntry> lista = getClusterEntries(context);
+        boolean exista = false;
+        for (ClusterEntry e : lista) {
+            if (e.server.equalsIgnoreCase(server)) { exista = true; break; }
+        }
+        if (!exista) {
+            Toast.makeText(context, "\"" + server + "\" is not saved in the list", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        new AlertDialog.Builder(context)
+                .setTitle("Remove Server")
+                .setMessage("Remove \"" + server + "\" from the list?\nIts saved username/password for this server will also be deleted.")
+                .setPositiveButton("REMOVE", (dialog, which) -> {
+                    List<ClusterEntry> actualizata = getClusterEntries(context);
+                    actualizata.removeIf(e -> e.server.equalsIgnoreCase(server));
+                    saveClusterEntries(context, actualizata);
+                    SecurePrefsHelper.savePassword(context, parolaKeyPentruServer(server), "");
+                    refreshClusterAdapter();
+
+                    String serverActiv = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .getString(PREF_CLUSTER_SERVER, "");
+                    if (server.equalsIgnoreCase(serverActiv)) {
+                        etClusterServer.setText("");
+                        etClusterUser.setText("");
+                        etClusterPass.setText("");
+                        clusterServerOriginal = "";
+                    }
+                    Toast.makeText(context, "Server removed from list", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("CANCEL", null)
+                .show();
     }
 
     public ScrollView getView() {
@@ -210,12 +466,69 @@ public class EcranSetariProprii {
         tvClusterTitlu.setPadding(0, 20, 0, 10);
         llMain.addView(tvClusterTitlu);
 
-        etClusterServer = creeazaCampEditabil("Server (ex: dx.w1nr.net)", false);
-        llMain.addView(etClusterServer);
+        // Câmp dropdown editabil: arată lista de clustere salvate, dar permite
+        // și scrierea directă a unei adrese noi de la tastatură (format ADRESA:port).
+        LinearLayout rowClusterServer = new LinearLayout(context);
+        rowClusterServer.setOrientation(LinearLayout.HORIZONTAL);
+        rowClusterServer.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams pRowClusterServer = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pRowClusterServer.setMargins(0, 0, 0, 12);
+        rowClusterServer.setLayoutParams(pRowClusterServer);
 
-        etClusterPort = creeazaCampEditabil("Port (ex: 7300 or 23)", false);
-        etClusterPort.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
-        llMain.addView(etClusterPort);
+        etClusterServer = new AutoCompleteTextView(context);
+        etClusterServer.setHint("Server:Port (ex: dx.w1nr.net:7300)");
+        etClusterServer.setHintTextColor(Color.GRAY);
+        etClusterServer.setTextColor(Color.WHITE);
+        etClusterServer.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
+        etClusterServer.setThreshold(0); // arată sugestii chiar dacă câmpul e gol
+        LinearLayout.LayoutParams pClusterServer = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        etClusterServer.setLayoutParams(pClusterServer);
+        etClusterServer.setOnClickListener(v -> etClusterServer.showDropDown());
+        etClusterServer.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) etClusterServer.showDropDown();
+        });
+        // Când alegi un server din listă, îi încărcăm automat user/pass proprii
+        etClusterServer.setOnItemClickListener((parent, view, position, id) -> {
+            String server = (String) parent.getItemAtPosition(position);
+            etClusterServer.setText(server);
+            etClusterServer.setSelection(server.length());
+            incarcaCredentialePentruServer(server);
+            clusterServerOriginal = server;
+        });
+        rowClusterServer.addView(etClusterServer);
+
+        // Săgeată vizibilă "▼" - clar indică faptul că e listă derulantă, la
+        // fel ca un Spinner obișnuit; apăsată, deschide lista de clustere salvate.
+        TextView tvSageataDropdown = new TextView(context);
+        tvSageataDropdown.setText("▼");
+        tvSageataDropdown.setTextColor(Color.parseColor("#90A4AE"));
+        tvSageataDropdown.setTextSize(16);
+        tvSageataDropdown.setGravity(android.view.Gravity.CENTER);
+        LinearLayout.LayoutParams pSageata = new LinearLayout.LayoutParams(90, 90);
+        pSageata.setMargins(8, 0, 0, 0);
+        tvSageataDropdown.setLayoutParams(pSageata);
+        tvSageataDropdown.setBackgroundColor(Color.parseColor("#2A2A2A"));
+        tvSageataDropdown.setOnClickListener(v -> {
+            etClusterServer.requestFocus();
+            etClusterServer.showDropDown();
+        });
+        rowClusterServer.addView(tvSageataDropdown);
+
+        llMain.addView(rowClusterServer);
+
+        // Buton mic pentru ștergerea serverului curent din listă (cu confirmare)
+        Button btnRemoveCluster = new Button(context);
+        btnRemoveCluster.setText("🗑 REMOVE THIS SERVER FROM LIST");
+        btnRemoveCluster.setBackgroundColor(Color.parseColor("#4E2020"));
+        btnRemoveCluster.setTextColor(Color.parseColor("#EF9A9A"));
+        LinearLayout.LayoutParams pBtnRemoveCluster = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 110);
+        pBtnRemoveCluster.setMargins(0, 0, 0, 15);
+        btnRemoveCluster.setLayoutParams(pBtnRemoveCluster);
+        btnRemoveCluster.setOnClickListener(v -> stergeServerulCurent());
+        llMain.addView(btnRemoveCluster);
 
         etClusterUser = creeazaCampEditabil("Username (optional)", false);
         llMain.addView(etClusterUser);
@@ -341,12 +654,12 @@ public class EcranSetariProprii {
         new Thread(() -> {
             try {
                 Uri uri = AdifExporter.getShareableAdifUri(context, new QsoDbHelper(context));
-                
+
                 Intent intent = new Intent(Intent.ACTION_SEND);
                 intent.setType("text/plain");
                 intent.putExtra(Intent.EXTRA_STREAM, uri);
                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                
+
                 ((Activity) context).runOnUiThread(() -> {
                     context.startActivity(Intent.createChooser(intent, "Share Log via..."));
                 });
@@ -410,23 +723,131 @@ public class EcranSetariProprii {
         editor.putString(PREF_MY_ITU_ZONE, etMyItuZone.getText().toString().trim());
         editor.putString(PREF_MY_CQ_ZONE, etMyCqZone.getText().toString().trim());
         editor.putString(PREF_QRZ_USER, etQrzUser.getText().toString().trim());
-        
+
         // Cifrare parole
         SecurePrefsHelper.savePassword(context, PREF_QRZ_PASS, etQrzPass.getText().toString().trim());
         SecurePrefsHelper.savePassword(context, PREF_HAMQTH_PASS, etHamQthPass.getText().toString().trim());
-        SecurePrefsHelper.savePassword(context, PREF_CLUSTER_PASS, etClusterPass.getText().toString().trim());
 
         editor.putString(PREF_HAMQTH_USER, etHamQthUser.getText().toString().trim());
-        editor.putString(PREF_CLUSTER_SERVER, etClusterServer.getText().toString().trim());
-        editor.putString(PREF_CLUSTER_PORT, etClusterPort.getText().toString().trim());
-        editor.putString(PREF_CLUSTER_USER, etClusterUser.getText().toString().trim());
         editor.apply();
+
+        String clusterEntry = etClusterServer.getText().toString().trim();
+        String clusterUser = etClusterUser.getText().toString().trim();
+        String clusterPass = etClusterPass.getText().toString().trim();
+        proceseazaSalvareCluster(clusterEntry, clusterUser, clusterPass);
+
         QrzLookupHelper.resetSesiune();
         HamQthLookupHelper.resetSesiune();
         Toast.makeText(context, "Settings saved!", Toast.LENGTH_SHORT).show();
     }
 
+    /**
+     * Decide dacă adresa din câmp e o EDITARE a serverului care era încărcat
+     * (ex: userul a corectat un typo în adresă/port) sau pur și simplu un
+     * server nou introdus de la tastatură. Dacă e o editare, întreabă userul
+     * ce vrea: să actualizeze intrarea existentă (păstrând user/parola) sau
+     * s-o salveze ca server separat, nou.
+     */
+    private void proceseazaSalvareCluster(String clusterEntry, String clusterUser, String clusterPass) {
+        SharedPreferences prefsCluster = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        String serverVechi = prefsCluster.getString(PREF_CLUSTER_SERVER, "");
+
+        prefsCluster.edit().putString(PREF_CLUSTER_SERVER, clusterEntry).apply();
+
+        // Daca eram conectati la un alt server si tocmai am schimbat serverul
+        // activ, reconectam automat la noul server, ca userul sa nu trebuiasca
+        // sa apese manual Disconnect + Connect.
+        if (!clusterEntry.isEmpty()
+                && !clusterEntry.equalsIgnoreCase(serverVechi)
+                && ClusterRepository.getInstance().isConnected()) {
+            reconecteazaLaServerulNou();
+        }
+
+        boolean esteEditareAdresa = !clusterServerOriginal.isEmpty()
+                && !clusterServerOriginal.equalsIgnoreCase(clusterEntry)
+                && existaInLista(clusterServerOriginal);
+
+        if (esteEditareAdresa) {
+            new AlertDialog.Builder(context)
+                    .setTitle("Server address changed")
+                    .setMessage("You changed \"" + clusterServerOriginal + "\" to \"" + clusterEntry
+                            + "\".\n\nUpdate this saved server (keeps its username/password), "
+                            + "or save it as a new, separate server?")
+                    .setPositiveButton("UPDATE THIS SERVER", (d, w) ->
+                            redenumesteServer(clusterServerOriginal, clusterEntry, clusterUser, clusterPass))
+                    .setNegativeButton("SAVE AS NEW", (d, w) ->
+                            salveazaCaServerNou(clusterEntry, clusterUser, clusterPass))
+                    .setCancelable(false)
+                    .show();
+        } else {
+            salveazaCaServerNou(clusterEntry, clusterUser, clusterPass);
+        }
+    }
+
+    /**
+     * Opreste ClusterService (deconectare de la serverul vechi) si il
+     * repornește imediat (conectare la noul server, ale carui setari au
+     * fost deja salvate mai sus). ClusterService.onCreate() creeaza un
+     * ClusterManager nou, care reincarca setarile din SharedPreferences la
+     * connect() - deci va folosi automat noul server.
+     *
+     * Folosim un delay scurt intre stop si start, ca sa dam timp lui
+     * onDestroy()/performFullCleanup() sa proceseze deconectarea inainte sa
+     * pornim din nou serviciul (evitam suprapunerea a doua cicluri de
+     * viata ale serviciului).
+     */
+    private void reconecteazaLaServerulNou() {
+        Intent intent = new Intent(context, ClusterService.class);
+        context.stopService(intent);
+
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent);
+            } else {
+                context.startService(intent);
+            }
+        }, 400);
+
+        Toast.makeText(context, "Reconnecting to new cluster server\u2026", Toast.LENGTH_SHORT).show();
+    }
+
+    private boolean existaInLista(String server) {
+        for (ClusterEntry e : getClusterEntries(context)) {
+            if (e.server.equalsIgnoreCase(server)) return true;
+        }
+        return false;
+    }
+
+    private void salveazaCaServerNou(String clusterEntry, String clusterUser, String clusterPass) {
+        addOrUpdateClusterEntry(clusterEntry, clusterUser);
+        SecurePrefsHelper.savePassword(context, parolaKeyPentruServer(clusterEntry), clusterPass);
+        clusterServerOriginal = clusterEntry;
+    }
+
+    /**
+     * Redenumește intrarea din listă: scoate adresa veche, adaugă adresa nouă
+     * cu același user, și mută parola de pe cheia veche pe cea nouă.
+     */
+    private void redenumesteServer(String vechi, String nou, String user, String pass) {
+        List<ClusterEntry> lista = getClusterEntries(context);
+        lista.removeIf(e -> e.server.equalsIgnoreCase(vechi));
+        lista.removeIf(e -> e.server.equalsIgnoreCase(nou)); // în caz că "nou" exista deja ca intrare separată
+        lista.add(0, new ClusterEntry(nou, user));
+        while (lista.size() > 15) {
+            lista.remove(lista.size() - 1);
+        }
+        saveClusterEntries(context, lista);
+
+        SecurePrefsHelper.savePassword(context, parolaKeyPentruServer(nou), pass);
+        SecurePrefsHelper.savePassword(context, parolaKeyPentruServer(vechi), "");
+
+        refreshClusterAdapter();
+        clusterServerOriginal = nou;
+        Toast.makeText(context, "Server renamed to \"" + nou + "\"", Toast.LENGTH_SHORT).show();
+    }
+
     private void incarcaSetarile() {
+        migreazaAdresaCluster(); // rulează și la import de backup vechi, nu doar la prima pornire
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         etMyCall.setText(prefs.getString(PREF_MY_CALL, ""));
         etMyGrid.setText(prefs.getString(PREF_MY_GRID, ""));
@@ -434,16 +855,18 @@ public class EcranSetariProprii {
         etMyItuZone.setText(prefs.getString(PREF_MY_ITU_ZONE, ""));
         etMyCqZone.setText(prefs.getString(PREF_MY_CQ_ZONE, ""));
         etQrzUser.setText(prefs.getString(PREF_QRZ_USER, ""));
-        
+
         // Citire din Secure Storage
         etQrzPass.setText(SecurePrefsHelper.getPassword(context, PREF_QRZ_PASS, ""));
         etHamQthPass.setText(SecurePrefsHelper.getPassword(context, PREF_HAMQTH_PASS, ""));
-        etClusterPass.setText(SecurePrefsHelper.getPassword(context, PREF_CLUSTER_PASS, ""));
 
         etHamQthUser.setText(prefs.getString(PREF_HAMQTH_USER, ""));
-        etClusterServer.setText(prefs.getString(PREF_CLUSTER_SERVER, "dx.w1nr.net"));
-        etClusterPort.setText(prefs.getString(PREF_CLUSTER_PORT, "7300"));
-        etClusterUser.setText(prefs.getString(PREF_CLUSTER_USER, ""));
+        refreshClusterAdapter();
+        String serverCurent = prefs.getString(PREF_CLUSTER_SERVER, "dx.w1nr.net:7300");
+        etClusterServer.setText(serverCurent);
+        // Fiecare server din listă are propriul user/pass
+        incarcaCredentialePentruServer(serverCurent);
+        clusterServerOriginal = serverCurent;
     }
 
     // ============================================================
@@ -543,7 +966,7 @@ public class EcranSetariProprii {
         final EditText etPass = new EditText(context);
         etPass.setHint("Backup Password (Optional)");
         etPass.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        
+
         new AlertDialog.Builder(context)
                 .setTitle("Secure Backup")
                 .setMessage("Choose a password to protect your credentials in the backup file. If left empty, passwords will NOT be included.")
@@ -613,7 +1036,7 @@ public class EcranSetariProprii {
                 String continut = citesteContinutUri(uri);
                 JSONObject radacina = new JSONObject(continut);
                 boolean isCifrat = radacina.optBoolean("cifrat", false);
-                
+
                 if (isCifrat) {
                     solicitaParolaImport(uri);
                 } else {

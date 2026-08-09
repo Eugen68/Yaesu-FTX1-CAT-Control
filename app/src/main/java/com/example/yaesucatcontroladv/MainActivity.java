@@ -11,6 +11,8 @@ import android.hardware.usb.UsbManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
@@ -299,9 +301,9 @@ public class MainActivity extends AppCompatActivity {
 
     private void verificaPermisiuneNotificari() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (androidx.core.content.ContextCompat.checkSelfPermission(this, 
+            if (androidx.core.content.ContextCompat.checkSelfPermission(this,
                     android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                androidx.core.app.ActivityCompat.requestPermissions(this, 
+                androidx.core.app.ActivityCompat.requestPermissions(this,
                         new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 101);
             }
         }
@@ -363,7 +365,7 @@ public class MainActivity extends AppCompatActivity {
         cbShutdown.setText("Shut-down Yaesu FTX1");
         cbShutdown.setTextColor(Color.WHITE);
         cbShutdown.setTextSize(14);
-        
+
         LinearLayout container = new LinearLayout(this);
         container.setOrientation(LinearLayout.VERTICAL);
         container.setPadding(dp(20), dp(10), dp(20), dp(5));
@@ -374,39 +376,45 @@ public class MainActivity extends AppCompatActivity {
                 .setMessage("Are you sure you want to close the application?\n\nAll USB and audio resources will be released.")
                 .setView(container)
                 .setPositiveButton("YES, CLOSE", (dialog, which) -> {
-                    // 0. Închidem stația dacă bifa este activată
+                    // Pasul final: dezactivam receiver USB, oprim porturile
+                    // seriale si inchidem Activity-ul. Folosim postDelayed in
+                    // loc de Thread.sleep, ca sa NU blocam thread-ul principal
+                    // (Thread.sleep pe UI thread poate contribui la ANR-uri).
+                    Runnable finalizeazaExit = () -> {
+                        safeUnregisterReceiver();
+
+                        if (radioManager != null) {
+                            radioManager.opresteToat();
+                        }
+
+                        // Asteptam 200ms ca thread-urile USB sa se opreasca
+                        // elegant (previne eroarea "Connection closed"), FARA
+                        // sa blocam UI thread-ul.
+                        new Handler(Looper.getMainLooper()).postDelayed(this::finish, 200);
+                    };
+
+                    Runnable elibereazaRttySiContinua = () -> {
+                        // Oprim resursele RTTY (AudioRecord, thread decodare, bitmap-uri)
+                        if (managerEcranRtty != null) {
+                            managerEcranRtty.eliberareResurse();
+                        }
+                        // NOTA: NU oprim manual resursele Cluster aici -
+                        // onDestroy() (cu isFinishing()==true, declansat de
+                        // finish() mai jos) se ocupa deja de asta o singura
+                        // data. Apelarea si aici ar insemna cleanup dublu
+                        // (eliberareResurse() + stopService() de doua ori).
+                        finalizeazaExit.run();
+                    };
+
+                    // Inchidem statia daca bifa este activata
                     if (cbShutdown.isChecked() && radioManager != null) {
                         radioManager.trimiteComandaCAT("PS0;");
-                        try {
-                            Thread.sleep(150); // Lăsăm timp stației să primească comanda
-                        } catch (InterruptedException ignored) {}
+                        // Lasam timp statiei sa primeasca comanda, fara sa
+                        // blocam UI thread-ul cu Thread.sleep.
+                        new Handler(Looper.getMainLooper()).postDelayed(elibereazaRttySiContinua, 150);
+                    } else {
+                        elibereazaRttySiContinua.run();
                     }
-
-                    // 1. Oprim resursele RTTY (AudioRecord, thread decodare, bitmap-uri)
-                    if (managerEcranRtty != null) {
-                        managerEcranRtty.eliberareResurse();
-                    }
-                    // 2. Oprim resursele Cluster
-                    if (managerEcranCluster != null) {
-                        managerEcranCluster.eliberareResurse();
-                    }
-                    // 3. Dezactivam receiver-ul USB
-                    safeUnregisterReceiver();
-
-                    // 3. Oprim porturile seriale si conexiunile USB
-                    if (radioManager != null) {
-                        radioManager.opresteToat();
-                    }
-
-                    // 4. Asteptam 200ms ca thread-urile USB sa se opreasca elegant
-                    //    (Aceasta linie previne eroarea "Connection closed")
-                    try {
-                        Thread.sleep(200);
-                    } catch (InterruptedException ignored) {}
-
-                    // 5. Inchidem Activity-ul curent (FARA System.exit!)
-                    //    Android va gestiona cleanup-ul nativ in mod sigur.
-                    finish();
                 })
                 .setNegativeButton("Cancel", null)
                 .show();

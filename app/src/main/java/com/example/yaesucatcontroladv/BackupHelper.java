@@ -34,7 +34,8 @@ public class BackupHelper {
             EcranSetariProprii.PREF_HAMQTH_USER,
             EcranSetariProprii.PREF_HAMQTH_PASS,
             EcranSetariProprii.PREF_CLUSTER_SERVER, // ← NOU
-            EcranSetariProprii.PREF_CLUSTER_PORT,   // ← NOU
+            EcranSetariProprii.PREF_CLUSTER_PORT,   // ← NOU (păstrat pt. compatibilitate cu backup-uri vechi)
+            EcranSetariProprii.PREF_CLUSTER_LIST,   // ← NOU: lista de clustere din dropdown-ul editabil
             EcranSetariProprii.PREF_CLUSTER_USER,   // ← NOU
             EcranSetariProprii.PREF_CLUSTER_PASS,   // ← NOU
             EcranSetariProprii.PREF_CLUSTER_FILTER_BAND,   // ← NOU
@@ -50,7 +51,7 @@ public class BackupHelper {
 
     public static String exporta(Context context, QsoDbHelper dbHelper, String backupPassword) throws Exception {
         JSONObject radacina = new JSONObject();
-        radacina.put("versiune_backup", 5); // Incrementat versiunea pentru suport criptare
+        radacina.put("versiune_backup", 7); // Incrementat: parole separate per-server pentru clustere
 
         SharedPreferences prefs = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
         JSONObject setari = new JSONObject();
@@ -73,6 +74,18 @@ public class BackupHelper {
         }
         radacina.put("setari", setari);
         radacina.put("cifrat", backupPassword != null && !backupPassword.isEmpty());
+
+        // Parole per-server pentru clustere (fiecare adresă din listă își are propria parolă)
+        JSONObject clusterPasswords = new JSONObject();
+        for (EcranSetariProprii.ClusterEntry entry : EcranSetariProprii.getClusterEntries(context)) {
+            String cheieParola = EcranSetariProprii.parolaKeyPentruServer(entry.server);
+            String valoareParola = SecurePrefsHelper.getPassword(context, cheieParola, "");
+            if (!valoareParola.isEmpty() && backupPassword != null && !backupPassword.isEmpty()) {
+                clusterPasswords.put(entry.server, BackupCryptoHelper.encrypt(valoareParola, backupPassword));
+            }
+            // Fără parolă de backup, parolele de cluster nu se exportă (la fel ca restul parolelor)
+        }
+        radacina.put("cluster_passwords", clusterPasswords);
 
         // Backup macro-uri RTTY
         SharedPreferences prefsMacros = context.getSharedPreferences("RTTY_MACROS", Context.MODE_PRIVATE);
@@ -169,13 +182,13 @@ public class BackupHelper {
             JSONObject setari = radacina.getJSONObject("setari");
             SharedPreferences.Editor editor = context
                     .getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE).edit();
-            
+
             boolean fisierCifrat = radacina.optBoolean("cifrat", false);
 
             for (String cheie : PREF_KEYS) {
                 if (setari.has(cheie)) {
                     String valoare = setari.getString(cheie);
-                    
+
                     if (cheie.endsWith("_pass")) {
                         if (fisierCifrat && backupPassword != null && !backupPassword.isEmpty() && !valoare.isEmpty()) {
                             try {
@@ -198,6 +211,28 @@ public class BackupHelper {
             }
             editor.apply();
             rezultat.setariRestaurate = true;
+        }
+
+        // Restaurare parole per-server pentru clustere
+        if (radacina.has("cluster_passwords")) {
+            JSONObject clusterPasswords = radacina.getJSONObject("cluster_passwords");
+            boolean fisierCifrat = radacina.optBoolean("cifrat", false);
+            java.util.Iterator<String> serverKeys = clusterPasswords.keys();
+            while (serverKeys.hasNext()) {
+                String server = serverKeys.next();
+                String valoare = clusterPasswords.getString(server);
+                String cheieParola = EcranSetariProprii.parolaKeyPentruServer(server);
+                if (fisierCifrat && backupPassword != null && !backupPassword.isEmpty() && !valoare.isEmpty()) {
+                    try {
+                        String parolaDecriptata = BackupCryptoHelper.decrypt(valoare, backupPassword);
+                        SecurePrefsHelper.savePassword(context, cheieParola, parolaDecriptata);
+                    } catch (Exception e) {
+                        throw new Exception("Could not decrypt cluster passwords. Check the backup password.");
+                    }
+                } else if (!valoare.isEmpty() && !fisierCifrat) {
+                    SecurePrefsHelper.savePassword(context, cheieParola, valoare);
+                }
+            }
         }
 
         // Restaurare macro-uri RTTY

@@ -7,13 +7,16 @@ import android.os.Looper;
 import android.util.Log;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -23,6 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public class ClusterManager {
     private static final String TAG = "ClusterManager";
+    private static final int CONNECT_TIMEOUT_MS = 15000;
 
     public interface ClusterListener {
         void onSpotReceived(Spot spot);
@@ -65,15 +69,29 @@ public class ClusterManager {
                 EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
 
         // Server implicit stabil: dx.w1nr.net port 7300
-        serverHost = prefs.getString("cluster_server", "dx.w1nr.net");
-        String portStr = prefs.getString("cluster_port", "7300");
-        try {
-            serverPort = Integer.parseInt(portStr);
-        } catch (Exception e) {
-            serverPort = 7300;
+        // Din UI, adresa vine acum ca un singur câmp "ADRESA:port" (ex: dx.w1nr.net:7300).
+        String serverEntry = prefs.getString("cluster_server", "dx.w1nr.net:7300").trim();
+        int colonIdx = serverEntry.lastIndexOf(":");
+        if (colonIdx > 0 && colonIdx < serverEntry.length() - 1) {
+            serverHost = serverEntry.substring(0, colonIdx).trim();
+            try {
+                serverPort = Integer.parseInt(serverEntry.substring(colonIdx + 1).trim());
+            } catch (Exception e) {
+                serverPort = 7300;
+            }
+        } else {
+            // Compatibilitate cu formatul vechi (Server și Port salvate separat)
+            serverHost = serverEntry;
+            String portStr = prefs.getString("cluster_port", "7300");
+            try {
+                serverPort = Integer.parseInt(portStr);
+            } catch (Exception e) {
+                serverPort = 7300;
+            }
         }
-        username = prefs.getString(EcranSetariProprii.PREF_CLUSTER_USER, "");
-        password = SecurePrefsHelper.getPassword(context, EcranSetariProprii.PREF_CLUSTER_PASS, "");
+        // Fiecare server din listă are propriul user/pass (setat în Ecran Setări)
+        username = EcranSetariProprii.getUserPentruServer(context, serverEntry);
+        password = SecurePrefsHelper.getPassword(context, EcranSetariProprii.parolaKeyPentruServer(serverEntry), "");
         if (username.isEmpty()) {
             username = prefs.getString(EcranSetariProprii.PREF_MY_CALL, "");
         }
@@ -144,9 +162,12 @@ public class ClusterManager {
             Log.d(TAG, "Connecting to: " + serverHost + ":" + serverPort);
             notifyStatus(false, "Connecting to " + serverHost + ":" + serverPort + "...");
 
-            // Conectare socket (timeout mărit pentru routere/GSM)
-            socket = new Socket();
-            socket.connect(new java.net.InetSocketAddress(serverHost, serverPort), 20000); 
+            // Conectare socket cu deadline STRICT (vezi connectWithTimeout):
+            // InetSocketAddress(host, port) face rezoluție DNS SINCRONă, care NU
+            // răspunde la socket.close()/interrupt(). Fără această protecție,
+            // un server nefuncțional/nerezolvabil poate bloca acest thread la
+            // nesfârșit și ține aplicația înghețată la închidere.
+            socket = connectWithTimeout(serverHost, serverPort, CONNECT_TIMEOUT_MS);
             socket.setSoTimeout(300000); // 5 minute timeout pentru citire (DX Cluster poate fi inactiv)
 
             reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
@@ -158,7 +179,7 @@ public class ClusterManager {
             // Autentificare (dacă e necesară)
             authenticate();
 
-            notifyStatus(true, "Connected & Authenticated");
+            notifyStatus(true, "Connected to " + serverHost + ":" + serverPort);
             Log.d(TAG, "Autentificare finalizată. Încep citirea spoturilor...");
 
             // Citire spot-uri în buclă (blocking read)
@@ -195,7 +216,7 @@ public class ClusterManager {
 
             String resolvedIp = "unknown";
             try { resolvedIp = java.net.InetAddress.getByName(serverHost).getHostAddress(); } catch (Exception ignored) {}
-            
+
             String errType = e.getClass().getSimpleName();
             String detail = e.getMessage() != null ? e.getMessage() : e.toString();
             String err = "(" + resolvedIp + "):" + serverPort + "\n[" + errType + "]\n" + detail;
@@ -205,6 +226,47 @@ public class ClusterManager {
             cleanup();
             notifyStatus(false, "Disconnected");
             isRunning.set(false);
+        }
+    }
+
+    /**
+     * Deschide o conexiune TCP catre host:port cu un deadline STRICT, impus
+     * din exterior. Rezolvam hostname-ul (DNS) si facem connect() intr-un
+     * executor separat; asteptam rezultatul cu future.get(timeout).
+     *
+     * De ce e necesar: InetSocketAddress(host, port) face rezolutia DNS
+     * SINCRON si NEINTRERUPTIBIL - nu raspunde la Thread.interrupt() si,
+     * pe unele device-uri Android, nici socket.close() apelat din alt thread
+     * nu garanteaza deblocarea unui connect() aflat in desfasurare catre
+     * un server nefunctional/blocat de firewall. Daca nu impunem noi acest
+     * deadline, thread-ul de conexiune poate ramane blocat la nesfarsit,
+     * tinand Service-ul (si implicit aplicatia) intr-o stare "inghetata"
+     * chiar si dupa ce utilizatorul a cerut oprirea/Exit.
+     *
+     * Nota: daca apelul blocant chiar ramane blocat dincolo de deadline,
+     * NU putem forta oprirea lui la nivel de JVM (limitare Java/Android) -
+     * dar renuntam logic la el (abandon), astfel incat restul aplicatiei
+     * ramane responsiva. Thread-ul abandonat se va inchide singur cand
+     * apelul de retea de dedesubt expira la nivel de OS.
+     */
+    private Socket connectWithTimeout(String host, int port, int timeoutMs) throws Exception {
+        ExecutorService connectExecutor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Socket> future = connectExecutor.submit(() -> {
+                Socket s = new Socket();
+                java.net.InetSocketAddress addr = new java.net.InetSocketAddress(host, port); // aici poate bloca la DNS
+                s.connect(addr, timeoutMs);
+                return s;
+            });
+            return future.get(timeoutMs + 5000L, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException te) {
+            throw new IOException("Timeout la conectare/rezolvare DNS pentru " + host + ":" + port
+                    + " (peste " + (timeoutMs + 5000) + " ms)");
+        } finally {
+            // shutdownNow() nu poate forta oprirea unui apel DNS/connect nativ
+            // blocat, dar detașeaza acel thread de noi: nu il mai așteptam
+            // si nu-l mai refolosim la reincercarile ulterioare.
+            connectExecutor.shutdownNow();
         }
     }
 
@@ -318,6 +380,16 @@ public class ClusterManager {
     public void shutdown() {
         disconnect();
         commandExecutor.shutdownNow();
+        // NU setam listener = null aici: disconnect() posteaza async pe
+        // mainHandler notifyStatus(false, "Deconectat"), iar acel callback
+        // ruleaza DUPA acest apel (thread-ul principal proceseaza coada in
+        // ordine). Daca am nula listener-ul aici, callback-ul deja pus in
+        // coada nu ar mai ajunge niciodata la ClusterRepository, iar
+        // starea "conectat" ar ramane blocata pentru totdeauna (exact
+        // bug-ul cu butonul Disconnect ramas rosu/blocat). Protectia
+        // impotriva callback-urilor intarziate de la o incercare abandonata
+        // (connectWithTimeout) e deja asigurata de flag-ul isStopping din
+        // ClusterService, nu mai e nevoie si aici.
     }
 
     /**

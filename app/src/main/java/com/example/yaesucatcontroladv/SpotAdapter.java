@@ -45,11 +45,11 @@ public class SpotAdapter extends RecyclerView.Adapter<SpotAdapter.SpotViewHolder
 
     public void applyFilter(String search, java.util.Set<String> bands, java.util.Set<String> modes) {
         this.currentFilterSearch = (search != null) ? search.toUpperCase() : "";
-        
+
         // Copiem seturile de filtre pentru a evita bug-urile de referință (self-clearing)
         currentFilterBands.clear();
         if (bands != null) currentFilterBands.addAll(bands);
-        
+
         currentFilterModes.clear();
         if (modes != null) currentFilterModes.addAll(modes);
 
@@ -72,14 +72,22 @@ public class SpotAdapter extends RecyclerView.Adapter<SpotAdapter.SpotViewHolder
     @NonNull
     @Override
     public SpotViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
-        LinearLayout layout = new LinearLayout(parent.getContext());
-        layout.setOrientation(LinearLayout.HORIZONTAL);
-        layout.setPadding(20, 15, 20, 15);
-        layout.setLayoutParams(new ViewGroup.LayoutParams(
+        // Container vertical: rândul 1 = ora/frecvență/spot/spotter,
+        // rândul 2 = comentariul, pe toată lățimea (nu se mai îngustează
+        // când indicativul sau spotter-ul sunt lungi).
+        LinearLayout root = new LinearLayout(parent.getContext());
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(20, 15, 20, 15);
+        root.setLayoutParams(new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        
-        // Cream ViewHolder-ul cu elementele necesare (Time, Freq, Call, Comment)
-        return new SpotViewHolder(layout);
+
+        LinearLayout rowSus = new LinearLayout(parent.getContext());
+        rowSus.setOrientation(LinearLayout.HORIZONTAL);
+        rowSus.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        root.addView(rowSus);
+
+        return new SpotViewHolder(root, rowSus);
     }
 
     @Override
@@ -97,22 +105,36 @@ public class SpotAdapter extends RecyclerView.Adapter<SpotAdapter.SpotViewHolder
         private final TextView tvOra, tvFreq, tvDx, tvComment, tvSpotter;
         private final LinearLayout root;
 
-        public SpotViewHolder(@NonNull View itemView) {
-            super(itemView);
-            root = (LinearLayout) itemView;
-            
+        public SpotViewHolder(@NonNull LinearLayout root, @NonNull LinearLayout rowSus) {
+            super(root);
+            this.root = root;
+
             tvOra = createTv(12, Typeface.MONOSPACE, Color.WHITE);
             tvFreq = createTv(13, Typeface.DEFAULT_BOLD, Color.WHITE);
             tvDx = createTv(14, Typeface.DEFAULT_BOLD, Color.YELLOW);
-            tvComment = createTv(12, Typeface.DEFAULT, Color.WHITE);
             tvSpotter = createTv(10, Typeface.MONOSPACE, Color.parseColor("#CCCCCC"));
 
-            // Adaugam layout-ul (fara view-uri spacer goale)
-            root.addView(tvOra);
-            root.addView(tvFreq);
-            root.addView(tvDx);
+            // Rândul 1: ora, frecvența, spot (indicativ DX)
+            rowSus.addView(tvOra);
+            rowSus.addView(tvFreq);
+            rowSus.addView(tvDx);
+
+            // Spacer elastic - împinge callsign-ul spotter-ului spre dreapta
+            View spacer = new View(itemView.getContext());
+            LinearLayout.LayoutParams pSpacer = new LinearLayout.LayoutParams(0, 0, 1f);
+            spacer.setLayoutParams(pSpacer);
+            rowSus.addView(spacer);
+
+            rowSus.addView(tvSpotter);
+
+            // Rândul 2: comentariul, pe toată lățimea rândului
+            tvComment = createTv(12, Typeface.DEFAULT, Color.WHITE);
+            LinearLayout.LayoutParams pComment = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            pComment.topMargin = 6;
+            pComment.leftMargin = 40;
+            tvComment.setLayoutParams(pComment);
             root.addView(tvComment);
-            root.addView(tvSpotter);
         }
 
         private TextView createTv(int size, Typeface tf, int color) {
@@ -133,12 +155,6 @@ public class SpotAdapter extends RecyclerView.Adapter<SpotAdapter.SpotViewHolder
             tvDx.setText(spot.dxCall);
             tvComment.setText(spot.comment);
             tvSpotter.setText(spot.spotter != null ? "de " + spot.spotter : "");
-            
-            // Expandam comentariul pentru a umple spatiul
-            LinearLayout.LayoutParams pC = (LinearLayout.LayoutParams) tvComment.getLayoutParams();
-            pC.width = 0;
-            pC.weight = 1f;
-            tvComment.setLayoutParams(pC);
 
             root.setBackgroundColor(getCuloareBanda(spot.band));
             root.setOnClickListener(v -> listener.onSpotClick(spot));
