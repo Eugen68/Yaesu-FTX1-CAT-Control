@@ -3,6 +3,7 @@ import java.text.SimpleDateFormat
 
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
 }
 
 val buildTimestamp = SimpleDateFormat("yyyyMMdd_HHmm").format(Date())
@@ -26,11 +27,7 @@ val gitHash = getSafeGitHash()
 
 android {
     namespace = "com.example.yaesucatcontroladv"
-    compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
-    }
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.example.yaesucatcontroladv"
@@ -44,15 +41,10 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    buildFeatures {
-        buildConfig = true
-    }
-
     buildTypes {
         release {
-            optimization {
-                enable = false
-            }
+            isMinifyEnabled = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
     compileOptions {
@@ -60,19 +52,30 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
 
+    kotlinOptions {
+        jvmTarget = "11"
+    }
+
+    androidResources {
+        noCompress("onnx", "onnx.gz")
+    }
+
     buildFeatures {
         buildConfig = true
     }
 }
 
+// Custom APK naming removed for stability during sync fix
+/*
 androidComponents {
     onVariants { variant ->
         variant.outputs.forEach { output ->
             val safeHash = gitHash.replace("+", "p")
-            output.outputFileName.set("YaesuCAT_v${android.defaultConfig.versionName}_${buildTimestamp}_${safeHash}.apk")
+            // output.outputFileName.set("YaesuCAT_v${android.defaultConfig.versionName}_${buildTimestamp}_${safeHash}.apk")
         }
     }
 }
+*/
 
 dependencies {
     implementation(libs.activity.ktx)
@@ -80,6 +83,13 @@ dependencies {
     implementation(libs.constraintlayout)
     implementation(libs.material)
     implementation("androidx.security:security-crypto:1.1.0")
+
+    // DeepCW Neural Decoder Dependencies
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.onnxruntime.android)
+    implementation(libs.androidx.lifecycle.viewmodel.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.espresso.core)
     androidTestImplementation(libs.ext.junit)

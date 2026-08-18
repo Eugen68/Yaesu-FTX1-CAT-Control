@@ -32,15 +32,6 @@ import androidx.drawerlayout.widget.DrawerLayout;
 public class MainActivity extends AppCompatActivity {
     private static final String ACTION_USB_PERMISSION = "com.example.yaesucatcontroladv.USB_PERMISSION";
 
-    // OPTIMIZARE (fix dp/px): valorile UI erau inainte pixeli bruti, deci apareau
-    // cu marime diferita in functie de densitatea ecranului (minuscule pe telefoane
-    // cu densitate mare). Le-am convertit in dp folosind helper-ul dp() de mai jos,
-    // care foloseste TypedValue.applyDimension() - conversia oficiala Android,
-    // identica cu ce foloseste automat un layout XML.
-    // Valorile in dp de mai jos au fost deduse din vechile valori px impartite la
-    // ~3 (densitate xxhdpi, foarte comuna la telefoanele Android actuale) - rezultat
-    // confirmat de faptul ca ies in valori "rotunde" conforme cu Material Design
-    // (meniu ~250dp, butoane ~43-50dp, aproape de touch target-ul standard 48dp).
     private static final float DP_TOOLBAR_PAD_H = 7f;
     private static final float DP_TOOLBAR_PAD_TOP = 27f;
     private static final float DP_HAMBURGER_SIZE = 50f;
@@ -56,9 +47,6 @@ public class MainActivity extends AppCompatActivity {
     private static final float DP_EXIT_BUTTON_MARGIN_TOP = 10f;
     private static final float DP_EXIT_BUTTON_MARGIN_BOTTOM = 5f;
 
-    /** Converteste o valoare in dp (density-independent pixels) in pixeli reali,
-     *  tinand cont de densitatea ecranului curent - exact ce face automat Android
-     *  cand pui "dp" intr-un fisier XML. */
     private int dp(float valoareDp) {
         return Math.round(android.util.TypedValue.applyDimension(
                 android.util.TypedValue.COMPLEX_UNIT_DIP, valoareDp, getResources().getDisplayMetrics()));
@@ -72,10 +60,11 @@ public class MainActivity extends AppCompatActivity {
     private EcranLogger managerEcranLogger;
     private EcranSetariProprii managerEcranSetariProprii;
     private EcranCluster managerEcranCluster;
+    private EcranCwDeepDecoder managerEcranCwDeep;
 
     private DrawerLayout drawerLayout;
     private FrameLayout containerPrincipal;
-    private Button btnMeniuCAT, btnMeniuSettings, btnMeniuRtty, btnMeniuRttyPy, btnMeniuLogger, btnMeniuMySettings, btnMeniuCluster, btnMeniuExit;
+    private Button btnMeniuCAT, btnMeniuSettings, btnMeniuRtty, btnMeniuRttyPy, btnMeniuLogger, btnMeniuMySettings, btnMeniuCluster, btnMeniuCwDeep, btnMeniuExit;
 
     private boolean isReceiverRegistered = false;
 
@@ -113,12 +102,8 @@ public class MainActivity extends AppCompatActivity {
         filter.addAction(ACTION_USB_PERMISSION);
         filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // FIX: Custom actions like USB_PERMISSION need EXPORTED on API 33+
-            // because they are triggered by the system's USB service.
             registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED);
         } else {
-            // No flag needed or available for API < 33
-            android.util.Log.d("MAIN", "Registering receiver without flag (API < 33)");
             registerReceiver(usbReceiver, filter);
         }
         isReceiverRegistered = true;
@@ -129,17 +114,11 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onCatCommandReceived(String cmd) {
                 runOnUiThread(() -> {
-                    // 1. LOGARE CENTRALĂ: Trimitem orice comandă (TX sau RX) direct în Monitorul din Setări
                     if (managerEcranSetari != null) {
-                        // Dacă e RX, adăugăm manual punctul și virgula (pe care RadioManager le elimină la parsare)
                         String logText = cmd.startsWith("TX ->") ? cmd : (cmd + ";");
                         managerEcranSetari.raporteazaComandaInLog(logText);
                     }
-
-                    // 2. Dacă e TX, nu mai procesăm parsarea de răspuns
                     if (cmd.startsWith("TX ->")) return;
-
-                    // 3. PROCESARE RĂSPUNSURI (RX)
                     if (cmd.length() >= 2) {
                         final String prefix = cmd.substring(0, 2);
                         if (prefix.equals("FA") || prefix.equals("FD")) {
@@ -179,15 +158,7 @@ public class MainActivity extends AppCompatActivity {
         managerEcranLogger = new EcranLogger(this, radioManager);
         managerEcranSetariProprii = new EcranSetariProprii(this);
         managerEcranCluster = new EcranCluster(this, radioManager);
-
-        // CONEXIUNE RTTY -> LOGGER (Listener păstrat pentru compatibilitate,
-        // dar logica principală este acum în EcranRttyDroid.adaugaIndicativCuClick)
-        if (managerEcranRtty != null) {
-            managerEcranRtty.setOnCallsignTappedListener(callsign -> {
-                // Listener-ul este acum redundant, dar îl păstrăm pentru eventuale extensii viitoare
-                // Logica de populare buffer + toast + inserare FSK este deja în EcranRttyDroid
-            });
-        }
+        managerEcranCwDeep = new EcranCwDeepDecoder(this, radioManager);
 
         drawerLayout = new DrawerLayout(this);
         drawerLayout.setLayoutParams(new ViewGroup.LayoutParams(
@@ -251,10 +222,10 @@ public class MainActivity extends AppCompatActivity {
         btnMeniuRtty = creeazaButonMeniu("RTTY CENTER", v -> comutaEcranMaster(3));
         btnMeniuRttyPy = creeazaButonMeniu("MACROS EDITOR", v -> comutaEcranMaster(4));
         btnMeniuLogger = creeazaButonMeniu("LOGGER", v -> comutaEcranMaster(5));
-        btnMeniuMySettings = creeazaButonMeniu("MY SETTINGS", v -> comutaEcranMaster(6));
         btnMeniuCluster = creeazaButonMeniu("DX CLUSTER", v -> comutaEcranMaster(7));
+        btnMeniuCwDeep = creeazaButonMeniu("CW AI DECODER", v -> comutaEcranMaster(8));
+        btnMeniuMySettings = creeazaButonMeniu("MY SETTINGS", v -> comutaEcranMaster(6));
 
-// BUTON EXIT - Închidere completă cu eliberare resurse
         btnMeniuExit = new Button(this);
         btnMeniuExit.setText("❌ EXIT APPLICATION");
         btnMeniuExit.setBackgroundColor(Color.parseColor("#B71C1C"));
@@ -271,11 +242,11 @@ public class MainActivity extends AppCompatActivity {
         meniuLateral.addView(btnMeniuRtty);
         meniuLateral.addView(btnMeniuRttyPy);
         meniuLateral.addView(btnMeniuLogger);
-        meniuLateral.addView(btnMeniuMySettings);
         meniuLateral.addView(btnMeniuCluster);
-        meniuLateral.addView(btnMeniuExit); // ← Adăugat la final
+        meniuLateral.addView(btnMeniuCwDeep);
+        meniuLateral.addView(btnMeniuMySettings);
+        meniuLateral.addView(btnMeniuExit);
 
-        // AFISARE VERSIUNE SI DATA BUILD
         TextView tvVersionInfo = new TextView(this);
         String vInfo = "v" + BuildConfig.VERSION_NAME + " | Ref: " + BuildConfig.GIT_HASH + "\nBuild: " + BuildConfig.BUILD_TIME;
         tvVersionInfo.setText(vInfo);
@@ -289,14 +260,48 @@ public class MainActivity extends AppCompatActivity {
         drawerLayout.addView(meniuLateral, paramsMeniu);
 
         comutaEcranMaster(1);
-        setContentView(drawerLayout);
 
-        // Chemăm verificările de permisiune și layout după ce am stabilit view-ul principal
+        FrameLayout rootFrame = new FrameLayout(this);
+        rootFrame.addView(drawerLayout);
+        View splashView = createSplashView();
+        rootFrame.addView(splashView);
+        setContentView(rootFrame);
+
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            splashView.setVisibility(View.GONE);
+            ascundeButoaneNavigare();
+        }, 2000);
+
         verificaPermisiuneOverlay();
         verificaPermisiuneNotificari();
-        ascundeButoaneNavigare();
-
         getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN);
+    }
+
+    private View createSplashView() {
+        LinearLayout splash = new LinearLayout(this);
+        splash.setOrientation(LinearLayout.VERTICAL);
+        splash.setBackgroundColor(Color.parseColor("#121212"));
+        splash.setGravity(Gravity.CENTER);
+        splash.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        TextView tvTitle = new TextView(this);
+        tvTitle.setText("Yaesu CAT Control ADV");
+        tvTitle.setTextColor(Color.WHITE);
+        tvTitle.setTextSize(32);
+        tvTitle.setTypeface(null, Typeface.BOLD);
+        tvTitle.setGravity(Gravity.CENTER);
+        splash.addView(tvTitle);
+
+        TextView tvSub = new TextView(this);
+        tvSub.setText("by YO9VA");
+        tvSub.setTextColor(Color.parseColor("#B71C1C"));
+        tvSub.setTextSize(24);
+        tvSub.setTypeface(null, Typeface.BOLD);
+        tvSub.setGravity(Gravity.CENTER);
+        tvSub.setPadding(0, 20, 0, 0);
+        splash.addView(tvSub);
+        return splash;
     }
 
     private void verificaPermisiuneNotificari() {
@@ -326,7 +331,6 @@ public class MainActivity extends AppCompatActivity {
     private void comutaEcranMaster(int indexEcran) {
         if (containerPrincipal == null) return;
         containerPrincipal.removeAllViews();
-
         View viewDeAfisat = null;
         switch (indexEcran) {
             case 1: if (managerEcranComenzi != null) viewDeAfisat = managerEcranComenzi.getView(); break;
@@ -336,12 +340,9 @@ public class MainActivity extends AppCompatActivity {
             case 5: if (managerEcranLogger != null) viewDeAfisat = managerEcranLogger.getView(); break;
             case 6: if (managerEcranSetariProprii != null) viewDeAfisat = managerEcranSetariProprii.getView(); break;
             case 7: if (managerEcranCluster != null) viewDeAfisat = managerEcranCluster.getView(); break;
+            case 8: if (managerEcranCwDeep != null) viewDeAfisat = managerEcranCwDeep.getView(); break;
         }
-
-        if (viewDeAfisat != null) {
-            containerPrincipal.addView(viewDeAfisat);
-        }
-
+        if (viewDeAfisat != null) containerPrincipal.addView(viewDeAfisat);
         btnMeniuCAT.setBackgroundColor(Color.parseColor(indexEcran == 1 ? "#BBDEFB" : "#E0E0E0"));
         btnMeniuSettings.setBackgroundColor(Color.parseColor(indexEcran == 2 ? "#BBDEFB" : "#E0E0E0"));
         btnMeniuRtty.setBackgroundColor(Color.parseColor(indexEcran == 3 ? "#BBDEFB" : "#E0E0E0"));
@@ -349,72 +350,34 @@ public class MainActivity extends AppCompatActivity {
         btnMeniuLogger.setBackgroundColor(Color.parseColor(indexEcran == 5 ? "#BBDEFB" : "#E0E0E0"));
         btnMeniuMySettings.setBackgroundColor(Color.parseColor(indexEcran == 6 ? "#BBDEFB" : "#E0E0E0"));
         btnMeniuCluster.setBackgroundColor(Color.parseColor(indexEcran == 7 ? "#BBDEFB" : "#E0E0E0"));
-
+        btnMeniuCwDeep.setBackgroundColor(Color.parseColor(indexEcran == 8 ? "#BBDEFB" : "#E0E0E0"));
         drawerLayout.closeDrawer(GravityCompat.START);
     }
 
-    // ============================================================
-    // EXIT APLICATIE - Eliberare completa resurse + inchidere fortata
-    // ============================================================
-// ============================================================
-// EXIT APLICATIE - Eliberare completa resurse + inchidere graceful
-// ============================================================
     private void exitAplicatie() {
-        // Creăm o bifă pentru închiderea stației
         CheckBox cbShutdown = new CheckBox(this);
         cbShutdown.setText("Shut-down Yaesu FTX1");
         cbShutdown.setTextColor(Color.WHITE);
         cbShutdown.setTextSize(14);
-
         LinearLayout container = new LinearLayout(this);
         container.setOrientation(LinearLayout.VERTICAL);
         container.setPadding(dp(20), dp(10), dp(20), dp(5));
         container.addView(cbShutdown);
-
         new AlertDialog.Builder(this)
                 .setTitle("Exit Confirmation")
                 .setMessage("Are you sure you want to close the application?\n\nAll USB and audio resources will be released.")
                 .setView(container)
                 .setPositiveButton("YES, CLOSE", (dialog, which) -> {
-                    // Pasul final: dezactivam receiver USB, oprim porturile
-                    // seriale si inchidem Activity-ul. Folosim postDelayed in
-                    // loc de Thread.sleep, ca sa NU blocam thread-ul principal
-                    // (Thread.sleep pe UI thread poate contribui la ANR-uri).
-                    Runnable finalizeazaExit = () -> {
-                        safeUnregisterReceiver();
-
-                        if (radioManager != null) {
-                            radioManager.opresteToat();
-                        }
-
-                        // Asteptam 200ms ca thread-urile USB sa se opreasca
-                        // elegant (previne eroarea "Connection closed"), FARA
-                        // sa blocam UI thread-ul.
-                        new Handler(Looper.getMainLooper()).postDelayed(this::finish, 200);
-                    };
-
-                    Runnable elibereazaRttySiContinua = () -> {
-                        // Oprim resursele RTTY (AudioRecord, thread decodare, bitmap-uri)
-                        if (managerEcranRtty != null) {
-                            managerEcranRtty.eliberareResurse();
-                        }
-                        // NOTA: NU oprim manual resursele Cluster aici -
-                        // onDestroy() (cu isFinishing()==true, declansat de
-                        // finish() mai jos) se ocupa deja de asta o singura
-                        // data. Apelarea si aici ar insemna cleanup dublu
-                        // (eliberareResurse() + stopService() de doua ori).
-                        finalizeazaExit.run();
-                    };
-
-                    // Inchidem statia daca bifa este activata
                     if (cbShutdown.isChecked() && radioManager != null) {
                         radioManager.trimiteComandaCAT("PS0;");
-                        // Lasam timp statiei sa primeasca comanda, fara sa
-                        // blocam UI thread-ul cu Thread.sleep.
-                        new Handler(Looper.getMainLooper()).postDelayed(elibereazaRttySiContinua, 150);
-                    } else {
-                        elibereazaRttySiContinua.run();
+                        try { Thread.sleep(150); } catch (InterruptedException ignored) {}
                     }
+                    if (managerEcranRtty != null) managerEcranRtty.eliberareResurse();
+                    if (managerEcranCwDeep != null) managerEcranCwDeep.eliberareResurse();
+                    if (managerEcranCluster != null) managerEcranCluster.eliberareResurse();
+                    safeUnregisterReceiver();
+                    if (radioManager != null) radioManager.opresteToat();
+                    new Handler(Looper.getMainLooper()).postDelayed(this::finish, 200);
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -422,11 +385,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void safeUnregisterReceiver() {
         if (isReceiverRegistered) {
-            try {
-                unregisterReceiver(usbReceiver);
-            } catch (Exception e) {
-                android.util.Log.e("MAIN", "Eroare la dezactivarea receiver-ului", e);
-            }
+            try { unregisterReceiver(usbReceiver); } catch (Exception e) {}
             isReceiverRegistered = false;
         }
     }
@@ -439,13 +398,10 @@ public class MainActivity extends AppCompatActivity {
 
     private void ascundeButoaneNavigare() {
         View decorView = getWindow().getDecorView();
-        int uiOptions = View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                | View.SYSTEM_UI_FLAG_FULLSCREEN;
-        decorView.setSystemUiVisibility(uiOptions);
+        decorView.setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_FULLSCREEN);
     }
 
     private void verificaPermisiuneOverlay() {
@@ -453,15 +409,13 @@ public class MainActivity extends AppCompatActivity {
             if (!Settings.canDrawOverlays(this)) {
                 new AlertDialog.Builder(this)
                         .setTitle("Overlay Permission")
-                        .setMessage("To work correctly and keep the screen active, this application needs permission to appear over other apps.\n\nYou will be redirected to the system settings to manually enable this option.")
+                        .setMessage("To work correctly and keep the screen active, this application needs permission to appear over other apps.")
                         .setPositiveButton("OK, GO TO SETTINGS", (dialog, which) -> {
-                            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    Uri.parse("package:" + getPackageName()));
+                            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()));
                             startActivity(intent);
                         })
                         .setNegativeButton("LATER", null)
-                        .setCancelable(false)
-                        .show();
+                        .setCancelable(false).show();
             }
         }
     }
@@ -469,38 +423,28 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-
-        // Oprim resursele RTTY (dacă nu au fost deja oprite prin EXIT)
-        if (managerEcranRtty != null) {
-            managerEcranRtty.eliberareResurse();
-        }
-
-        // Oprim resursele Cluster (doar dacă ieșim definitiv din aplicație)
+        if (managerEcranRtty != null) managerEcranRtty.eliberareResurse();
+        if (managerEcranCwDeep != null) managerEcranCwDeep.eliberareResurse();
         if (isFinishing()) {
             if (managerEcranCluster != null) managerEcranCluster.eliberareResurse();
-            // Ne asigurăm că oprim serviciul pentru a închide conexiunea și a elimina notificarea
             stopService(new Intent(this, ClusterService.class));
         }
-
-        // Oprim resursele CW Keyer
-        if (managerEcranComenzi != null) {
-            managerEcranComenzi.eliberareResurse();
-        }
-
-        // Dezactivam receiver-ul USB
+        if (managerEcranComenzi != null) managerEcranComenzi.eliberareResurse();
         safeUnregisterReceiver();
+        if (radioManager != null) radioManager.opresteToat();
+    }
 
-        // Oprim porturile seriale
-        if (radioManager != null) {
-            radioManager.opresteToat();
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @androidx.annotation.NonNull String[] permissions, @androidx.annotation.NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 123 && grantResults.length > 0 && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            if (managerEcranCwDeep != null) managerEcranCwDeep.startDecoderDupaPermisiune();
         }
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (managerEcranSetariProprii != null) {
-            managerEcranSetariProprii.handleActivityResult(requestCode, resultCode, data);
-        }
+        if (managerEcranSetariProprii != null) managerEcranSetariProprii.handleActivityResult(requestCode, resultCode, data);
     }
 }

@@ -23,6 +23,18 @@ public class Waterfall extends View {
     private final int sampleRate;
     private final int maxDisplayFrequency;
 
+    // CIZELARE: intervalul de frecventa efectiv desenat pe axa X. Implicit 0..Nyquist
+    // (comportamentul RTTY de dinainte, neschimbat), dar subclasele care primesc randuri
+    // de magnitudine acoperind doar o felie de spectru (ex. CwWaterfall: 100-1500 Hz)
+    // trebuie sa poata declara intervalul real, altfel axa afisata ar fi dezaliniata
+    // silentios fata de datele primite.
+    protected int displayMinFrequency;
+    protected int displayMaxFrequency;
+
+    // Markerii RTTY (2 linii roșii verticale: mark si space) nu au sens pentru decodoare
+    // non-RTTY. Subclasele pot dezactiva desenarea lor.
+    protected boolean showRttyMarkers = true;
+
     // CORECTIE (bug de concurenta): fosta metoda statica SimpleFFT.magnitudeSpectrum()
     // partaja o singura instanta SimpleFFT (cu buffere interne mutabile) intre acest
     // Waterfall si thread-ul separat de Auto-Tune din EcranRttyDroid - cele doua puteau
@@ -46,8 +58,8 @@ public class Waterfall extends View {
     // la fiecare rand nou de waterfall (aloca presiune GC pe threadul UI, concurand cu
     // threadul audio de decodare RTTY pentru CPU).
     private Canvas scratchCanvas;
-    private final Paint pixelPaint = new Paint();
-    private final Paint markerPaint = new Paint();
+    protected final Paint pixelPaint = new Paint();
+    protected final Paint markerPaint = new Paint();
 
     // OPTIMIZARE: paleta de culori precalculata o singura data intr-un LUT de 256 de
     // intrari, in loc sa recalculam sqrt() + 3 ramuri min/max PENTRU FIECARE PIXEL DE
@@ -83,8 +95,35 @@ public class Waterfall extends View {
         super(context);
         this.sampleRate = sampleRate;
         this.maxDisplayFrequency = sampleRate / 2;
+        this.displayMinFrequency = 0;
+        this.displayMaxFrequency = this.maxDisplayFrequency;
         markerPaint.setColor(Color.RED);
         markerPaint.setStrokeWidth(3f);
+    }
+
+    /**
+     * Declara intervalul de frecventa acoperit de randurile de magnitudine primite,
+     * pentru ca maparea X <-> frecventa (desenare markeri si tap-to-tune) sa fie corecta.
+     */
+    public void setDisplayFrequencyRange(int minFrequencyHz, int maxFrequencyHz) {
+        if (maxFrequencyHz <= minFrequencyHz) return;
+        this.displayMinFrequency = minFrequencyHz;
+        this.displayMaxFrequency = maxFrequencyHz;
+        postInvalidate();
+    }
+
+    protected float frequencyToX(float frequencyHz) {
+        int span = displayMaxFrequency - displayMinFrequency;
+        if (span <= 0) return 0f;
+        return ((frequencyHz - displayMinFrequency) / span) * getWidth();
+    }
+
+    protected int xToFrequency(float x) {
+        int width = getWidth();
+        if (width <= 0) return displayMinFrequency;
+        int span = displayMaxFrequency - displayMinFrequency;
+        int frequencyHz = displayMinFrequency + (int) ((x / width) * span);
+        return Math.max(displayMinFrequency, Math.min(frequencyHz, displayMaxFrequency));
     }
 
     public void setOnFrequencyTappedListener(OnFrequencyTappedListener l) {
@@ -126,6 +165,11 @@ public class Waterfall extends View {
         fft.calculeazaMagnitudine(samples, 0, magBuffer);
         float[] magnitude = new float[magBuffer.length];
         for (int i = 0; i < magnitude.length; i++) magnitude[i] = (float) magBuffer[i];
+        post(() -> drawNewRow(magnitude));
+    }
+
+    public void pushMagnitudeRow(float[] magnitude) {
+        if (waterfallBitmap == null) return;
         post(() -> drawNewRow(magnitude));
     }
 
@@ -193,11 +237,12 @@ public class Waterfall extends View {
         if (waterfallBitmap != null) {
             canvas.drawBitmap(waterfallBitmap, 0, 0, null);
         }
-        int width = getWidth();
-        float markX = ((float) tunedFrequencyHz / maxDisplayFrequency) * width;
+        if (!showRttyMarkers) return;
+
+        float markX = frequencyToX(tunedFrequencyHz);
         canvas.drawLine(markX, 0, markX, getHeight(), markerPaint);
 
-        float spaceX = (((float) tunedFrequencyHz + shiftHz) / maxDisplayFrequency) * width;
+        float spaceX = frequencyToX(tunedFrequencyHz + shiftHz);
         canvas.drawLine(spaceX, 0, spaceX, getHeight(), markerPaint);
     }
 
@@ -205,11 +250,8 @@ public class Waterfall extends View {
     public boolean onTouchEvent(MotionEvent event) {
         int action = event.getAction();
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {
-            int width = getWidth();
-            if (width <= 0) return true;
-            float x = event.getX();
-            int frequencyHz = (int) ((x / width) * maxDisplayFrequency);
-            frequencyHz = Math.max(0, Math.min(frequencyHz, maxDisplayFrequency));
+            if (getWidth() <= 0) return true;
+            int frequencyHz = xToFrequency(event.getX());
             tunedFrequencyHz = frequencyHz;
             invalidate();
             if (listener != null) {
