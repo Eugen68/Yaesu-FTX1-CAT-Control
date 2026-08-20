@@ -23,6 +23,7 @@ import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_WINDOW_S
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.SAMPLE_RATE
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.TOTAL_BINS
 import com.example.yaesucatcontroladv.deepcw.dsp.STFT
+import com.example.yaesucatcontroladv.deepcw.denoise.CwDenoiser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,7 +52,11 @@ enum class DecoderMode { NORMAL, PILEUP }
  * SI model_detect.onnx (ambele sunt necesare; detectie fara decodare narrow, sau invers,
  * nu are sens functional).
  */
-data class DecoderAvailability(val normalAvailable: Boolean, val pileupAvailable: Boolean)
+data class DecoderAvailability(
+    val normalAvailable: Boolean,
+    val pileupAvailable: Boolean,
+    val denoiseAvailable: Boolean = true
+)
 
 /**
  * Hub-ul de procesare audio al decodorului CW AI.
@@ -132,7 +137,24 @@ class MorseAudioProcessor(private val context: Context) {
     private var pileupAvailable = true
 
     @Volatile
+    private var denoiseAvailable = true
+
+    @Volatile
     private var isRunning = false
+
+    private val cwDenoiser = CwDenoiser()
+
+    @Volatile
+    var denoiseEnabled: Boolean = false
+        private set
+
+    @Volatile
+    var wetLevel: Float = 1.0f
+        private set
+
+    @Volatile
+    var outputGain: Float = 1.0f
+        private set
 
     private val segments = mutableListOf<String>()
     private val segmentsMutex = Mutex()
@@ -155,18 +177,31 @@ class MorseAudioProcessor(private val context: Context) {
     private val loopsMutex = Mutex()
 
     private val audioRecorder = AudioRecorder(context) { chunk ->
-        when (mode) {
-            DecoderMode.NORMAL -> pendingSamples.append(chunk)
-            DecoderMode.PILEUP -> pileupRing.write(chunk)
+        var processedChunk = chunk
+        if (denoiseEnabled && cwDenoiser.isAvailable) {
+            processedChunk = cwDenoiser.process(chunk, wetLevel)
+            val g = outputGain
+            if (g != 1f && processedChunk.isNotEmpty()) {
+                for (i in processedChunk.indices) {
+                    processedChunk[i] = (processedChunk[i] * g).coerceIn(-1f, 1f)
+                }
+            }
         }
-        waterfallChannel.trySend(chunk)
+
+        if (processedChunk.isNotEmpty()) {
+            when (mode) {
+                DecoderMode.NORMAL -> pendingSamples.append(processedChunk)
+                DecoderMode.PILEUP -> pileupRing.write(processedChunk)
+            }
+            waterfallChannel.trySend(processedChunk)
+        }
     }
 
     // ============================================================
     // API public
     // ============================================================
 
-    fun getAvailability(): DecoderAvailability = DecoderAvailability(normalAvailable, pileupAvailable)
+    fun getAvailability(): DecoderAvailability = DecoderAvailability(normalAvailable, pileupAvailable, denoiseAvailable)
 
     fun getWaterfallMinFreqHz(): Int =
         if (mode == DecoderMode.PILEUP) PILEUP_MIN_FREQ_HZ else Constants.MIN_FREQ_HZ
@@ -187,6 +222,39 @@ class MorseAudioProcessor(private val context: Context) {
         if (widthHz == filterWidthHz) return
         filterWidthHz = widthHz
         if (isRunning && mode == DecoderMode.NORMAL) restartModeLoops()
+    }
+
+    fun setWetLevel(wet: Float) {
+        wetLevel = wet.coerceIn(0f, 1f)
+    }
+
+    fun setOutputGain(gain: Float) {
+        outputGain = gain.coerceIn(0f, 2f)
+    }
+
+    fun setDenoiseEnabled(enabled: Boolean) {
+        if (denoiseEnabled == enabled) return
+        denoiseEnabled = enabled
+
+        if (isRunning) {
+            scope.launch {
+                if (enabled) {
+                    val ok = withContext(Dispatchers.IO) { cwDenoiser.initialize() }
+                    if (ok) {
+                        cwDenoiser.reset()
+                        reportStatus("CW Denoiser ACTIVATED")
+                    } else {
+                        denoiseEnabled = false
+                        denoiseAvailable = false
+                        notifyAvailability()
+                        reportStatus("Filtrul de reducere a zgomotului nu este disponibil pe acest device")
+                    }
+                } else {
+                    cwDenoiser.reset()
+                    reportStatus("CW Denoiser DEACTIVATED")
+                }
+            }
+        }
     }
 
     fun setMode(newMode: DecoderMode) {
@@ -244,6 +312,21 @@ class MorseAudioProcessor(private val context: Context) {
                 
                 reportStatus("Model NORMAL (model_en.onnx) OK")
 
+                if (denoiseEnabled) {
+                    val ok = withContext(Dispatchers.IO) { cwDenoiser.initialize() }
+                    if (ok) {
+                        cwDenoiser.reset()
+                    } else {
+                        denoiseEnabled = false
+                        denoiseAvailable = false
+                        // notifyAvailability() de mai sus a rulat deja (inainte de init-ul
+                        // denoiser-ului, care are nevoie de modelul principal validat), deci
+                        // UI-ul trebuie notificat din nou ca sa isi corecteze toggle-ul.
+                        notifyAvailability()
+                        reportStatus("Filtrul de reducere a zgomotului nu este disponibil pe acest device")
+                    }
+                }
+
                 if (!audioRecorder.start()) {
                     reportError("Eroare de captare audio. Verifica permisiunea de microfon.")
                     return@withLock
@@ -272,6 +355,7 @@ class MorseAudioProcessor(private val context: Context) {
                 pileupRing.clear()
 
                 mainDecoder.release()
+                cwDenoiser.release()
                 narrowDecoder?.release()
                 narrowDecoder = null
                 cwDetector?.release()

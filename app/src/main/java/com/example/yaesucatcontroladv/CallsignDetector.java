@@ -37,6 +37,11 @@ public class CallsignDetector {
 
     private final StringBuilder bufferCuvantCurent = new StringBuilder();
 
+    // Stare pentru detectie dublu-tap (Plan QRZ)
+    private long lastTapTime = 0;
+    private String lastTappedCallsign = null;
+    private static final long DOUBLE_TAP_TIME_DELTA = 500; // milisecunde
+
     // FUNCTIONALITATE NOUA: pauza auto-scroll la interactiune manuala. Cand utilizatorul
     // atinge/deruleaza fereastra de terminal, oprim auto-scroll-ul (decodarea continua
     // normal, mesajele se acumuleaza in fundal) ca sa poata citi/derula liber mesaje mai
@@ -123,19 +128,12 @@ public class CallsignDetector {
         }
     }
 
-    // ============================================================
-    // 2. AFISARE IN TERMINAL (Doar creeaza textul auriu clicabil)
-    // ============================================================
-    private void afiseazaIndicativColorat(String callsign) {
-        if (tvTerminal == null) return;
-        final String callFinal = callsign.toUpperCase().trim();
-
+    private SpannableString creeazaSpanIndicativ(final String callFinal) {
         SpannableString spannable = new SpannableString(callFinal);
         ClickableSpan clickableSpan = new ClickableSpan() {
             @Override
             public void onClick(View widget) {
                 // Cand dai tap pe un indicativ deja afisat, doar executi actiunea
-                // (NU il mai afiseaza a doua oara in terminal)
                 onIndicativClick(callFinal);
             }
             @Override
@@ -146,14 +144,81 @@ public class CallsignDetector {
             }
         };
         spannable.setSpan(clickableSpan, 0, callFinal.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        tvTerminal.append(spannable);
+        return spannable;
+    }
+
+    // ============================================================
+    // 2. AFISARE IN TERMINAL (Doar creeaza textul auriu clicabil)
+    // ============================================================
+    private void afiseazaIndicativColorat(String callsign) {
+        if (tvTerminal == null) return;
+        tvTerminal.append(creeazaSpanIndicativ(callsign.toUpperCase().trim()));
     }
 
     // ============================================================
     // 3. HANDLER PENTRU CLICK PE INDICATIV EXISTENT
     // ============================================================
     private void onIndicativClick(String callsign) {
-        executaActiuneCallsign(callsign);
+        final String callFinal = callsign.toUpperCase().trim();
+        long tapTime = System.currentTimeMillis();
+
+        if (callFinal.equals(lastTappedCallsign) && (tapTime - lastTapTime) < DOUBLE_TAP_TIME_DELTA) {
+            // TAP DUBLU -> deschide QRZ.com in browser, nu repeta actiunea de tap simplu
+            lastTapTime = 0;
+            lastTappedCallsign = null;
+            deschideQrzComInBrowser(callFinal);
+        } else {
+            // TAP SIMPLU (sau primul tap din serie)
+            lastTapTime = tapTime;
+            lastTappedCallsign = callFinal;
+            executaActiuneCallsign(callFinal);
+        }
+    }
+
+    private void deschideQrzComInBrowser(String callsign) {
+        String url = "https://www.qrz.com/db/" + callsign;
+        android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_VIEW);
+        i.setData(android.net.Uri.parse(url));
+        try {
+            context.startActivity(i);
+        } catch (Exception e) {
+            Toast.makeText(context, "Nu s-a putut deschide browser-ul", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /**
+     * Punct de intrare public STATELESS pentru ecrane care reconstruiesc complet textul afisat
+     * la fiecare actualizare (ex: CW AI Decoder) - nu foloseste bufferCuvantCurent/tvTerminal.
+     * Primeste un text complet (poate contine mai multe cuvinte), il tokenizeaza pe spatii/
+     * newline, si intoarce un CharSequence cu indicativele valide evidentiate auriu/clicabile,
+     * pastrand restul textului si separatorii nemodificati.
+     */
+    public CharSequence proceseazaTextComplet(String text) {
+        if (text == null || text.isEmpty()) return "";
+        android.text.SpannableStringBuilder builder = new android.text.SpannableStringBuilder();
+        StringBuilder cuvant = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == ' ' || c == '\n' || c == '\r') {
+                adaugaCuvantInBuilder(builder, cuvant);
+                builder.append(c);
+            } else {
+                cuvant.append(c);
+            }
+        }
+        adaugaCuvantInBuilder(builder, cuvant);
+        return builder;
+    }
+
+    private void adaugaCuvantInBuilder(android.text.SpannableStringBuilder builder, StringBuilder cuvant) {
+        if (cuvant.length() == 0) return;
+        String cuvantStr = cuvant.toString();
+        cuvant.setLength(0);
+        if (esteIndicativValid(cuvantStr)) {
+            builder.append(creeazaSpanIndicativ(cuvantStr.toUpperCase().trim()));
+        } else {
+            builder.append(cuvantStr);
+        }
     }
 
     /**

@@ -3,6 +3,8 @@ package com.example.yaesucatcontroladv;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -14,7 +16,12 @@ import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
+import com.example.yaesucatcontroladv.deepcw.audio.AudioListenPlayer;
+
 import android.annotation.SuppressLint;
+import android.widget.Toast;
+
+import java.util.Locale;
 
 public class EcranComenzi {
 
@@ -28,9 +35,29 @@ public class EcranComenzi {
     private ProgressBar pbSMeter;
     private Button btnLSB, btnUSB, btnCW, btnRTTYL;
     private Button btnBkInToggle, btnApfToggle, btnWidthToggle, btnConnect;
+    private Button btnListenToggle, btnListenDenoiseToggle;
+    private LinearLayout llDenoiseControls;
+    private TextView tvLevelVal, tvGainVal, tvBufferVal;
+    private SeekBar sbLevel, sbGain, sbBuffer;
+    private CheckBox cbLockDenoiseControls;
+
     private Button btnPaddleLeft, btnPaddleRight;
     private LinearLayout containerButoaneCwExtra;
     private LinearLayout containerCwKeyer;
+
+    // Listen Player & Stare
+    private AudioListenPlayer listenPlayer;
+    private boolean listenActive = false;
+
+    // Logică Auto-Hide și Long-Press pentru panoul de denoise
+    private final Handler panelHandler = new Handler(Looper.getMainLooper());
+    private final Runnable hidePanelRunnable = () -> {
+        if (llDenoiseControls != null) llDenoiseControls.setVisibility(View.GONE);
+    };
+
+    private final Handler longPressHandler = new Handler(Looper.getMainLooper());
+    private Runnable longPressRunnable;
+    private boolean longPressTriggered = false;
 
     // Variabile de stare internă pentru butoane
     private boolean stareBkInOn = false;
@@ -45,14 +72,28 @@ public class EcranComenzi {
     private static final String PREF_CW_IAMBIC_B = "cw_keyer_iambic_b";
     private static final String PREF_CW_RTS = "cw_keyer_rts";
 
+    private static final String LISTEN_PREFS = "LISTEN_PREFS";
+    private static final String PREF_LISTEN_DENOISE = "listen_denoise";
+    private static final String PREF_LISTEN_WET = "listen_wet";
+    private static final String PREF_LISTEN_GAIN = "listen_gain";
+    private static final String PREF_LISTEN_BUFFER_MS = "listen_buffer_ms";
+    private static final String PREF_LISTEN_LOCK_CONTROLS = "listen_lock_controls";
+
     private boolean isInitialLoading = false;
 
     public EcranComenzi(Context context, RadioManager radioManager) {
         this.context = context;
         this.radioManager = radioManager;
         this.cwKeyer = new CwKeyer(radioManager);
+        this.listenPlayer = new AudioListenPlayer(context);
         construiesteInterfata();
         incarcaSetariKeyer();
+        incarcaSetariListen();
+
+        // Inregistrare pentru exclusivitate reciproca cu decodorul CW AI
+        AudioCaptureCoordinator.registerListen(() -> {
+            if (listenActive) stopListen();
+        });
     }
 
     public View getView() {
@@ -90,6 +131,134 @@ public class EcranComenzi {
             }
         });
         llCAT.addView(btnConnect);
+
+        // --- BUTOANE LISTEN & DENOISE (PLAN 2) ---
+        LinearLayout rListen = new LinearLayout(context);
+        rListen.setOrientation(LinearLayout.HORIZONTAL);
+        rListen.setPadding(0, 0, 0, 30);
+
+        btnListenToggle = new Button(context);
+        btnListenToggle.setText("🔊 LISTEN: OFF");
+        btnListenToggle.setBackgroundColor(Color.parseColor("#37474F"));
+        btnListenToggle.setTextColor(Color.WHITE);
+        btnListenToggle.setLayoutParams(new LinearLayout.LayoutParams(0, 130, 1.2f));
+        btnListenToggle.setOnClickListener(v -> toggleListen());
+        rListen.addView(btnListenToggle);
+
+        View spacerListen = new View(context);
+        spacerListen.setLayoutParams(new LinearLayout.LayoutParams(20, 1));
+        rListen.addView(spacerListen);
+
+        btnListenDenoiseToggle = new Button(context);
+        btnListenDenoiseToggle.setText("DENOISE: OFF");
+        btnListenDenoiseToggle.setBackgroundColor(Color.parseColor("#37474F"));
+        btnListenDenoiseToggle.setTextColor(Color.WHITE);
+        btnListenDenoiseToggle.setLayoutParams(new LinearLayout.LayoutParams(0, 130, 1f));
+        btnListenDenoiseToggle.setOnClickListener(v -> toggleListenDenoise());
+        rListen.addView(btnListenDenoiseToggle);
+        
+        llCAT.addView(rListen);
+
+        // --- PANOU CONTROALE DENOISE (PLAN 3) ---
+        llDenoiseControls = new LinearLayout(context);
+        llDenoiseControls.setOrientation(LinearLayout.VERTICAL);
+        llDenoiseControls.setBackgroundColor(Color.parseColor("#263238"));
+        llDenoiseControls.setPadding(30, 20, 30, 20);
+        llDenoiseControls.setVisibility(View.GONE);
+        LinearLayout.LayoutParams pDenoisePanel = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pDenoisePanel.setMargins(0, 0, 0, 30);
+        llDenoiseControls.setLayoutParams(pDenoisePanel);
+
+        // LEVEL (Mix Wet/Dry)
+        tvLevelVal = creeazaLabelControl("LEVEL: 100%");
+        llDenoiseControls.addView(tvLevelVal);
+        sbLevel = new SeekBar(context);
+        sbLevel.setMax(100); // 0-100%
+        sbLevel.setProgress(100);
+        sbLevel.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                float wet = progress / 100f;
+                tvLevelVal.setText("LEVEL: " + progress + "%");
+                listenPlayer.setWetLevel(wet);
+                if (fromUser) {
+                    salveazaSetareListen(PREF_LISTEN_WET, wet);
+                    resetAutoHideTimer();
+                }
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+        llDenoiseControls.addView(sbLevel);
+
+        // OUTPUT GAIN
+        tvGainVal = creeazaLabelControl("GAIN: 1.00×");
+        llDenoiseControls.addView(tvGainVal);
+        sbGain = new SeekBar(context);
+        sbGain.setMax(200);
+        sbGain.setProgress(100);
+        sbGain.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                float gain = progress / 100f;
+                tvGainVal.setText(String.format(Locale.US, "GAIN: %.2f×", gain));
+                listenPlayer.setOutputGain(gain);
+                if (fromUser) {
+                    salveazaSetareListen(PREF_LISTEN_GAIN, gain);
+                    resetAutoHideTimer();
+                }
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+        llDenoiseControls.addView(sbGain);
+
+        // BUFFER (Latency)
+        tvBufferVal = creeazaLabelControl("BUFFER: 90 ms");
+        llDenoiseControls.addView(tvBufferVal);
+        sbBuffer = new SeekBar(context);
+        sbBuffer.setMax(4); // 40, 60, 90, 120, 160
+        sbBuffer.setProgress(2);
+        final int[] bufferVals = {40, 60, 90, 120, 160};
+        sbBuffer.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                int ms = bufferVals[progress];
+                tvBufferVal.setText("BUFFER: " + ms + " ms");
+                listenPlayer.setBufferMs(ms);
+                if (fromUser) {
+                    salveazaSetareListen(PREF_LISTEN_BUFFER_MS, ms);
+                    resetAutoHideTimer();
+                }
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+        llDenoiseControls.addView(sbBuffer);
+
+        // LOCK CONTROLS (Plan 4)
+        cbLockDenoiseControls = new CheckBox(context);
+        cbLockDenoiseControls.setText("KEEP CONTROLS VISIBLE");
+        cbLockDenoiseControls.setTextColor(Color.YELLOW);
+        cbLockDenoiseControls.setTextSize(11);
+        LinearLayout.LayoutParams pLock = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pLock.setMargins(0, 20, 0, 0);
+        cbLockDenoiseControls.setLayoutParams(pLock);
+        cbLockDenoiseControls.setOnCheckedChangeListener((v, isChecked) -> {
+            if (isChecked) {
+                panelHandler.removeCallbacks(hidePanelRunnable);
+            } else {
+                resetAutoHideTimer();
+            }
+            if (!isInitialLoading) {
+                salveazaSetareListen(PREF_LISTEN_LOCK_CONTROLS, isChecked);
+            }
+        });
+        llDenoiseControls.addView(cbLockDenoiseControls);
+
+        llCAT.addView(llDenoiseControls);
 
         // --- S-METRU GRAFIC ---
         LinearLayout randSMeter = new LinearLayout(context);
@@ -601,6 +770,7 @@ public class EcranComenzi {
             containerButoaneCwExtra.setVisibility(View.GONE);
             if (containerCwKeyer != null) containerCwKeyer.setVisibility(View.GONE);
             if (cwKeyer != null) cwKeyer.setHardwareOutputEnabled(false);
+            if (listenActive) stopListen();
         }
     }
 
@@ -608,5 +778,168 @@ public class EcranComenzi {
         if (cwKeyer != null) {
             cwKeyer.shutdown();
         }
+        if (listenPlayer != null) {
+            listenPlayer.stop();
+        }
+    }
+
+    // --- LOGICA LISTEN (PLAN 2) ---
+
+    private void toggleListen() {
+        if (!listenActive) {
+            verificareSiPornireListen();
+        } else {
+            stopListen();
+        }
+    }
+
+    private void verificareSiPornireListen() {
+        if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            androidx.core.app.ActivityCompat.requestPermissions((android.app.Activity) context,
+                    new String[]{android.Manifest.permission.RECORD_AUDIO}, 124);
+        } else {
+            startListen();
+        }
+    }
+
+    private void startListen() {
+        AudioCaptureCoordinator.beforeListenStart();
+        AudioListenPlayer.StartResult result = listenPlayer.start();
+        if (result == AudioListenPlayer.StartResult.OK) {
+            listenActive = true;
+            btnListenToggle.setText("🔊 LISTEN: ON");
+            btnListenToggle.setBackgroundColor(Color.parseColor("#2E7D32"));
+        } else if (result == AudioListenPlayer.StartResult.NO_USB_AUDIO) {
+            Toast.makeText(context, "Conectati interfata audio USB a statiei pentru a asculta", Toast.LENGTH_LONG).show();
+        } else {
+            Toast.makeText(context, "Nu s-a putut porni ascultarea audio", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void stopListen() {
+        listenActive = false;
+        listenPlayer.stop();
+        btnListenToggle.setText("🔊 LISTEN: OFF");
+        btnListenToggle.setBackgroundColor(Color.parseColor("#37474F"));
+    }
+
+    public void startListenDupaPermisiune() {
+        startListen();
+    }
+
+    private void toggleListenDenoise() {
+        boolean next = !listenPlayer.getDenoiseEnabled();
+        boolean ok = listenPlayer.setDenoiseEnabled(next);
+        if (ok) {
+            syncListenDenoiseButtonUi(next);
+            salveazaSetareListen(PREF_LISTEN_DENOISE, next ? 1 : 0);
+            
+            if (next) {
+                showDenoiseControlsPanel();
+            } else {
+                panelHandler.removeCallbacks(hidePanelRunnable);
+                llDenoiseControls.setVisibility(View.GONE);
+            }
+        } else {
+            Toast.makeText(context, "Filtrul de reducere a zgomotului nu este disponibil pe acest device", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void syncListenDenoiseButtonUi(boolean on) {
+        btnListenDenoiseToggle.setText("DENOISE: " + (on ? "ON" : "OFF"));
+        btnListenDenoiseToggle.setBackgroundColor(on ? Color.parseColor("#2E7D32") : Color.parseColor("#37474F"));
+        configurareLongPressDenoise(on);
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private void configurareLongPressDenoise(boolean on) {
+        if (!on) {
+            btnListenDenoiseToggle.setOnTouchListener(null);
+            return;
+        }
+
+        btnListenDenoiseToggle.setOnTouchListener((v, event) -> {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    longPressTriggered = false;
+                    longPressRunnable = () -> {
+                        if (listenPlayer.getDenoiseEnabled() && llDenoiseControls.getVisibility() != View.VISIBLE) {
+                            longPressTriggered = true;
+                            showDenoiseControlsPanel();
+                        }
+                    };
+                    longPressHandler.postDelayed(longPressRunnable, 3000);
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    longPressHandler.removeCallbacks(longPressRunnable);
+                    return longPressTriggered; // Consumă evenimentul dacă long-press a fost declanșat
+            }
+            return false;
+        });
+    }
+
+    private void showDenoiseControlsPanel() {
+        if (llDenoiseControls != null) {
+            llDenoiseControls.setVisibility(View.VISIBLE);
+            resetAutoHideTimer();
+        }
+    }
+
+    private void resetAutoHideTimer() {
+        panelHandler.removeCallbacks(hidePanelRunnable);
+        if (cbLockDenoiseControls != null && cbLockDenoiseControls.isChecked()) return;
+        panelHandler.postDelayed(hidePanelRunnable, 5000);
+    }
+
+    private TextView creeazaLabelControl(String text) {
+        TextView tv = new TextView(context);
+        tv.setText(text);
+        tv.setTextColor(Color.WHITE);
+        tv.setTextSize(12);
+        tv.setTypeface(null, Typeface.BOLD);
+        tv.setPadding(0, 10, 0, 0);
+        return tv;
+    }
+
+    private void salveazaSetareListen(String cheie, Object valoare) {
+        android.content.SharedPreferences.Editor editor = context.getSharedPreferences(LISTEN_PREFS, Context.MODE_PRIVATE).edit();
+        if (valoare instanceof Integer) editor.putInt(cheie, (Integer) valoare);
+        else if (valoare instanceof Boolean) editor.putBoolean(cheie, (Boolean) valoare);
+        else if (valoare instanceof Float) editor.putFloat(cheie, (Float) valoare);
+        editor.apply();
+    }
+
+    private void incarcaSetariListen() {
+        isInitialLoading = true;
+        android.content.SharedPreferences prefs = context.getSharedPreferences(LISTEN_PREFS, Context.MODE_PRIVATE);
+        
+        int denoiseVal = prefs.getInt(PREF_LISTEN_DENOISE, 0);
+        float wet = prefs.getFloat(PREF_LISTEN_WET, 1.0f);
+        float gain = prefs.getFloat(PREF_LISTEN_GAIN, 1.0f);
+        int bufferMs = prefs.getInt(PREF_LISTEN_BUFFER_MS, 90);
+        boolean locked = prefs.getBoolean(PREF_LISTEN_LOCK_CONTROLS, false);
+
+        listenPlayer.setWetLevel(wet);
+        listenPlayer.setOutputGain(gain);
+        listenPlayer.setBufferMs(bufferMs);
+
+        // Actualizare UI slidere
+        sbLevel.setProgress((int)(wet * 100));
+        sbGain.setProgress((int)(gain * 100));
+        
+        int bufferIdx = 2; // default 90
+        int[] bufferVals = {40, 60, 90, 120, 160};
+        for (int i = 0; i < bufferVals.length; i++) if (bufferVals[i] == bufferMs) bufferIdx = i;
+        sbBuffer.setProgress(bufferIdx);
+
+        cbLockDenoiseControls.setChecked(locked);
+
+        if (denoiseVal == 1) {
+            listenPlayer.setDenoiseEnabled(true);
+            syncListenDenoiseButtonUi(true);
+        }
+        isInitialLoading = false;
     }
 } // Ultima acoladă din fișier, cea care închide corect toată clasa EcranComenzi!

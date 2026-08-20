@@ -7,12 +7,15 @@ import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.CheckBox;
 import android.widget.Spinner;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
@@ -24,6 +27,7 @@ import com.example.yaesucatcontroladv.deepcw.dsp.Constants;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -33,28 +37,56 @@ public class EcranCwDeepDecoder {
     private LinearLayout viewPrincipal;
 
     private CwWaterfall waterfall;
-    private TextView tvStatus, tvFreqInfo;
+    private TextView tvStatus, tvFreqInfo, tvLevelVal, tvGainVal;
     private ScrollView svTerminal;
-    private LinearLayout llMessagesContainer;
-    private Button btnToggle, btnModeToggle;
+    private LinearLayout llMessagesContainer, llDenoiseControls;
+    private Button btnToggle, btnModeToggle, btnDenoiseToggle;
+    private SeekBar sbLevel, sbGain;
+    private CheckBox cbLockDenoiseControls;
     private Spinner spWidth;
 
+    private final CallsignDetector callsignDetector;
     private MorseAudioProcessor processor;
     private boolean isRunning = false;
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private final Handler statusRevertHandler = new Handler(Looper.getMainLooper());
     private final Runnable statusRevertRunnable = this::revertStatusLabel;
 
+    // Logică Auto-Hide și Long-Press pentru panoul de denoise
+    private final Handler panelHandler = new Handler(Looper.getMainLooper());
+    private final Runnable hidePanelRunnable = () -> {
+        if (llDenoiseControls != null) llDenoiseControls.setVisibility(View.GONE);
+    };
+
+    private final Handler longPressHandler = new Handler(Looper.getMainLooper());
+    private Runnable longPressRunnable;
+    private boolean longPressTriggered = false;
+
     private static final String PREF_CW_AI_MODE = "cw_ai_mode";
     private static final String PREF_CW_AI_WIDTH = "cw_ai_width";
+    private static final String PREF_CW_AI_DENOISE = "cw_ai_denoise";
+    private static final String PREF_CW_AI_WET = "cw_ai_wet";
+    private static final String PREF_CW_AI_GAIN = "cw_ai_gain";
+    private static final String PREF_CW_AI_LOCK_CONTROLS = "cw_ai_lock_controls";
+
+    /** Starea vizuala a butonului DENOISE (optimista la click, corectata de availabilityListener). */
+    private boolean denoiseUiOn = false;
 
     public EcranCwDeepDecoder(Context context, RadioManager radioManager) {
         this.context = context;
         this.radioManager = radioManager;
         this.processor = new MorseAudioProcessor(context);
+        this.callsignDetector = new CallsignDetector(context, null, null, null);
         construiesteInterfata();
         configurareObservatori();
         incarcaSetari();
+
+        // Inregistrare pentru exclusivitate reciproca cu modul LISTEN (vezi Plan 2)
+        AudioCaptureCoordinator.registerCwDecoder(() -> {
+            if (isRunning) {
+                uiHandler.post(this::stopDecoder);
+            }
+        });
     }
 
     private void construiesteInterfata() {
@@ -131,9 +163,22 @@ public class EcranCwDeepDecoder {
         btnModeToggle.setBackgroundColor(Color.parseColor("#37474F"));
         btnModeToggle.setTextColor(Color.WHITE);
         btnModeToggle.setTextSize(11);
-        btnModeToggle.setLayoutParams(new LinearLayout.LayoutParams(0, 110, 1f));
+        btnModeToggle.setLayoutParams(new LinearLayout.LayoutParams(0, 110, 1.2f));
         btnModeToggle.setOnClickListener(v -> toggleMode());
         rControls.addView(btnModeToggle);
+
+        View spacerMode = new View(context);
+        spacerMode.setLayoutParams(new LinearLayout.LayoutParams(15, 1));
+        rControls.addView(spacerMode);
+
+        btnDenoiseToggle = new Button(context);
+        btnDenoiseToggle.setText("DENOISE: OFF");
+        btnDenoiseToggle.setBackgroundColor(Color.parseColor("#37474F"));
+        btnDenoiseToggle.setTextColor(Color.WHITE);
+        btnDenoiseToggle.setTextSize(11);
+        btnDenoiseToggle.setLayoutParams(new LinearLayout.LayoutParams(0, 110, 1.2f));
+        btnDenoiseToggle.setOnClickListener(v -> toggleDenoise());
+        rControls.addView(btnDenoiseToggle);
 
         View spacer = new View(context);
         spacer.setLayoutParams(new LinearLayout.LayoutParams(20, 1));
@@ -163,6 +208,82 @@ public class EcranCwDeepDecoder {
         });
         rControls.addView(spWidth);
         viewPrincipal.addView(rControls);
+
+        // --- PANOU CONTROALE DENOISE (PLAN 3) ---
+        llDenoiseControls = new LinearLayout(context);
+        llDenoiseControls.setOrientation(LinearLayout.VERTICAL);
+        llDenoiseControls.setBackgroundColor(Color.parseColor("#263238"));
+        llDenoiseControls.setPadding(30, 20, 30, 20);
+        llDenoiseControls.setVisibility(View.GONE);
+        LinearLayout.LayoutParams pDenoisePanel = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pDenoisePanel.setMargins(0, 0, 0, 10);
+        llDenoiseControls.setLayoutParams(pDenoisePanel);
+
+        // LEVEL (Mix Wet/Dry)
+        tvLevelVal = creeazaLabelControl("LEVEL: 100%");
+        llDenoiseControls.addView(tvLevelVal);
+        sbLevel = new SeekBar(context);
+        sbLevel.setMax(100); // 0-100%
+        sbLevel.setProgress(100);
+        sbLevel.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                float wet = progress / 100f;
+                tvLevelVal.setText("LEVEL: " + progress + "%");
+                processor.setWetLevel(wet);
+                if (fromUser) {
+                    salveazaSetare(PREF_CW_AI_WET, progress);
+                    resetAutoHideTimer();
+                }
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+        llDenoiseControls.addView(sbLevel);
+
+        // OUTPUT GAIN
+        tvGainVal = creeazaLabelControl("GAIN: 1.00×");
+        llDenoiseControls.addView(tvGainVal);
+        sbGain = new SeekBar(context);
+        sbGain.setMax(200);
+        sbGain.setProgress(100);
+        sbGain.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                float gain = progress / 100f;
+                tvGainVal.setText(String.format(Locale.US, "GAIN: %.2f×", gain));
+                processor.setOutputGain(gain);
+                if (fromUser) {
+                    salveazaSetare(PREF_CW_AI_GAIN, progress);
+                    resetAutoHideTimer();
+                }
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+        llDenoiseControls.addView(sbGain);
+
+        // LOCK CONTROLS (Plan 4)
+        cbLockDenoiseControls = new CheckBox(context);
+        cbLockDenoiseControls.setText("KEEP CONTROLS VISIBLE");
+        cbLockDenoiseControls.setTextColor(Color.YELLOW);
+        cbLockDenoiseControls.setTextSize(11);
+        LinearLayout.LayoutParams pLock = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pLock.setMargins(0, 20, 0, 0);
+        cbLockDenoiseControls.setLayoutParams(pLock);
+        cbLockDenoiseControls.setOnCheckedChangeListener((v, isChecked) -> {
+            if (isChecked) {
+                panelHandler.removeCallbacks(hidePanelRunnable);
+            } else {
+                resetAutoHideTimer();
+            }
+            salveazaSetare(PREF_CW_AI_LOCK_CONTROLS, isChecked ? 1 : 0);
+        });
+        llDenoiseControls.addView(cbLockDenoiseControls);
+
+        viewPrincipal.addView(llDenoiseControls);
 
         // Row 2: Start/Stop & Clear
         LinearLayout rButtons = new LinearLayout(context);
@@ -214,6 +335,14 @@ public class EcranCwDeepDecoder {
             if (!avail.getPileupAvailable() && processor.getMode() == DecoderMode.PILEUP) {
                 toggleMode(); // Fallback to normal
             }
+            if (!avail.getDenoiseAvailable() && denoiseUiOn) {
+                // Init-ul nativ a esuat asincron (dupa apasarea toggle-ului sau la pornirea
+                // decodorului cu setarea incarcata din prefs). Processor-ul a revenit deja pe
+                // denoiseEnabled=false, deci butonul si pref-ul trebuie sincronizate cu el.
+                syncDenoiseButtonUi(false);
+                salveazaSetare(PREF_CW_AI_DENOISE, 0);
+                Toast.makeText(context, "Filtrul de reducere a zgomotului nu este disponibil pe acest device", Toast.LENGTH_LONG).show();
+            }
         }));
 
         processor.setErrorListener(message -> uiHandler.post(() -> {
@@ -264,6 +393,78 @@ public class EcranCwDeepDecoder {
         salveazaSetare(PREF_CW_AI_MODE, next.ordinal());
     }
 
+    private void toggleDenoise() {
+        boolean next = !processor.getDenoiseEnabled();
+        processor.setDenoiseEnabled(next);
+        syncDenoiseButtonUi(next);
+        salveazaSetare(PREF_CW_AI_DENOISE, next ? 1 : 0);
+
+        if (next) {
+            showDenoiseControlsPanel();
+        } else {
+            panelHandler.removeCallbacks(hidePanelRunnable);
+            llDenoiseControls.setVisibility(View.GONE);
+        }
+    }
+
+    private void syncDenoiseButtonUi(boolean on) {
+        denoiseUiOn = on;
+        btnDenoiseToggle.setText("DENOISE: " + (on ? "ON" : "OFF"));
+        btnDenoiseToggle.setBackgroundColor(on ? Color.parseColor("#2E7D32") : Color.parseColor("#37474F"));
+        configurareLongPressDenoise(on);
+    }
+
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    private void configurareLongPressDenoise(boolean on) {
+        if (!on) {
+            btnDenoiseToggle.setOnTouchListener(null);
+            return;
+        }
+
+        btnDenoiseToggle.setOnTouchListener((v, event) -> {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    longPressTriggered = false;
+                    longPressRunnable = () -> {
+                        if (processor.getDenoiseEnabled() && llDenoiseControls.getVisibility() != View.VISIBLE) {
+                            longPressTriggered = true;
+                            showDenoiseControlsPanel();
+                        }
+                    };
+                    longPressHandler.postDelayed(longPressRunnable, 3000);
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    longPressHandler.removeCallbacks(longPressRunnable);
+                    return longPressTriggered; // Consumă evenimentul dacă long-press a fost declanșat
+            }
+            return false;
+        });
+    }
+
+    private void showDenoiseControlsPanel() {
+        if (llDenoiseControls != null) {
+            llDenoiseControls.setVisibility(View.VISIBLE);
+            resetAutoHideTimer();
+        }
+    }
+
+    private void resetAutoHideTimer() {
+        panelHandler.removeCallbacks(hidePanelRunnable);
+        if (cbLockDenoiseControls != null && cbLockDenoiseControls.isChecked()) return;
+        panelHandler.postDelayed(hidePanelRunnable, 5000);
+    }
+
+    private TextView creeazaLabelControl(String text) {
+        TextView tv = new TextView(context);
+        tv.setText(text);
+        tv.setTextColor(Color.WHITE);
+        tv.setTextSize(12);
+        tv.setTypeface(null, Typeface.BOLD);
+        tv.setPadding(0, 10, 0, 0);
+        return tv;
+    }
+
     private void clearTerminal() {
         llMessagesContainer.removeAllViews();
         waterfall.clearOverlays();
@@ -272,38 +473,80 @@ public class EcranCwDeepDecoder {
         }
     }
 
+    /**
+     * Grupurile de apel (ex. "CQ") marcheaza de obicei inceputul unei transmisii noi -
+     * inseram o linie noua inaintea lor, ca transcriptul sa se citeasca pe "apeluri"
+     * separate in loc de un singur bloc continuu. Repetitiile consecutive ("CQ CQ CQ")
+     * raman pe aceeasi linie - doar prima aparitie a unei serii declanseaza linia noua.
+     */
+    private static final java.util.Set<String> LINE_BREAK_TRIGGER_WORDS =
+            java.util.Collections.singleton("CQ");
+
+    private static String formatCallGroups(String text) {
+        if (text == null || text.isEmpty()) return text == null ? "" : text;
+        String[] words = text.split(" ");
+        StringBuilder out = new StringBuilder(text.length() + 8);
+        String prevWord = null;
+        for (String w : words) {
+            if (w.isEmpty()) continue;
+            boolean isTrigger = LINE_BREAK_TRIGGER_WORDS.contains(w);
+            boolean prevWasTrigger = prevWord != null && LINE_BREAK_TRIGGER_WORDS.contains(prevWord);
+            if (prevWord != null) {
+                out.append(isTrigger && !prevWasTrigger ? '\n' : ' ');
+            }
+            out.append(w);
+            prevWord = w;
+        }
+        return out.toString();
+    }
+
     private void updateStreamingDisplay(List<String> segments, String pending) {
         if (processor.getMode() != DecoderMode.NORMAL) return;
-        
+
         // Log de diagnostic vizual discret (doar dacă nu avem nimic de afișat)
         if (segments.isEmpty() && (pending == null || pending.isEmpty())) {
-            return; 
+            return;
         }
 
         llMessagesContainer.removeAllViews();
-        
+
         TextView tv = new TextView(context);
         tv.setTextSize(18);
         tv.setTypeface(Typeface.MONOSPACE);
         tv.setTextColor(Color.WHITE);
-        
-        // Alăturăm segmentele confirmate
-        StringBuilder sb = new StringBuilder();
+        tv.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
+
+        StringBuilder confirmedRawBuilder = new StringBuilder();
         for (String s : segments) {
-            sb.append(s);
-            if (!s.endsWith(" ")) sb.append(" ");
+            String trimmed = s.trim();
+            if (trimmed.isEmpty()) continue;
+            if (confirmedRawBuilder.length() > 0) confirmedRawBuilder.append(' ');
+            confirmedRawBuilder.append(trimmed);
         }
-        
-        tv.setText(sb.toString());
-        
+        String confirmedRaw = confirmedRawBuilder.toString();
+        String confirmedFormatted = formatCallGroups(confirmedRaw);
+
+        android.text.SpannableStringBuilder builder = new android.text.SpannableStringBuilder();
+        builder.append(callsignDetector.proceseazaTextComplet(confirmedFormatted));
+
+        tv.setText(builder);
+
         // Adăugăm textul pending (gri) folosind SpannableString pentru a evita ClassCastException
         if (pending != null && !pending.isEmpty()) {
-            android.text.SpannableString spannablePending = new android.text.SpannableString(pending);
-            spannablePending.setSpan(new android.text.style.ForegroundColorSpan(Color.GRAY), 
-                    0, pending.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            // Formatam pending impreuna cu coada textului confirmat, ca sa stim daca
+            // primul cuvant din pending incepe o serie noua de CQ (deci merita linie noua).
+            String fullRaw = confirmedRaw.isEmpty() ? pending.trim() : confirmedRaw + " " + pending.trim();
+            String fullFormatted = formatCallGroups(fullRaw);
+            String pendingFormatted = fullFormatted.length() >= confirmedFormatted.length()
+                    ? fullFormatted.substring(confirmedFormatted.length())
+                    : " " + pending;
+
+            android.text.SpannableString spannablePending = new android.text.SpannableString(pendingFormatted);
+            spannablePending.setSpan(new android.text.style.ForegroundColorSpan(Color.GRAY),
+                    0, pendingFormatted.length(), android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             tv.append(spannablePending);
         }
-        
+
         llMessagesContainer.addView(tv);
         svTerminal.post(() -> svTerminal.fullScroll(View.FOCUS_DOWN));
     }
@@ -313,10 +556,16 @@ public class EcranCwDeepDecoder {
         llMessagesContainer.removeAllViews();
         for (Map.Entry<Integer, String> entry : texts.entrySet()) {
             TextView tv = new TextView(context);
-            tv.setText(String.format("[%d Hz]: %s", entry.getKey(), entry.getValue()));
             tv.setTextColor(Color.GREEN);
             tv.setTextSize(16);
             tv.setTypeface(Typeface.MONOSPACE);
+            tv.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
+
+            android.text.SpannableStringBuilder linie = new android.text.SpannableStringBuilder();
+            linie.append(String.format(Locale.US, "[%d Hz]: ", entry.getKey()));
+            linie.append(callsignDetector.proceseazaTextComplet(entry.getValue()));
+            tv.setText(linie);
+
             llMessagesContainer.addView(tv);
         }
     }
@@ -329,8 +578,20 @@ public class EcranCwDeepDecoder {
         android.content.SharedPreferences prefs = context.getSharedPreferences("CW_AI_PREFS", Context.MODE_PRIVATE);
         int modeIdx = prefs.getInt(PREF_CW_AI_MODE, 0);
         int widthIdx = prefs.getInt(PREF_CW_AI_WIDTH, 4); // Default 800Hz
+        int denoiseVal = prefs.getInt(PREF_CW_AI_DENOISE, 0);
+        int wetVal = prefs.getInt(PREF_CW_AI_WET, 100);
+        int gainVal = prefs.getInt(PREF_CW_AI_GAIN, 100);
+        boolean locked = prefs.getInt(PREF_CW_AI_LOCK_CONTROLS, 0) == 1;
+
+        processor.setWetLevel(wetVal / 100f);
+        processor.setOutputGain(gainVal / 100f);
+        
+        sbLevel.setProgress(wetVal);
+        sbGain.setProgress(gainVal);
+        cbLockDenoiseControls.setChecked(locked);
 
         if (modeIdx == 1) toggleMode();
+        if (denoiseVal == 1) toggleDenoise();
         spWidth.setSelection(widthIdx);
     }
 
@@ -348,6 +609,8 @@ public class EcranCwDeepDecoder {
             androidx.core.app.ActivityCompat.requestPermissions((android.app.Activity) context, 
                     new String[]{android.Manifest.permission.RECORD_AUDIO}, 123);
         } else {
+            // Coordinator-ul asigura ca LISTEN se opreste inainte de a porni decodorul
+            AudioCaptureCoordinator.beforeCwDecoderStart();
             startDecoder();
         }
     }

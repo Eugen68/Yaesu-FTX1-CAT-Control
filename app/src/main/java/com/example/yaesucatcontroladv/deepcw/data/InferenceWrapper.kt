@@ -18,10 +18,21 @@ import java.nio.FloatBuffer
  * lasam `session == null` -> `isAvailable == false`. Astfel un model stricat dezactiveaza
  * numai functionalitatea care depinde de el, fara sa dea crash aplicatiei. Nu se face
  * verificare de checksum: validarea e chiar construirea sesiunii, fara cost adaugat.
+ *
+ * Threading: fara `SessionOptions` explicit, ONNX Runtime Android poate rula sesiunea
+ * single-threaded pe unele device-uri, ceea ce incetineste inferenta (relevant mai ales
+ * in modul pileup, unde se ruleaza secvential pana la 5 inferente narrow per iteratie).
+ * NNAPI (accelerare hardware) NU e folosit intentionat: driverele NNAPI variaza mult ca
+ * suport/corectitudine intre producatori de telefoane, iar modelele CTC de aici au
+ * dimensiune temporala dinamica - riscul unei acuratete degradate silentios pe unele
+ * device-uri conteaza mai mult decat cateva ms castigate.
  */
 class InferenceWrapper(private val context: Context) {
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
     private var session: OrtSession? = null
+
+    private val intraOpThreads: Int =
+        Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
 
     val isAvailable: Boolean
         get() = session != null
@@ -45,7 +56,11 @@ class InferenceWrapper(private val context: Context) {
 
         return try {
             Log.d(TAG, "Se incarca $modelPath din ${cacheFile.absolutePath}")
-            session = env.createSession(cacheFile.absolutePath)
+            val options = OrtSession.SessionOptions().apply {
+                setIntraOpNumThreads(intraOpThreads)
+                setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+            }
+            session = env.createSession(cacheFile.absolutePath, options)
             null
         } catch (e: Exception) {
             // Fisier corupt / trunchiat / format invalid: dezactivam doar acest model.

@@ -21,12 +21,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * Captare audio pentru decodorul CW.
  *
  * - captura la rata nativa suportata (48000 > 19200 > 9600 > 44100 > 16000), NU 16000 fix;
- * - filtru anti-aliasing (1 pol, cutoff 0.9 * Nyquist tinta) inainte de decimare;
+ * - filtru anti-aliasing (Butterworth de ordin 4, 2 biquad-uri RBJ in cascada,
+ *   cutoff 0.9 * Nyquist tinta, ~-24dB/octava) inainte de decimare - single-pole
+ *   (-6dB/octava) lasa aliasing vizibil pe calea cea mai comuna (48000 -> 9600, decimare x5);
  * - decimare intreaga cand rata e multiplu de 9600, altfel reeșantionare liniara;
  * - sursa audio: UNPROCESSED > VOICE_RECOGNITION > MIC (fara AGC/NS pe cat posibil);
  * - device preferat: interfata USB audio, altfel microfonul intern;
@@ -47,7 +52,7 @@ class AudioRecorder(
     private var deviceCallbackThread: HandlerThread? = null
     private var deviceCallback: AudioDeviceCallback? = null
 
-    private var lpState = 0f
+    private val antiAliasFilter = BiquadLowpassCascade()
     private var resampleCursor = 0f
 
     private val chunkBuffer = FloatArray(AUDIO_CHUNK_SAMPLES)
@@ -84,7 +89,6 @@ class AudioRecorder(
         }
 
         isRecording = true
-        lpState = 0f
         resampleCursor = 0f
         chunkFill = 0
 
@@ -94,11 +98,9 @@ class AudioRecorder(
         val decimationFactor = if (integerDecimation) captureRate / SAMPLE_RATE else 1
         val resampleStep = captureRate.toFloat() / SAMPLE_RATE
 
-        // Filtru trece-jos de un pol, cutoff sub Nyquist-ul ratei tinta.
+        // Filtru anti-aliasing trece-jos, cutoff sub Nyquist-ul ratei tinta.
         val cutoffHz = (SAMPLE_RATE / 2f) * 0.9f
-        val dt = 1f / captureRate
-        val rc = 1f / (2f * PI.toFloat() * cutoffHz)
-        val alpha = dt / (rc + dt)
+        antiAliasFilter.configure(cutoffHz, captureRate.toFloat())
 
         val readSize = (captureRate / 10).coerceAtLeast(1024)
 
@@ -120,13 +122,10 @@ class AudioRecorder(
                 }
                 if (read == 0) continue
 
-                var filtered = lpState
                 for (i in 0 until read) {
                     val sample = rawBuffer[i] / 32768.0f
-                    filtered += alpha * (sample - filtered)
-                    floatBuffer[i] = filtered
+                    floatBuffer[i] = antiAliasFilter.process(sample)
                 }
-                lpState = filtered
 
                 if (integerDecimation) {
                     var i = 0
@@ -308,26 +307,92 @@ class AudioRecorder(
         else -> "source#$source"
     }
 
-    private companion object {
-        const val TAG = "AudioRecorder"
+    companion object {
+        private const val TAG = "AudioRecorder"
 
         /**
          * Doar rate care se impart exact la 9600 sunt preferate (decimare intreaga, fara
          * eroare de rezolutie de frecventa). 44100/16000 sunt ultimul resort, cu
          * reeșantionare liniara.
          */
-        val CAPTURE_RATES = intArrayOf(48000, 19200, 9600, 44100, 16000)
+        private val CAPTURE_RATES = intArrayOf(48000, 19200, 9600, 44100, 16000)
 
-        val AUDIO_SOURCES = intArrayOf(
+        private val AUDIO_SOURCES = intArrayOf(
             MediaRecorder.AudioSource.UNPROCESSED,
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
             MediaRecorder.AudioSource.MIC
         )
 
-        val USB_DEVICE_TYPES = setOf(
+        private val USB_DEVICE_TYPES = setOf(
             AudioDeviceInfo.TYPE_USB_DEVICE,
             AudioDeviceInfo.TYPE_USB_HEADSET,
             AudioDeviceInfo.TYPE_USB_ACCESSORY
         )
+
+        /** true daca exista cel putin un device de intrare audio USB conectat (nu microfonul intern). */
+        fun isUsbAudioInputConnected(context: Context): Boolean {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                ?: return false
+            return audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+                .any { it.type in USB_DEVICE_TYPES }
+        }
+    }
+}
+
+/**
+ * Filtru anti-aliasing trece-jos Butterworth de ordin 4, implementat ca 2 biquad-uri
+ * RBJ (Q = sqrt(2)/2 pentru fiecare stagiu) in cascada. Panta de ~-24dB/octava e mult
+ * mai apropiata de un resampler polyphase de calitate (ex. Web Audio API din referinta)
+ * decat un simplu filtru cu un pol (-6dB/octava), care lasa aliasing audibil pe caile
+ * de decimare mari (ex. 48000 -> 9600 Hz, factor 5).
+ */
+private class BiquadLowpassCascade {
+    private var b0 = 1f
+    private var b1 = 0f
+    private var b2 = 0f
+    private var a1 = 0f
+    private var a2 = 0f
+
+    private var x1a = 0f
+    private var x2a = 0f
+    private var y1a = 0f
+    private var y2a = 0f
+    private var x1b = 0f
+    private var x2b = 0f
+    private var y1b = 0f
+    private var y2b = 0f
+
+    fun configure(cutoffHz: Float, sampleRateHz: Float) {
+        val q = (sqrt(2.0) / 2.0).toFloat()
+        val omega = (2.0 * PI * cutoffHz / sampleRateHz).toFloat()
+        val sinOmega = sin(omega.toDouble()).toFloat()
+        val cosOmega = cos(omega.toDouble()).toFloat()
+        val alpha = sinOmega / (2f * q)
+
+        val rawB0 = (1f - cosOmega) / 2f
+        val rawB1 = 1f - cosOmega
+        val rawB2 = (1f - cosOmega) / 2f
+        val a0 = 1f + alpha
+
+        b0 = rawB0 / a0
+        b1 = rawB1 / a0
+        b2 = rawB2 / a0
+        a1 = (-2f * cosOmega) / a0
+        a2 = (1f - alpha) / a0
+
+        x1a = 0f; x2a = 0f; y1a = 0f; y2a = 0f
+        x1b = 0f; x2b = 0f; y1b = 0f; y2b = 0f
+    }
+
+    fun process(sample: Float): Float {
+        val stage1 = b0 * sample + b1 * x1a + b2 * x2a - a1 * y1a - a2 * y2a
+        x2a = x1a; x1a = sample
+        y2a = y1a; y1a = stage1
+
+        val stage2 = b0 * stage1 + b1 * x1b + b2 * x2b - a1 * y1b - a2 * y2b
+        x2b = x1b; x1b = stage1
+        y2b = y1b; y1b = stage2
+
+        return stage2
     }
 }
