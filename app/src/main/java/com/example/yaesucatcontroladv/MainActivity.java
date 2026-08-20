@@ -441,6 +441,8 @@ public class MainActivity extends AppCompatActivity {
             if (managerEcranCwDeep != null) managerEcranCwDeep.startDecoderDupaPermisiune();
         } else if (requestCode == 124 && grantResults.length > 0 && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
             if (managerEcranComenzi != null) managerEcranComenzi.startListenDupaPermisiune();
+        } else if (requestCode == 125 && grantResults.length > 0 && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            if (managerEcranComenzi != null) managerEcranComenzi.porneteScoDupaPermisiune();
         }
     }
 

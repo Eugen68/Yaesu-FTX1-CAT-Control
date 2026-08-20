@@ -10,6 +10,7 @@ add_library(hamnoise_cw SHARED
     hamnoise/denoise_audio.c
     hamnoise/denoise_gru.c
     hamnoise/jni_bridge.c
+    hamnoise/jni_bridge_voice.c
 )
 
 target_include_directories(hamnoise_cw PRIVATE hamnoise)

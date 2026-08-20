@@ -17,10 +17,13 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 
 import com.example.yaesucatcontroladv.deepcw.audio.AudioListenPlayer;
+import com.example.yaesucatcontroladv.deepcw.audio.MicUplinkPlayer;
+import com.hoho.android.usbserial.driver.UsbSerialPort;
 
 import android.annotation.SuppressLint;
 import android.widget.Toast;
 
+import java.io.IOException;
 import java.util.Locale;
 
 public class EcranComenzi {
@@ -45,9 +48,39 @@ public class EcranComenzi {
     private LinearLayout containerButoaneCwExtra;
     private LinearLayout containerCwKeyer;
 
+    // PTT (voce, LSB/USB) - hold-to-talk prin linia hardware RTS de pe portul de date
+    // (acelasi mecanism ca CwKeyer.setHardwareKey/EcranRttyDroid.setHardwarePtt - RTS/DTR
+    // cablate direct pe intrarea KEY/PTT a statiei, nu comanda CAT).
+    private Button btnPtt;
+    private boolean pttActive = false;
+    private LinearLayout llPttSettings;
+    private CheckBox cbPttToggleMode;
+    private Button btnPttLineToggle;
+    private boolean pttToggleMode = false; // false = hold-to-talk, true = apasa o data pentru TX/RX
+    private boolean pttUseRts = true;      // linia hardware folosita pentru PTT (ca la CW Keyer)
+    private boolean pttSettingsAfisatePrinHold = false;
+    private final Handler handlerPttSettings2 = new Handler(Looper.getMainLooper());
+    private final Runnable runnableAscundeSetariPtt2 = () -> {
+        if (llPttSettings != null) llPttSettings.setVisibility(View.GONE);
+    };
+    private final Runnable runnableAratareSetariPtt = () -> {
+        pttSettingsAfisatePrinHold = true;
+        if (llPttSettings != null) {
+            llPttSettings.setVisibility(View.VISIBLE);
+            reseteazaTemporizatorSetariPtt();
+        }
+    };
+
+    // Legatura Bluetooth SCO (casca cu microfon) - pornita o singura data la intrarea in
+    // mod voce (nu la fiecare PTT, ca sa evitam intarzierea de conectare BT la inceputul
+    // fiecarei emisii), oprita la iesirea din LSB/USB.
+    private boolean scoActive = false;
+    private boolean modVoceCurent = false; // LSB/USB (nu si RTTY, desi si acela e modLucruCurent==1)
+
     // Listen Player & Stare
     private AudioListenPlayer listenPlayer;
     private boolean listenActive = false;
+    private MicUplinkPlayer micUplink;
 
     // Logică Auto-Hide și Long-Press pentru panoul de denoise
     private final Handler panelHandler = new Handler(Looper.getMainLooper());
@@ -78,6 +111,8 @@ public class EcranComenzi {
     private static final String PREF_LISTEN_GAIN = "listen_gain";
     private static final String PREF_LISTEN_BUFFER_MS = "listen_buffer_ms";
     private static final String PREF_LISTEN_LOCK_CONTROLS = "listen_lock_controls";
+    private static final String PREF_PTT_TOGGLE_MODE = "ptt_toggle_mode";
+    private static final String PREF_PTT_USE_RTS = "ptt_use_rts";
 
     private boolean isInitialLoading = false;
 
@@ -86,6 +121,8 @@ public class EcranComenzi {
         this.radioManager = radioManager;
         this.cwKeyer = new CwKeyer(radioManager);
         this.listenPlayer = new AudioListenPlayer(context);
+        this.micUplink = new MicUplinkPlayer(context);
+        inregistreazaReceiverSco();
         construiesteInterfata();
         incarcaSetariKeyer();
         incarcaSetariListen();
@@ -311,6 +348,89 @@ public class EcranComenzi {
         rMod2.addView(btnCW);
         rMod2.addView(btnRTTYL);
         llCAT.addView(rMod2);
+
+        // --- BUTON PTT (doar mod voce LSB/USB, hold-to-talk prin RTS/DTR) ---
+        btnPtt = new Button(context);
+        btnPtt.setText("PTT");
+        btnPtt.setBackgroundColor(Color.parseColor("#757575"));
+        btnPtt.setTextColor(Color.WHITE);
+        btnPtt.setTypeface(null, Typeface.BOLD);
+        btnPtt.setTextSize(16);
+        LinearLayout.LayoutParams pPtt = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 190);
+        pPtt.setMargins(5, 15, 5, 15);
+        btnPtt.setLayoutParams(pPtt);
+        btnPtt.setVisibility(View.GONE);
+        llCAT.addView(btnPtt);
+
+        // --- PANOU SETARI PTT (long-press 5s pe PTT il arata, se ascunde singur dupa 3s) ---
+        llPttSettings = new LinearLayout(context);
+        llPttSettings.setOrientation(LinearLayout.HORIZONTAL);
+        llPttSettings.setGravity(Gravity.CENTER_VERTICAL);
+        llPttSettings.setVisibility(View.GONE);
+        LinearLayout.LayoutParams pPttSettings = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pPttSettings.setMargins(5, 0, 5, 15);
+        llPttSettings.setLayoutParams(pPttSettings);
+
+        cbPttToggleMode = new CheckBox(context);
+        cbPttToggleMode.setText("TOGGLE MODE");
+        cbPttToggleMode.setTextColor(Color.YELLOW);
+        cbPttToggleMode.setTextSize(11);
+        LinearLayout.LayoutParams pCbToggle = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        cbPttToggleMode.setLayoutParams(pCbToggle);
+        cbPttToggleMode.setOnCheckedChangeListener((v, isChecked) -> {
+            pttToggleMode = isChecked;
+            if (isInitialLoading) return;
+            salveazaSetareListen(PREF_PTT_TOGGLE_MODE, isChecked);
+            if (pttActive) setPttActive(false); // schimbarea modului cat era in TX ar fi ambigua
+            reseteazaTemporizatorSetariPtt();
+        });
+        llPttSettings.addView(cbPttToggleMode);
+
+        btnPttLineToggle = new Button(context);
+        btnPttLineToggle.setText(pttUseRts ? "USE: RTS" : "USE: DTR");
+        btnPttLineToggle.setBackgroundColor(Color.parseColor("#455A64"));
+        btnPttLineToggle.setTextColor(Color.WHITE);
+        btnPttLineToggle.setTextSize(11);
+        LinearLayout.LayoutParams pBtnLinePtt = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        pBtnLinePtt.setMargins(15, 0, 0, 0);
+        btnPttLineToggle.setLayoutParams(pBtnLinePtt);
+        btnPttLineToggle.setOnClickListener(v -> {
+            pttUseRts = !pttUseRts;
+            btnPttLineToggle.setText(pttUseRts ? "USE: RTS" : "USE: DTR");
+            salveazaSetareListen(PREF_PTT_USE_RTS, pttUseRts);
+            reseteazaTemporizatorSetariPtt();
+        });
+        llPttSettings.addView(btnPttLineToggle);
+
+        llCAT.addView(llPttSettings);
+
+        btnPtt.setOnTouchListener((v, event) -> {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    pttSettingsAfisatePrinHold = false;
+                    handlerPttSettings2.postDelayed(runnableAratareSetariPtt, 5000);
+                    if (!pttToggleMode) setPttActive(true);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    handlerPttSettings2.removeCallbacks(runnableAratareSetariPtt);
+                    if (pttToggleMode) {
+                        if (!pttSettingsAfisatePrinHold) setPttActive(!pttActive);
+                    } else {
+                        setPttActive(false);
+                    }
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    handlerPttSettings2.removeCallbacks(runnableAratareSetariPtt);
+                    if (!pttToggleMode) setPttActive(false);
+                    return true;
+                default:
+                    return false;
+            }
+        });
 
         // --- ETICHETĂ MESAJE CANALE ---
         TextView tvL = new TextView(context);
@@ -589,6 +709,156 @@ public class EcranComenzi {
         return r;
     }
 
+    /**
+     * Asculta ACTION_SCO_AUDIO_STATE_UPDATED - startBluetoothSco() e asincron (doar initiaza
+     * conectarea), deci starea reala "e gata de folosit microfonul cascii" vine abia din acest
+     * broadcast, nu instant dupa apelul de start. MicUplinkPlayer citeste acest flag ca sa
+     * decida daca tinteste SCO sau cade pe microfonul intern.
+     */
+    private void inregistreazaReceiverSco() {
+        android.content.IntentFilter filter =
+                new android.content.IntentFilter(android.media.AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED);
+        android.content.BroadcastReceiver receiver = new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(android.content.Context ctx, android.content.Intent intent) {
+                int state = intent.getIntExtra(android.media.AudioManager.EXTRA_SCO_AUDIO_STATE,
+                        android.media.AudioManager.SCO_AUDIO_STATE_ERROR);
+                boolean conectat = state == android.media.AudioManager.SCO_AUDIO_STATE_CONNECTED;
+                com.example.yaesucatcontroladv.deepcw.audio.BluetoothScoState.INSTANCE.setConnected(conectat);
+                android.util.Log.i("EcranComenzi", "SCO audio state=" + state + " conectat=" + conectat);
+
+                // Stiva BT/HFP poate opri singura legatura SCO dupa o perioada de inactivitate
+                // (observat empiric ~50-70s intre PTT-uri) - daca suntem inca in mod voce si o
+                // voiam conectata, o reluam imediat, ca microfonul castii sa ramana disponibil.
+                if (state == android.media.AudioManager.SCO_AUDIO_STATE_DISCONNECTED
+                        && modVoceCurent && scoActive) {
+                    android.util.Log.i("EcranComenzi", "SCO deconectata neasteptat - reincerc conectarea");
+                    scoActive = false;
+                    porneteScoInterna();
+                }
+            }
+        };
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            context.registerReceiver(receiver, filter);
+        }
+    }
+
+    /**
+     * Porneste/opreste legatura Bluetooth SCO odata cu intrarea/iesirea din modul voce.
+     * Best-effort: daca nu exista nicio casca HFP conectata, startBluetoothSco() pur si
+     * simplu nu are efect - MicUplinkPlayer verifica separat, la fiecare pornire de PTT,
+     * starea reala din BluetoothScoState si cade automat pe microfonul intern daca SCO nu
+     * s-a conectat.
+     */
+    private void actualizeazaBluetoothScoPentruMod(boolean esteVoce) {
+        if (esteVoce) {
+            if (scoActive) return;
+            if (android.os.Build.VERSION.SDK_INT >= 31 &&
+                    androidx.core.content.ContextCompat.checkSelfPermission(context,
+                            android.Manifest.permission.BLUETOOTH_CONNECT)
+                            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                // Cererea e asincrona - rezultatul vine in MainActivity.onRequestPermissionsResult
+                // (cod 125), care trebuie sa apeleze inapoi pornesteScoDupaPermisiune().
+                androidx.core.app.ActivityCompat.requestPermissions((android.app.Activity) context,
+                        new String[]{android.Manifest.permission.BLUETOOTH_CONNECT}, 125);
+                return;
+            }
+            porneteScoInterna();
+            return;
+        }
+
+        android.media.AudioManager audioManager =
+                (android.media.AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager == null || !scoActive) return;
+        try {
+            audioManager.setBluetoothScoOn(false);
+            audioManager.stopBluetoothSco();
+            audioManager.setMode(android.media.AudioManager.MODE_NORMAL);
+        } catch (Exception e) {
+            android.util.Log.e("EcranComenzi", "Eroare oprire Bluetooth SCO", e);
+        } finally {
+            scoActive = false;
+            com.example.yaesucatcontroladv.deepcw.audio.BluetoothScoState.INSTANCE.setConnected(false);
+        }
+    }
+
+    /** Reia pornirea SCO dupa ce utilizatorul a acordat BLUETOOTH_CONNECT (apelat din
+     * MainActivity.onRequestPermissionsResult, cod 125). Fara asta, SCO nu pornea niciodata
+     * dupa primul dialog de permisiune - trebuia sa iesi si sa reintri in LSB/USB manual. */
+    public void porneteScoDupaPermisiune() {
+        if (modVoceCurent) porneteScoInterna();
+    }
+
+    private void porneteScoInterna() {
+        android.media.AudioManager audioManager =
+                (android.media.AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+        if (audioManager == null || scoActive) return;
+        try {
+            // Esential pentru ca politica audio sa ruteze fluxurile VOICE_COMMUNICATION spre
+            // SCO - fara asta legatura SCO poate fi "conectata" la nivel Bluetooth dar
+            // AudioRecord/AudioTrack tot merg pe traseul implicit.
+            audioManager.setMode(android.media.AudioManager.MODE_IN_COMMUNICATION);
+            audioManager.startBluetoothSco();
+            audioManager.setBluetoothScoOn(true);
+            scoActive = true;
+        } catch (Exception e) {
+            android.util.Log.e("EcranComenzi", "Eroare pornire Bluetooth SCO", e);
+        }
+    }
+
+    private void reseteazaTemporizatorSetariPtt() {
+        handlerPttSettings2.removeCallbacks(runnableAscundeSetariPtt2);
+        handlerPttSettings2.postDelayed(runnableAscundeSetariPtt2, 3000);
+    }
+
+    private void setPttActive(boolean active) {
+        if (pttActive == active) return;
+
+        if (active) {
+            // Eliberam intai USB-ul de la RX (daca Listen era pornit) - multe interfete audio
+            // USB de statie nu sunt cu adevarat full-duplex; IN si OUT simultan pe acelasi
+            // port pot bloca reciproc traseele, iar emisia nu mai ajunge la statie.
+            if (listenActive) {
+                listenPlayer.stop();
+            }
+            // Pornim traseul audio (mic -> USB) - abia dupa ce e gata cheiem statia, ca sa nu
+            // emitem aer mort in timp ce se deschide captura microfonului.
+            MicUplinkPlayer.StartResult r = micUplink.start();
+            if (r != MicUplinkPlayer.StartResult.OK) {
+                Toast.makeText(context, "PTT: emisie audio indisponibila (" + r + ")", Toast.LENGTH_SHORT).show();
+                if (listenActive) listenPlayer.start(); // revenim la starea dinainte, TX a esuat
+                return;
+            }
+        }
+
+        pttActive = active;
+
+        UsbSerialPort port = radioManager != null ? radioManager.getDataPort() : null;
+        if (port != null && port.isOpen()) {
+            try {
+                if (pttUseRts) port.setRTS(active); else port.setDTR(active);
+            } catch (IOException e) {
+                android.util.Log.e("EcranComenzi", "Err setting PTT (" + (pttUseRts ? "RTS" : "DTR") + ")", e);
+            }
+        }
+
+        if (!active) {
+            micUplink.stop();
+            if (listenActive) {
+                listenPlayer.start(); // reluam ascultarea dupa ce am eliberat traseul de TX
+            }
+        }
+
+        btnPtt.setBackgroundColor(Color.parseColor(active ? "#D32F2F" : "#757575"));
+        if (active) {
+            btnPtt.setText(micUplink.getActiveMicIsBluetooth() ? "TX (MIC CASCA BT)" : "TX (MIC TELEFON)");
+        } else {
+            btnPtt.setText("PTT");
+        }
+    }
+
     private Button creeazaButonMod(String t, String c, View.OnClickListener cl) {
         Button b = new Button(context);
         b.setText(t);
@@ -671,6 +941,20 @@ public class EcranComenzi {
     private void actualizeazaInterfataModuriInstant(String codMod) {
         final boolean esteCW = codMod.startsWith("03") || codMod.startsWith("07");
         modLucruCurent = esteCW ? 2 : 1;
+
+        if (listenPlayer != null && listenPlayer.setRadioMode(codMod)) {
+            // Modul nou nu are model de denoise dedicat - a fost oprit automat pe bypass.
+            syncListenDenoiseButtonUi(false);
+            salveazaSetareListen(PREF_LISTEN_DENOISE, 0);
+        }
+
+        final boolean esteVoce = codMod.startsWith("01") || codMod.startsWith("02");
+        modVoceCurent = esteVoce;
+        if (btnPtt != null) {
+            if (!esteVoce && pttActive) setPttActive(false); // siguranta: nu ramane blocat in TX
+            btnPtt.setVisibility(esteVoce ? View.VISIBLE : View.GONE);
+        }
+        actualizeazaBluetoothScoPentruMod(esteVoce);
 
         btnLSB.setBackgroundColor(Color.parseColor("#757575"));
         btnUSB.setBackgroundColor(Color.parseColor("#757575"));
@@ -920,6 +1204,10 @@ public class EcranComenzi {
         float gain = prefs.getFloat(PREF_LISTEN_GAIN, 1.0f);
         int bufferMs = prefs.getInt(PREF_LISTEN_BUFFER_MS, 90);
         boolean locked = prefs.getBoolean(PREF_LISTEN_LOCK_CONTROLS, false);
+        pttToggleMode = prefs.getBoolean(PREF_PTT_TOGGLE_MODE, false);
+        pttUseRts = prefs.getBoolean(PREF_PTT_USE_RTS, true);
+        if (cbPttToggleMode != null) cbPttToggleMode.setChecked(pttToggleMode);
+        if (btnPttLineToggle != null) btnPttLineToggle.setText(pttUseRts ? "USE: RTS" : "USE: DTR");
 
         listenPlayer.setWetLevel(wet);
         listenPlayer.setOutputGain(gain);

@@ -258,10 +258,26 @@ class AudioRecorder(
         deviceCallbackThread = null
     }
 
-    /** Re-porneste captura pentru a reevalua device-ul preferat (hot-plug USB). */
+    @Volatile
+    private var lastRestartAtMs: Long = 0L
+
+    /**
+     * Re-porneste captura pentru a reevalua device-ul preferat (hot-plug USB).
+     *
+     * Debounce necesar: deschiderea/inchiderea unui stream pe device-ul USB (ex. MicUplinkPlayer
+     * pornind emisia cat AudioRecorder e oprit pentru RX) poate fi perceputa de sistem drept
+     * o (re)conectare a device-ului, ceea ce ar redeclansa acest restart() in bucla - fara
+     * debounce, fiecare restart isi genereaza propriul eveniment care il redeclanseaza.
+     */
     @Synchronized
     private fun restart() {
         if (!isRecording) return
+        val now = System.currentTimeMillis()
+        if (now - lastRestartAtMs < RESTART_DEBOUNCE_MS) {
+            Log.i(TAG, "Restart hot-plug ignorat (debounce, prea aproape de precedentul)")
+            return
+        }
+        lastRestartAtMs = now
         stopInternal(keepDeviceCallback = true)
         if (!start()) {
             Log.e(TAG, "Repornirea capturii audio a eșuat")
@@ -309,6 +325,7 @@ class AudioRecorder(
 
     companion object {
         private const val TAG = "AudioRecorder"
+        private const val RESTART_DEBOUNCE_MS = 1500L
 
         /**
          * Doar rate care se impart exact la 9600 sunt preferate (decimare intreaga, fara

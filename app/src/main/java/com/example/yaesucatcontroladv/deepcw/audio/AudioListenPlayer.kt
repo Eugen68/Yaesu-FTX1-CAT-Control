@@ -6,15 +6,25 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.util.Log
 import com.example.yaesucatcontroladv.deepcw.denoise.CwDenoiser
+import com.example.yaesucatcontroladv.deepcw.denoise.Denoiser
+import com.example.yaesucatcontroladv.deepcw.denoise.VoiceDenoiser
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.SAMPLE_RATE
 
 /**
  * Reda in timp real audio-ul captat de la statie pe difuzorul telefonului.
  * Include denoise optional folosind nucleul HamNoise.
+ *
+ * HamNoise are modele separate pentru CW (ton ingust) si voce (SSB, banda larga) - un
+ * singur model aplicat pe modul gresit suna prost (mismatch spectral). De aceea alegerea
+ * modelului activ urmeaza modul CAT curent al statiei (vezi [setRadioMode]), nu e o
+ * optiune manuala: CW -> model CW, LSB/USB -> model voce, orice alt mod -> bypass (fara
+ * model potrivit, nu are sens sa fortam unul dintre ele).
  */
 class AudioListenPlayer(private val context: Context) {
 
     enum class StartResult { OK, NO_USB_AUDIO, CAPTURE_FAILED, ALREADY_RUNNING }
+
+    private enum class RadioModeCategory { CW, VOICE, OTHER }
 
     private val lock = Any()
 
@@ -36,7 +46,51 @@ class AudioListenPlayer(private val context: Context) {
 
     private var audioRecorder: AudioRecorder? = null
     private var audioTrack: AudioTrack? = null
-    private val denoiser = CwDenoiser()
+    private val cwDenoiser: Denoiser = CwDenoiser()
+    private val voiceDenoiser: Denoiser = VoiceDenoiser()
+
+    @Volatile
+    private var modeCategory: RadioModeCategory = RadioModeCategory.OTHER
+
+    /** Denoiser-ul potrivit modului CAT curent, sau null daca modul nu are model dedicat. */
+    private fun activeDenoiser(): Denoiser? = when (modeCategory) {
+        RadioModeCategory.CW -> cwDenoiser
+        RadioModeCategory.VOICE -> voiceDenoiser
+        RadioModeCategory.OTHER -> null
+    }
+
+    /**
+     * Actualizeaza modul CAT curent (cod Yaesu "MD", ex. "01"=LSB, "02"=USB, "03"/"07"=CW).
+     * Determina ce model de denoise se aplica - CW, voce, sau niciunul (bypass).
+     *
+     * @return true daca modul nou nu are model dedicat si DENOISE era pornit - in acest caz
+     * e oprit automat aici, iar apelantul trebuie sa sincronizeze UI-ul butonului (gri/OFF).
+     */
+    fun setRadioMode(catModeCode: String): Boolean {
+        val next = when {
+            catModeCode.startsWith("01") || catModeCode.startsWith("02") -> RadioModeCategory.VOICE
+            catModeCode.startsWith("03") || catModeCode.startsWith("07") -> RadioModeCategory.CW
+            else -> RadioModeCategory.OTHER
+        }
+        if (next == modeCategory) return false
+        modeCategory = next
+
+        if (next == RadioModeCategory.OTHER) {
+            if (denoiseEnabled) {
+                denoiseEnabled = false
+                return true
+            }
+            return false
+        }
+
+        if (isRunning && denoiseEnabled) {
+            val active = activeDenoiser()
+            if (active != null && !active.isAvailable) {
+                if (active.initialize()) active.reset() else denoiseEnabled = false
+            }
+        }
+        return false
+    }
 
     /** @return true daca starea a fost aplicata (init nativ reusit, sau enabled=false). */
     fun setDenoiseEnabled(enabled: Boolean): Boolean {
@@ -44,11 +98,12 @@ class AudioListenPlayer(private val context: Context) {
             denoiseEnabled = enabled
             return true
         }
-        
+
         return if (enabled) {
-            val ok = denoiser.initialize()
+            val active = activeDenoiser()
+            val ok = active == null || active.initialize()
             if (ok) {
-                denoiser.reset()
+                active?.reset()
                 denoiseEnabled = true
             }
             ok
@@ -98,8 +153,11 @@ class AudioListenPlayer(private val context: Context) {
         track.play()
 
         if (denoiseEnabled) {
-            val ok = denoiser.initialize()
-            if (ok) denoiser.reset() else denoiseEnabled = false
+            val active = activeDenoiser()
+            if (active != null) {
+                val ok = active.initialize()
+                if (ok) active.reset() else denoiseEnabled = false
+            }
         }
 
         val recorder = AudioRecorder(context) { chunk -> onAudioChunk(chunk) }
@@ -147,8 +205,9 @@ class AudioListenPlayer(private val context: Context) {
         
         val track = audioTrack ?: return@synchronized
         
-        val processed = if (denoiseEnabled) {
-            val denoised = denoiser.process(chunk, wetLevel)
+        val active = if (denoiseEnabled) activeDenoiser() else null
+        val processed = if (active != null && active.isAvailable) {
+            val denoised = active.process(chunk, wetLevel)
             if (denoised.isEmpty()) denoised else {
                 val g = outputGain
                 if (g != 1f) {
@@ -190,7 +249,8 @@ class AudioListenPlayer(private val context: Context) {
             it.release()
         }
         audioTrack = null
-        
-        denoiser.release()
+
+        cwDenoiser.release()
+        voiceDenoiser.release()
     }
 }

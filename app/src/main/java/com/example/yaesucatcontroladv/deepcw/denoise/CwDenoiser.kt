@@ -30,7 +30,7 @@ internal object CwDenoiserNative {
  * `process()` in curs inseamna use-after-free (SIGSEGV) pe handle-ul nativ deja eliberat.
  * Lock-ul de mai jos e practic necontestat (un hop la ~15 ms) deci costul e neglijabil.
  */
-class CwDenoiser {
+class CwDenoiser : Denoiser {
     private val lock = Any()
 
     @Volatile
@@ -42,9 +42,9 @@ class CwDenoiser {
     private var hopIn: FloatArray? = null
     private var hopOut: FloatArray? = null
 
-    val isAvailable: Boolean get() = handle != 0L
+    override val isAvailable: Boolean get() = handle != 0L
 
-    fun initialize(): Boolean = synchronized(lock) {
+    override fun initialize(): Boolean = synchronized(lock) {
         if (handle != 0L) return true
 
         try {
@@ -72,7 +72,7 @@ class CwDenoiser {
      * Denoising is performed in hops of fixed size.
      * @param wet Mix level: 1.0 = fully denoised, 0.0 = original audio.
      */
-    fun process(chunk: FloatArray, wet: Float = 1.0f): FloatArray = synchronized(lock) {
+    override fun process(chunk: FloatArray, wet: Float): FloatArray = synchronized(lock) {
         val h = handle
         val hl = hopLength
         val hi = hopIn
@@ -138,14 +138,14 @@ class CwDenoiser {
         return finalOutput
     }
 
-    fun reset() = synchronized(lock) {
+    override fun reset() = synchronized(lock) {
         if (handle != 0L) {
             CwDenoiserNative.nativeReset(handle)
             carry = FloatArray(0)
         }
     }
 
-    fun release() = synchronized(lock) {
+    override fun release() = synchronized(lock) {
         if (handle != 0L) {
             val h = handle
             handle = 0L
