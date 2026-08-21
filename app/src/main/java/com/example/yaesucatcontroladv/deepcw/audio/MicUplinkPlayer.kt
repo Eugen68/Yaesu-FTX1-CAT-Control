@@ -18,26 +18,41 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
- * Traseul de emisie (TX) pentru SSB: microfonul intern al telefonului -> iesire audio USB
- * catre statie. Spre deosebire de [AudioListenPlayer] (care ruleaza continuu cat timp e
- * pornit din UI), acesta porneste/opreste direct odata cu apasarea/eliberarea PTT - nu are
- * sens sa capturam microfonul in afara ferestrei de emisie.
+ * Traseul de emisie (TX) pentru SSB: microfonul telefonului/castii -> iesire audio USB catre
+ * statie.
  *
- * Nu foloseste [AudioRecorder] (acela citeste DE LA USB si resampleaza la 9600Hz pentru
- * modelele CW/denoise) - aici e traseul opus: citim de la microfonul intern, scriem CATRE
- * USB, fara resampling (rata de captura = rata de reda re, aleasa din ce accepta microfonul).
- * Fiind mic intern -> USB (nu casca -> mic intern), nu exista risc de bucla de feedback cu
- * receptia (care merge de obicei pe casti Bluetooth).
+ * Captura microfonului si emisia efectiva sunt doua cicluri de viata separate:
+ * - [startCapture]/[stopCapture] deschid/inchid microfonul, independent de PTT.
+ * - [startTransmit]/[stopTransmit] deschid/inchid doar AudioTrack-ul de iesire spre USB si
+ *   comuta forwarding-ul (esantioanele citite sunt scrise catre USB doar cat timp emisia e
+ *   activa) - apelate direct de PTT.
+ *
+ * Motivul separarii: legatura Bluetooth SCO are ~1-2s de "warm-up" (negociere codec/sincronizare
+ * la nivel de cip) de fiecare data cand se deschide un AudioRecord nou pe ea - deschisa/inchisa
+ * la fiecare apasare de PTT, prima secunda-doua din fiecare emisie ajungea la statie ca tacere.
+ * EcranComenzi porneste [startCapture] o singura data, la conectarea SCO (nu la fiecare PTT),
+ * astfel incat traseul sa fie deja "cald" cand operatorul apasa PTT - vezi [startTransmit].
+ *
+ * Pentru microfonul intern (fara casca BT, care nu are aceasta problema de warm-up) [startCapture]
+ * nu e apelat proactiv de EcranComenzi - [startTransmit] il deschide pe loc, la vechiul
+ * comportament, si [stopTransmit] il inchide la loc (nu tinem microfonul telefonului deschis in
+ * afara ferestrei de emisie fara motiv).
  */
 class MicUplinkPlayer(private val context: Context) {
 
     enum class StartResult { OK, NO_USB_AUDIO, PERMISSION_DENIED, CAPTURE_FAILED, ALREADY_RUNNING }
 
+    /** Microfonul e deschis (captura activa) - independent de PTT, vezi [startCapture]. */
     @Volatile
-    var isRunning: Boolean = false
+    var isCapturing: Boolean = false
         private set
 
-    /** Microfonul folosit efectiv la ultima pornire (Bluetooth SCO sau intern) - util pentru UI. */
+    /** Emisia (forwarding mic -> USB) e activa - reflecta strict starea PTT. */
+    @Volatile
+    var isTransmitting: Boolean = false
+        private set
+
+    /** Microfonul folosit efectiv la ultima pornire a capturii (Bluetooth SCO sau intern). */
     @Volatile
     var activeMicIsBluetooth: Boolean = false
         private set
@@ -45,14 +60,27 @@ class MicUplinkPlayer(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.IO)
     private var job: Job? = null
     private var audioRecord: AudioRecord? = null
+
+    @Volatile
     private var audioTrack: AudioTrack? = null
 
+    /** true daca [startCapture] a fost pornita implicit de [startTransmit] (microfon intern,
+     * fara pre-warm) - in acest caz [stopTransmit] o inchide la loc. */
+    private var captureOwnedByTransmit = false
+
+    @Volatile
     private var resampleCursor = 0f
+    @Volatile
     private var resamplePrev: Short = 0
 
+    /**
+     * Deschide microfonul si il tine captat continuu (esantioanele sunt aruncate cat timp
+     * [isTransmitting] e fals) - vezi antetul clasei pentru motiv. Idempotenta: daca deja
+     * ruleaza, intoarce [StartResult.ALREADY_RUNNING].
+     */
     @SuppressLint("MissingPermission")
-    fun start(): StartResult {
-        if (isRunning) return StartResult.ALREADY_RUNNING
+    fun startCapture(): StartResult {
+        if (isCapturing) return StartResult.ALREADY_RUNNING
 
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
@@ -60,7 +88,6 @@ class MicUplinkPlayer(private val context: Context) {
             return StartResult.PERMISSION_DENIED
         }
 
-        val usbOutput = findUsbOutputDevice() ?: return StartResult.NO_USB_AUDIO
         val micTarget = selectMicTarget()
         activeMicIsBluetooth = BluetoothScoState.connected
         val rate = pickSupportedRate(micTarget.rateCandidates)
@@ -72,40 +99,38 @@ class MicUplinkPlayer(private val context: Context) {
             null
         } ?: return StartResult.CAPTURE_FAILED
 
-        // Track-ul de iesire ruleaza mereu la o rata fixa, larg suportata de interfetele
-        // audio USB (multe nu accepta deloc 16000/8000Hz, rata nativa a legaturii SCO) -
-        // resample-uim intre captura si scriere daca ratele difera (vezi bucla de mai jos).
-        resampleCursor = 0f
-        resamplePrev = 0
-
-        val track = try {
-            buildUsbTrack(OUTPUT_RATE, usbOutput, useCommUsage = activeMicIsBluetooth)
-        } catch (e: Exception) {
-            Log.e(TAG, "Deschidere AudioTrack USB esuata", e)
-            record.release()
-            return StartResult.CAPTURE_FAILED
-        }
-
         try {
             record.startRecording()
-            track.play()
         } catch (e: Exception) {
-            Log.e(TAG, "Pornire captura/reda re esuata", e)
+            Log.e(TAG, "Pornire captura esuata", e)
             try { record.release() } catch (ignored: Exception) {}
-            try { track.release() } catch (ignored: Exception) {}
             return StartResult.CAPTURE_FAILED
         }
 
+        resampleCursor = 0f
+        resamplePrev = 0
         audioRecord = record
-        audioTrack = track
-        isRunning = true
+        isCapturing = true
+
+        // Cand sursa e casca Bluetooth, MODE_IN_COMMUNICATION (necesar pentru intrarea SCO)
+        // trage si iesirea spre casca (sidetone) la urmatoarea emisie, in ciuda USAGE_MEDIA si
+        // setPreferredDevice() din startTransmit() - semnalul nu ajunge deloc la statie.
+        // Descoperit empiric: deschiderea si inchiderea unui stream pe interfata USB (ex. LISTEN
+        // pornit-oprit manual) "scutura" politica audio si o face sa ruteze corect urmatorul
+        // AudioTrack spre USB - vezi si comentariul din AudioRecorder.restart() despre acelasi
+        // efect perceput ca hotplug de device. Facem asta o singura data aici, la pornirea
+        // capturii (inainte de primul PTT, nu la fiecare apasare) - altfel fiecare emisie ar
+        // capata o intarziere perceptibila fata de microfonul intern, care e instant.
+        if (activeMicIsBluetooth) {
+            primeUsbRoute()
+        }
 
         job = scope.launch {
             val chunkSamples = (rate / 10).coerceAtLeast(256) // ~100ms
             val buf = ShortArray(chunkSamples)
             var lastLogMs = 0L
             var peakSinceLog = 0
-            while (isRunning) {
+            while (isCapturing) {
                 val read = try {
                     record.read(buf, 0, buf.size)
                 } catch (e: Exception) {
@@ -113,6 +138,9 @@ class MicUplinkPlayer(private val context: Context) {
                     break
                 }
                 if (read <= 0) continue
+
+                val track = audioTrack
+                if (track == null || !isTransmitting) continue
 
                 // DIAGNOSTIC TEMPORAR: amplitudinea reala citita de pe microfon, logata o
                 // data pe secunda, ca sa vedem daca ajunge audio real sau doar tacere/zerouri
@@ -133,12 +161,11 @@ class MicUplinkPlayer(private val context: Context) {
                     peakSinceLog = 0
                 }
 
-                val toWrite = if (rate == OUTPUT_RATE) buf else resample(buf, read, rate, OUTPUT_RATE)
+                val toWrite = if (rate == OUTPUT_RATE) buf.copyOf(read) else resample(buf, read, rate, OUTPUT_RATE)
                 try {
                     track.write(toWrite, 0, toWrite.size)
                 } catch (e: Exception) {
                     Log.e(TAG, "Eroare scriere AudioTrack USB", e)
-                    break
                 }
             }
         }
@@ -146,9 +173,12 @@ class MicUplinkPlayer(private val context: Context) {
         return StartResult.OK
     }
 
-    fun stop() {
-        if (!isRunning) return
-        isRunning = false
+    /** Opreste si elibereaza microfonul (si emisia, daca era activa). Apelata de EcranComenzi
+     * la deconectarea SCO sau la iesirea din modul voce. */
+    fun stopCapture() {
+        if (!isCapturing) return
+        isCapturing = false
+        isTransmitting = false
 
         job?.cancel()
         job = null
@@ -157,9 +187,86 @@ class MicUplinkPlayer(private val context: Context) {
         try { audioRecord?.release() } catch (ignored: Exception) {}
         audioRecord = null
 
-        try { audioTrack?.stop() } catch (ignored: Exception) {}
-        try { audioTrack?.release() } catch (ignored: Exception) {}
+        releaseTrack()
+    }
+
+    /**
+     * Porneste emisia (mic -> USB) - apelata la apasarea PTT. Daca microfonul nu era deja
+     * captat continuu (vezi [startCapture] - cazul microfonului intern), il deschide pe loc;
+     * [stopTransmit] il va inchide la loc in acest caz.
+     */
+    fun startTransmit(): StartResult {
+        if (isTransmitting) return StartResult.ALREADY_RUNNING
+
+        val usbOutput = findUsbOutputDevice() ?: return StartResult.NO_USB_AUDIO
+
+        if (!isCapturing) {
+            val r = startCapture()
+            if (r != StartResult.OK) return r
+            captureOwnedByTransmit = true
+        } else {
+            captureOwnedByTransmit = false
+        }
+
+        val track = try {
+            buildUsbTrack(OUTPUT_RATE, usbOutput)
+        } catch (e: Exception) {
+            Log.e(TAG, "Deschidere AudioTrack USB esuata", e)
+            if (captureOwnedByTransmit) stopCapture()
+            return StartResult.CAPTURE_FAILED
+        }
+
+        try {
+            track.play()
+        } catch (e: Exception) {
+            Log.e(TAG, "Pornire reda re esuata", e)
+            try { track.release() } catch (ignored: Exception) {}
+            if (captureOwnedByTransmit) stopCapture()
+            return StartResult.CAPTURE_FAILED
+        }
+
+        // Fiecare emisie noua porneste cu resample-ul "curat" - fara asta, esantioanele
+        // aruncate intre emisii (cat captura era calda dar nu transmiteam) ar strica
+        // continuitatea presupusa de cursor intre apeluri.
+        resampleCursor = 0f
+        resamplePrev = 0
+        audioTrack = track
+
+        // NOTA: s-a incercat aici setCommunicationDevice(usbOutput) pentru a forta iesirea pe
+        // USB cat tinem PTT (vezi motivatia in istoricul acestui fisier) - dar in teste pe teren
+        // a avut efect advers: fortarea "dispozitivului de comunicare" catre USB pare sa
+        // convinga stiva Bluetooth ca SCO nu mai e necesar, iar legatura se deconecta la ~10-13s
+        // (fata de ~50-70s normal), fiecare deconectare omorand emisia curenta (vezi
+        // stopCapture() apelat din receiver-ul SCO din EcranComenzi). Renuntat.
+
+        // track.play() doar initiaza pornirea - rutarea reala catre USB e asincrona in Android
+        // (mai ales imediat dupa setPreferredDevice()/schimbare de mod) si poate dura cateva
+        // sute de ms sa se stabilizeze. EcranComenzi cheiaza statia (RTS/DTR) imediat ce
+        // acest apel returneaza OK, deci fara aceasta asteptare prima apasare de PTT putea
+        // keya statia inainte ca audio-ul sa ajunga efectiv la USB.
+        waitForRouting(track, usbOutput)
+
+        isTransmitting = true
+        return StartResult.OK
+    }
+
+    /** Opreste emisia - apelata la eliberarea PTT. */
+    fun stopTransmit() {
+        if (!isTransmitting) return
+        isTransmitting = false
+        releaseTrack()
+
+        if (captureOwnedByTransmit) {
+            stopCapture()
+            captureOwnedByTransmit = false
+        }
+    }
+
+    private fun releaseTrack() {
+        val track = audioTrack ?: return
         audioTrack = null
+        try { track.stop() } catch (ignored: Exception) {}
+        try { track.release() } catch (ignored: Exception) {}
     }
 
     private class MicTarget(
@@ -230,25 +337,16 @@ class MicUplinkPlayer(private val context: Context) {
             .firstOrNull { it.type in USB_DEVICE_TYPES }
     }
 
-    private fun buildUsbTrack(rate: Int, usbOutput: AudioDeviceInfo, useCommUsage: Boolean): AudioTrack {
+    private fun buildUsbTrack(rate: Int, usbOutput: AudioDeviceInfo): AudioTrack {
         val minBuf = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val bufBytes = minBuf.coerceAtLeast(bytesForMs(rate, TARGET_BUFFER_MS))
 
-        // Cat timp sursa e SCO Bluetooth, telefonul e in MODE_IN_COMMUNICATION (practic "in
-        // apel") - un track USAGE_MEDIA obisnuit poate fi atenuat/ignorat de politica audio
-        // in acest context, chiar daca e rutat corect. USAGE_VOICE_COMMUNICATION se potriveste
-        // cu semantica intrarii (si a modului sistemului) si ar trebui tratat ca parte a "apelului".
-        val attrs = if (useCommUsage) {
-            AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                .build()
-        } else {
-            AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                .build()
-        }
+        // Experimentăm cu USAGE_MEDIA chiar și pentru SCO - USAGE_VOICE_COMMUNICATION
+        // tinde să forțeze rutarea ieșirii înapoi în cască (sidetone), ignorând USB-ul.
+        val attrs = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
 
         val track = AudioTrack.Builder()
             .setAudioAttributes(attrs)
@@ -271,6 +369,72 @@ class MicUplinkPlayer(private val context: Context) {
         return track
     }
 
+    /**
+     * Deschide si inchide rapid un AudioRecord de test pe intrarea USB, exclusiv ca sa
+     * declanseze "scuturarea" politicii audio descrisa mai sus - esantioanele citite (daca
+     * vreuna) sunt aruncate, nu ne intereseaza continutul. Ruleaza pe thread-ul apelant (UI,
+     * la apasarea PTT), blocant pentru [PRIME_HOLD_MS] - vezi [startTransmit].
+     */
+    @SuppressLint("MissingPermission")
+    private fun primeUsbRoute() {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        val usbInput = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+            .firstOrNull { it.type in USB_DEVICE_TYPES } ?: return
+
+        val minBuf = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        if (minBuf <= 0) return
+
+        val record = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.UNPROCESSED, 16000,
+                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf
+            )
+        } catch (e: Exception) {
+            null
+        } ?: return
+
+        if (record.state != AudioRecord.STATE_INITIALIZED) {
+            record.release()
+            return
+        }
+
+        try {
+            record.setPreferredDevice(usbInput)
+            record.startRecording()
+            Thread.sleep(PRIME_HOLD_MS)
+        } catch (e: Exception) {
+            Log.w(TAG, "Priming ruta USB esuat", e)
+        } finally {
+            try { record.stop() } catch (ignored: Exception) {}
+            try { record.release() } catch (ignored: Exception) {}
+        }
+    }
+
+    /**
+     * Blocheaza (pe thread-ul apelant - de obicei UI, la apasarea PTT) pana cand [track] apare
+     * efectiv rutat spre [usbOutput], sau pana la [ROUTING_WAIT_MS]. Fara acest gard, EcranComenzi
+     * ar putea cheia statia (RTS/DTR) inainte ca politica audio sa fi terminat rutarea catre USB.
+     * Daca timeout-ul expira fara confirmare, continuam oricum (mai bine PTT cu risc de "aer mort"
+     * la inceput decat PTT blocat definitiv - vezi log-ul de avertizare pentru diagnosticare).
+     */
+    private fun waitForRouting(track: AudioTrack, usbOutput: AudioDeviceInfo) {
+        val deadline = System.currentTimeMillis() + ROUTING_WAIT_MS
+        while (System.currentTimeMillis() < deadline) {
+            val routedType = track.routedDevice?.type
+            if (routedType == usbOutput.type) return
+            try {
+                Thread.sleep(ROUTING_POLL_MS)
+            } catch (ignored: InterruptedException) {
+                return
+            }
+        }
+        Log.w(
+            TAG,
+            "Ruta USB nu s-a confirmat in ${ROUTING_WAIT_MS}ms " +
+                "(routedDevice type=${track.routedDevice?.type}, asteptat=${usbOutput.type}) - continui oricum"
+        )
+    }
+
     private fun pickSupportedRate(candidates: IntArray): Int {
         for (rate in candidates) {
             val minBuf = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -285,7 +449,8 @@ class MicUplinkPlayer(private val context: Context) {
      * Resampling liniar (interpolare), suficient de bun pentru voce - aduce mereu ce trimitem
      * catre USB la [OUTPUT_RATE], indiferent de rata nativa a microfonului sursa (16000/8000Hz
      * pe SCO Bluetooth, care majoritatea interfetelor audio USB nu o accepta ca rata de iesire).
-     * Pastreaza [resampleCursor]/[resamplePrev] intre apeluri pentru continuitate intre chunk-uri.
+     * Pastreaza [resampleCursor]/[resamplePrev] intre apeluri pentru continuitate intre chunk-uri,
+     * resetate la fiecare inceput de emisie noua (vezi [startTransmit]).
      */
     private fun resample(input: ShortArray, count: Int, inRate: Int, outRate: Int): ShortArray {
         if (inRate == outRate) return if (count == input.size) input else input.copyOf(count)
@@ -318,6 +483,17 @@ class MicUplinkPlayer(private val context: Context) {
         /** Rata fixa de iesire catre USB - larg suportata, indiferent de sursa microfonului. */
         private const val OUTPUT_RATE = 48000
 
+        /** Timp maxim de asteptare (ms) ca AudioTrack sa se confirme rutat spre USB inainte de
+         * a cheia statia - vezi [waitForRouting]. */
+        private const val ROUTING_WAIT_MS = 300L
+        private const val ROUTING_POLL_MS = 20L
+
+        /** Durata (ms) cat tinem deschis AudioRecord-ul de test din [primeUsbRoute] - pornind
+         * de la durata folosita manual (2-3s de LISTEN pornit) in testele care au confirmat
+         * efectul; poate necesita ajustare in functie de cat de repede se stabilizeaza politica
+         * audio pe teren. */
+        private const val PRIME_HOLD_MS = 600L
+
         private val CANDIDATE_RATES = intArrayOf(48000, 44100, 16000)
 
         /** Aceeasi prioritate ca AudioRecorder: evitam AGC/NS-ul Android cat se poate. */
@@ -328,10 +504,15 @@ class MicUplinkPlayer(private val context: Context) {
         )
 
         /** Legatura SCO e narrowband (8kHz clasic, 16kHz doar cu mSBC/HD Voice pe ambele
-         * capete) - ratele si sursa difera fata de microfonul intern. VOICE_COMMUNICATION e
-         * sursa pe care stack-ul Bluetooth Android o ruteaza cel mai fiabil spre SCO. */
+         * capete) - ratele si sursa difera fata de microfonul intern.
+         * Incercam MIC inainte de VOICE_COMMUNICATION - pe unele device-uri Samsung,
+         * VOICE_COMMUNICATION forțează un profil de tip "Call" care blochează rutarea
+         * ieșirii către USB. */
         private val BT_SCO_RATE_CANDIDATES = intArrayOf(16000, 8000)
-        private val BT_SCO_SOURCES = intArrayOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+        private val BT_SCO_SOURCES = intArrayOf(
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION
+        )
 
         private val USB_DEVICE_TYPES = setOf(
             AudioDeviceInfo.TYPE_USB_DEVICE,

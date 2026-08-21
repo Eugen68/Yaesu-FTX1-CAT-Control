@@ -60,6 +60,16 @@ public class EcranComenzi {
     private boolean pttUseRts = true;      // linia hardware folosita pentru PTT (ca la CW Keyer)
     private boolean pttSettingsAfisatePrinHold = false;
     private final Handler handlerPttSettings2 = new Handler(Looper.getMainLooper());
+    private final Handler handlerReconnectSco = new Handler(Looper.getMainLooper());
+    // Reincearca la 2s cat timp suntem in mod voce, dar verifica intai daca exista efectiv o
+    // casca conectata (existaCascaBluetoothConectata()) inainte sa apeleze startBluetoothSco()
+    // - fara acest gard, daca legatura Bluetooth de baza cade (nu doar SCO), am bate la usa in
+    // gol la nesfarsit, tinand MODE_IN_COMMUNICATION intr-un ciclu conectare/eșec care distrugea
+    // si emisia TX in curs (vezi receiver-ul SCO). Daca nu exista casca, ne re-programam singuri
+    // peste 2s (spre deosebire de porneteScoInterna(), care nu are de unde sa stie sa o faca -
+    // fara asta, bucla se opreste definitiv la prima verificare esuata, in loc sa astepte
+    // revenirea castii).
+    private final Runnable runnableReconnectSco = this::reincearcaSco;
     private final Runnable runnableAscundeSetariPtt2 = () -> {
         if (llPttSettings != null) llPttSettings.setVisibility(View.GONE);
     };
@@ -123,6 +133,7 @@ public class EcranComenzi {
         this.listenPlayer = new AudioListenPlayer(context);
         this.micUplink = new MicUplinkPlayer(context);
         inregistreazaReceiverSco();
+        inregistreazaReceiverProfilHeadset();
         construiesteInterfata();
         incarcaSetariKeyer();
         incarcaSetariListen();
@@ -729,12 +740,15 @@ public class EcranComenzi {
 
                 // Stiva BT/HFP poate opri singura legatura SCO dupa o perioada de inactivitate
                 // (observat empiric ~50-70s intre PTT-uri) - daca suntem inca in mod voce si o
-                // voiam conectata, o reluam imediat, ca microfonul castii sa ramana disponibil.
-                if (state == android.media.AudioManager.SCO_AUDIO_STATE_DISCONNECTED
-                        && modVoceCurent && scoActive) {
-                    android.util.Log.i("EcranComenzi", "SCO deconectata neasteptat - reincerc conectarea");
-                    scoActive = false;
-                    porneteScoInterna();
+                // voiam conectata, o reluam dupa un scurt delay, ca sa nu blocam stiva BT.
+                if (state == android.media.AudioManager.SCO_AUDIO_STATE_DISCONNECTED && modVoceCurent) {
+                    trateazaCascaDisparuta("SCO audio");
+                } else if (state == android.media.AudioManager.SCO_AUDIO_STATE_CONNECTED) {
+                    handlerReconnectSco.removeCallbacks(runnableReconnectSco);
+                    // Pre-incalzim captura microfonului castii acum, nu la primul PTT - legatura
+                    // SCO are ~1-2s de warm-up la deschiderea unui AudioRecord nou pe ea; daca
+                    // asteptam pana la PTT, primele apasari ajung la statie ca "aer mort".
+                    if (modVoceCurent) micUplink.startCapture();
                 }
             }
         };
@@ -743,6 +757,57 @@ public class EcranComenzi {
         } else {
             context.registerReceiver(receiver, filter);
         }
+    }
+
+    /**
+     * Asculta schimbarea starii profilului HEADSET (conectat/deconectat la nivel Bluetooth,
+     * nu doar la nivelul legaturii audio SCO). ACTION_SCO_AUDIO_STATE_UPDATED nu se declanseaza
+     * intotdeauna cand casca dispare fizic - daca nu exista niciun AudioRecord/AudioTrack activ
+     * in acel moment (ex. captura era "calda" dar PTT nu era apasat), oprirea castii poate trece
+     * neobservata, iar MicUplinkPlayer ramane convins ca tinteste inca BT SCO pana la restart de
+     * aplicatie. Acest broadcast e legat de starea reala a profilului Bluetooth, deci mult mai
+     * fiabil pentru a detecta disparitia castii.
+     */
+    private void inregistreazaReceiverProfilHeadset() {
+        android.content.IntentFilter filter =
+                new android.content.IntentFilter(android.bluetooth.BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED);
+        android.content.BroadcastReceiver receiver = new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(android.content.Context ctx, android.content.Intent intent) {
+                int state = intent.getIntExtra(android.bluetooth.BluetoothProfile.EXTRA_STATE,
+                        android.bluetooth.BluetoothProfile.STATE_DISCONNECTED);
+                android.util.Log.i("EcranComenzi", "Profil HEADSET state=" + state);
+                if (state == android.bluetooth.BluetoothProfile.STATE_DISCONNECTED) {
+                    trateazaCascaDisparuta("profil HEADSET");
+                } else if (state == android.bluetooth.BluetoothProfile.STATE_CONNECTED && modVoceCurent) {
+                    handlerReconnectSco.removeCallbacks(runnableReconnectSco);
+                    porneteScoDacaExistaCasca();
+                }
+            }
+        };
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            context.registerReceiver(receiver, filter);
+        }
+    }
+
+    /** Reactie comuna la disparitia castii BT, indiferent daca a fost detectata prin
+     * ACTION_SCO_AUDIO_STATE_UPDATED sau prin schimbarea starii profilului HEADSET (vezi
+     * [inregistreazaReceiverProfilHeadset]). Idempotenta - nu are efect daca stiam deja ca SCO
+     * nu mai e activ, ca sa nu reprogrameze inutil reconectarea de doua ori la fiecare disparitie. */
+    private void trateazaCascaDisparuta(String motiv) {
+        if (!scoActive) return;
+        android.util.Log.i("EcranComenzi", "Casca BT disparuta (" + motiv + ") - reincerc conectarea peste 2s");
+        scoActive = false;
+        com.example.yaesucatcontroladv.deepcw.audio.BluetoothScoState.INSTANCE.setConnected(false);
+        micUplink.stopCapture(); // sursa a disparut - nu mai are rost sa o tinem "calda"
+        // stopCapture() de mai sus omoara si emisia curenta (daca era in curs), fara sa atinga
+        // starea de UI a butonului PTT - fara asta statia ar ramane cheiata (aer mort) pana la
+        // urmatoarea apasare manuala, desi microfonul e deja mort.
+        if (pttActive) setPttActive(false);
+        handlerReconnectSco.removeCallbacks(runnableReconnectSco);
+        if (modVoceCurent) handlerReconnectSco.postDelayed(runnableReconnectSco, 2000);
     }
 
     /**
@@ -765,7 +830,7 @@ public class EcranComenzi {
                         new String[]{android.Manifest.permission.BLUETOOTH_CONNECT}, 125);
                 return;
             }
-            porneteScoInterna();
+            porneteScoDacaExistaCasca();
             return;
         }
 
@@ -781,6 +846,7 @@ public class EcranComenzi {
         } finally {
             scoActive = false;
             com.example.yaesucatcontroladv.deepcw.audio.BluetoothScoState.INSTANCE.setConnected(false);
+            micUplink.stopCapture();
         }
     }
 
@@ -788,7 +854,45 @@ public class EcranComenzi {
      * MainActivity.onRequestPermissionsResult, cod 125). Fara asta, SCO nu pornea niciodata
      * dupa primul dialog de permisiune - trebuia sa iesi si sa reintri in LSB/USB manual. */
     public void porneteScoDupaPermisiune() {
-        if (modVoceCurent) porneteScoInterna();
+        if (modVoceCurent) porneteScoDacaExistaCasca();
+    }
+
+    /**
+     * Porneste SCO (si implicit MODE_IN_COMMUNICATION, vezi porneteScoInterna) doar daca
+     * exista efectiv o casca Bluetooth HFP conectata acum - altfel ramanem in MODE_NORMAL.
+     * MODE_IN_COMMUNICATION activeaza procesarea audio de "apel" a sistemului (AGC/noise
+     * suppression/echo cancellation) chiar si pe microfonul intern, care s-a dovedit ca
+     * suprima microfonul dupa 1-2s cand nu exista de fapt niciun apel real de arbitrat
+     * (semnalul aparea scurt, apoi disparea complet - fara nicio casca conectata).
+     */
+    private void porneteScoDacaExistaCasca() {
+        if (!existaCascaBluetoothConectata()) return;
+        porneteScoInterna();
+    }
+
+    /** Apelata de [runnableReconnectSco] la fiecare 2s. Spre deosebire de
+     * [porneteScoDacaExistaCasca], daca nu exista inca o casca conectata nu renunta - se
+     * re-programeaza singura peste inca 2s, cat timp suntem in mod voce, ca sa astepte revenirea
+     * castii (fara asta bucla s-ar opri definitiv la prima verificare esuata). */
+    private void reincearcaSco() {
+        if (!modVoceCurent) return;
+        if (existaCascaBluetoothConectata()) {
+            porneteScoInterna();
+        } else {
+            handlerReconnectSco.postDelayed(runnableReconnectSco, 2000);
+        }
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    private boolean existaCascaBluetoothConectata() {
+        android.bluetooth.BluetoothAdapter adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter();
+        if (adapter == null) return false;
+        try {
+            return adapter.getProfileConnectionState(android.bluetooth.BluetoothProfile.HEADSET)
+                    == android.bluetooth.BluetoothProfile.STATE_CONNECTED;
+        } catch (SecurityException e) {
+            return false;
+        }
     }
 
     private void porneteScoInterna() {
@@ -825,7 +929,7 @@ public class EcranComenzi {
             }
             // Pornim traseul audio (mic -> USB) - abia dupa ce e gata cheiem statia, ca sa nu
             // emitem aer mort in timp ce se deschide captura microfonului.
-            MicUplinkPlayer.StartResult r = micUplink.start();
+            MicUplinkPlayer.StartResult r = micUplink.startTransmit();
             if (r != MicUplinkPlayer.StartResult.OK) {
                 Toast.makeText(context, "PTT: emisie audio indisponibila (" + r + ")", Toast.LENGTH_SHORT).show();
                 if (listenActive) listenPlayer.start(); // revenim la starea dinainte, TX a esuat
@@ -845,7 +949,7 @@ public class EcranComenzi {
         }
 
         if (!active) {
-            micUplink.stop();
+            micUplink.stopTransmit();
             if (listenActive) {
                 listenPlayer.start(); // reluam ascultarea dupa ce am eliberat traseul de TX
             }
@@ -1064,6 +1168,9 @@ public class EcranComenzi {
         }
         if (listenPlayer != null) {
             listenPlayer.stop();
+        }
+        if (micUplink != null) {
+            micUplink.stopCapture(); // opreste si emisia, daca era activa
         }
     }
 
