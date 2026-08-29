@@ -68,7 +68,7 @@ public class EcranPskReporter {
     private PskReporterAdapter adapter;
     private LinearLayout panelFiltre;
 
-    private int lookbackMinutes = 30;
+    private int lookbackMinutes = 15;
     private boolean isFetching = false;
     private long lastFetchAtMillis = 0L;
 
