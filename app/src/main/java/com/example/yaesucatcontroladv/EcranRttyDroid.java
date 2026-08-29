@@ -165,7 +165,6 @@ public class EcranRttyDroid {
     private static final String PREF_RTTY_SNRG_ON = "rtty_snrg_on";
     private static final String PREF_RTTY_SNRG_K = "rtty_snrg_k";
     private static final String PREF_RTTY_USE_RTS_PTT = "rtty_use_rts_ptt";
-    private static final String PREF_RTTY_USE_MACRO_CR = "rtty_use_macro_cr";
 
     private boolean isInitialLoading = false;
 
@@ -175,9 +174,8 @@ public class EcranRttyDroid {
     private int lastLiveTxLength = 0;      // Urmărire caractere deja trimise "live"
     private volatile boolean folosesteDiddle = true; // Emisie caractere de umplutură în idle
     private volatile boolean folosesteRtsPtPtt = false;
-    private volatile boolean folosesteMacroCr = true; // True = newline suffix, False = space suffix
-    private CheckBox cbDiddle, cbMacroCr;
-    private Button btnToggleLine;
+    private CheckBox cbDiddle;
+    private Button btnToggleLine, btnMacroCr;
     private LinearLayout rAndSetariAscunsePtt;
 
     // Gestionare vizibilitate setări PTT (Long Press / Auto-hide)
@@ -436,10 +434,14 @@ public class EcranRttyDroid {
                             etRttyInputLive.append(" ");
                         }
 
-                        // Text Macro + Sufix selectat (Enter sau Spatiu)
-                        String sufix = folosesteMacroCr ? "\n" : " ";
-                        etRttyInputLive.append(textFinal + sufix);
+                        // Macrourile se leagă mereu prin spațiu - dacă vrei o linie nouă
+                        // explicit, apasă butonul M-CR (inserează \n la poziția cursorului).
+                        etRttyInputLive.append(textFinal + " ");
                         etRttyInputLive.setSelection(etRttyInputLive.getText().length());
+                        // Focus programatic (fără tap) - arată cursorul clipind la final,
+                        // dar NU deschide tastatura (asta se întâmplă doar la tap direct
+                        // pe câmp, din gestionarea implicită a atingerii pe EditText).
+                        etRttyInputLive.requestFocus();
                     }
                     tvMacro.setBackgroundColor(Color.parseColor("#33FFFFFF"));
                     tvMacro.postDelayed(() -> tvMacro.setBackgroundColor(Color.TRANSPARENT), 150);
@@ -622,6 +624,9 @@ public class EcranRttyDroid {
         btnTrackToggle.setBackgroundColor(Color.parseColor("#757575"));
         btnTrackToggle.setTextColor(Color.WHITE);
         btnTrackToggle.setTypeface(null, Typeface.BOLD);
+        btnTrackToggle.setTextSize(10);
+        btnTrackToggle.setMinHeight(0);
+        btnTrackToggle.setPadding(0, 0, 0, 0);
         LinearLayout.LayoutParams pBtnTrack = new LinearLayout.LayoutParams(0, 110, 0.25f);
         pBtnTrack.setMargins(5, 0, 2, 0);
         btnTrackToggle.setLayoutParams(pBtnTrack);
@@ -645,6 +650,9 @@ public class EcranRttyDroid {
         btnNoiseBlanker.setBackgroundColor(Color.parseColor("#757575"));
         btnNoiseBlanker.setTextColor(Color.WHITE);
         btnNoiseBlanker.setTypeface(null, Typeface.BOLD);
+        btnNoiseBlanker.setTextSize(10);
+        btnNoiseBlanker.setMinHeight(0);
+        btnNoiseBlanker.setPadding(0, 0, 0, 0);
         LinearLayout.LayoutParams pBtnNb = new LinearLayout.LayoutParams(0, 110, 0.25f);
         pBtnNb.setMargins(2, 0, 2, 0);
         btnNoiseBlanker.setLayoutParams(pBtnNb);
@@ -687,12 +695,19 @@ public class EcranRttyDroid {
         });
         llTrkSiNb.addView(btnNoiseBlanker);
 
+        // Înălțime comună DNR/SNR-G - garantează valori identice, indiferent
+        // de mărimea textului fiecărui buton.
+        final int inaltimeDnrSnrG = 110;
+
         btnDnr = new Button(context);
         btnDnr.setText("DNR");
         btnDnr.setBackgroundColor(Color.parseColor("#757575"));
         btnDnr.setTextColor(Color.WHITE);
         btnDnr.setTypeface(null, Typeface.BOLD);
-        LinearLayout.LayoutParams pBtnDnr = new LinearLayout.LayoutParams(0, 110, 0.25f);
+        btnDnr.setTextSize(10);
+        btnDnr.setMinHeight(0);
+        btnDnr.setPadding(0, 0, 0, 0);
+        LinearLayout.LayoutParams pBtnDnr = new LinearLayout.LayoutParams(0, inaltimeDnrSnrG, 0.25f);
         pBtnDnr.setMargins(2, 0, 2, 0);
         btnDnr.setLayoutParams(pBtnDnr);
 
@@ -738,8 +753,10 @@ public class EcranRttyDroid {
         btnSnrGate.setBackgroundColor(Color.parseColor("#757575"));
         btnSnrGate.setTextColor(Color.WHITE);
         btnSnrGate.setTypeface(null, Typeface.BOLD);
-        btnSnrGate.setTextSize(9);
-        LinearLayout.LayoutParams pBtnSnrG = new LinearLayout.LayoutParams(0, 110, 0.25f);
+        btnSnrGate.setTextSize(10);
+        btnSnrGate.setMinHeight(0);
+        btnSnrGate.setPadding(0, 0, 0, 0);
+        LinearLayout.LayoutParams pBtnSnrG = new LinearLayout.LayoutParams(0, inaltimeDnrSnrG, 0.25f);
         pBtnSnrG.setMargins(2, 0, 5, 0);
         btnSnrGate.setLayoutParams(pBtnSnrG);
 
@@ -779,6 +796,9 @@ public class EcranRttyDroid {
             }
         });
         llTrkSiNb.addView(btnSnrGate);
+        // Sincronizarea reală de înălțime (SNR-G <-> DNR) se face în
+        // sincronizeazaInaltimileButoanelor(), apelată din constructor -
+        // acolo așteptăm atașarea la fereastră, nu aici (prea devreme).
         rAndDecoderToggle.addView(llTrkSiNb);
         llTopContent.addView(rAndDecoderToggle);
 
@@ -999,27 +1019,14 @@ public class EcranRttyDroid {
         });
         rAndSetariAscunsePtt.addView(cbDiddle);
 
-        cbMacroCr = new CheckBox(context);
-        cbMacroCr.setText("M-CR");
-        cbMacroCr.setTextColor(Color.parseColor("#00E5FF"));
-        cbMacroCr.setChecked(folosesteMacroCr);
-        cbMacroCr.setOnCheckedChangeListener((v, isChecked) -> {
-            folosesteMacroCr = isChecked;
-            salveazaSetareRtty(PREF_RTTY_USE_MACRO_CR, folosesteMacroCr);
-            reseteazaTemporizatorSetari(8000);
-        });
-        LinearLayout.LayoutParams pCbCr = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        pCbCr.setMargins(15, 0, 0, 0);
-        cbMacroCr.setLayoutParams(pCbCr);
-        rAndSetariAscunsePtt.addView(cbMacroCr);
-
         btnToggleLine = new Button(context);
         btnToggleLine.setText(folosesteRtsPtPtt ? "USE: RTS" : "USE: DTR");
         btnToggleLine.setBackgroundColor(Color.parseColor("#455A64"));
         btnToggleLine.setTextColor(Color.WHITE);
-        btnToggleLine.setTextSize(10);
-        LinearLayout.LayoutParams pBtnLine = new LinearLayout.LayoutParams(0, 90, 1f);
+        btnToggleLine.setTextSize(13);
+        btnToggleLine.setPadding(24, 0, 24, 0);
+        LinearLayout.LayoutParams pBtnLine = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, 90);
         pBtnLine.setMargins(20, 0, 0, 0);
         btnToggleLine.setLayoutParams(pBtnLine);
         btnToggleLine.setOnClickListener(v -> {
@@ -1086,6 +1093,11 @@ public class EcranRttyDroid {
         llBottomOperare.addView(etRttyInputLive);
 
         // SEND & PTT BUTTONS
+        // Înălțime comună pentru tot rândul (SEND, PTT, M-CR) - folosită explicit
+        // de toate cele trei ca să fie garantat identice, indiferent de mărimea
+        // textului fiecăruia.
+        final int inaltimeRandSendPtt = 120;
+
         LinearLayout rAndSendPtt = new LinearLayout(context);
         rAndSendPtt.setOrientation(LinearLayout.HORIZONTAL);
         rAndSendPtt.setGravity(Gravity.END);
@@ -1093,7 +1105,8 @@ public class EcranRttyDroid {
         btnRttySendLive.setText("SEND");
         btnRttySendLive.setBackgroundColor(Color.parseColor("#2E7D32"));
         btnRttySendLive.setTextColor(Color.WHITE);
-        LinearLayout.LayoutParams pBtnS = new LinearLayout.LayoutParams(0, 120, 1f);
+        btnRttySendLive.setMinHeight(0);
+        LinearLayout.LayoutParams pBtnS = new LinearLayout.LayoutParams(0, inaltimeRandSendPtt, 1f);
         pBtnS.setMargins(0, 0, 10, 0);
         btnRttySendLive.setLayoutParams(pBtnS);
         btnRttySendLive.setOnClickListener(v -> {
@@ -1114,7 +1127,12 @@ public class EcranRttyDroid {
         btnRttyPttToggle.setText("PTT");
         btnRttyPttToggle.setBackgroundColor(Color.parseColor("#424242"));
         btnRttyPttToggle.setTextColor(Color.WHITE);
-        btnRttyPttToggle.setLayoutParams(new LinearLayout.LayoutParams(0, 120, 1f));
+        btnRttyPttToggle.setMinHeight(0);
+        // Micșorat față de SEND (care rămâne la weight 1f neschimbat) ca să facă loc
+        // butonului M-CR de lângă el.
+        LinearLayout.LayoutParams pBtnPtt = new LinearLayout.LayoutParams(0, inaltimeRandSendPtt, 0.6f);
+        pBtnPtt.setMargins(0, 0, 10, 0);
+        btnRttyPttToggle.setLayoutParams(pBtnPtt);
 
         final boolean[] settingAfisatPrinHold = {false};
         Runnable actiuneHoldPtt = () -> {
@@ -1153,8 +1171,38 @@ public class EcranRttyDroid {
             }
         });
 
+        btnMacroCr = new Button(context);
+        btnMacroCr.setText("M-CR");
+        // Fără setTextSize explicit - moștenește exact același font implicit
+        // ca SEND/PTT (care nici ele nu-l suprascriu), ca să aibă aceeași
+        // "prezență" vizuală.
+        btnMacroCr.setBackgroundColor(Color.parseColor("#424242"));
+        btnMacroCr.setTextColor(Color.parseColor("#00E5FF"));
+        btnMacroCr.setPadding(20, 0, 20, 0);
+        btnMacroCr.setMinHeight(0);
+        btnMacroCr.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, inaltimeRandSendPtt));
+        btnMacroCr.setOnClickListener(v -> {
+            // Inserează \n exact la poziția cursorului (sau înlocuiește selecția,
+            // dacă există una) în câmpul de text live - nu mai adaugă automat
+            // un CR la fiecare macro, userul decide explicit unde vrea linie nouă.
+            int start = etRttyInputLive.getSelectionStart();
+            int end = etRttyInputLive.getSelectionEnd();
+            if (start < 0) start = etRttyInputLive.getText().length();
+            if (end < 0) end = start;
+            int from = Math.min(start, end);
+            int to = Math.max(start, end);
+            etRttyInputLive.getText().replace(from, to, "\n");
+            etRttyInputLive.setSelection(from + 1);
+            etRttyInputLive.requestFocus();
+        });
+
         rAndSendPtt.addView(btnRttySendLive);
         rAndSendPtt.addView(btnRttyPttToggle);
+        rAndSendPtt.addView(btnMacroCr);
+        // Sincronizarea reală de înălțime (M-CR <-> PTT) se face în
+        // sincronizeazaInaltimileButoanelor(), apelată din constructor -
+        // acolo așteptăm atașarea la fereastră, nu aici (prea devreme).
         llBottomOperare.addView(rAndSendPtt);
 
         // MACRO LIST
@@ -2111,7 +2159,6 @@ public class EcranRttyDroid {
         snrGatingK = 1.0 + snrGKProgress * (2.0 / 20.0);
 
         folosesteRtsPtPtt = prefs.getBoolean(PREF_RTTY_USE_RTS_PTT, false);
-        folosesteMacroCr = prefs.getBoolean(PREF_RTTY_USE_MACRO_CR, true);
 
         // Actualizăm UI
         if (btnDnr != null) {
@@ -2131,10 +2178,6 @@ public class EcranRttyDroid {
         if (btnToggleLine != null) {
             btnToggleLine.setText(folosesteRtsPtPtt ? "USE: RTS" : "USE: DTR");
         }
-        if (cbMacroCr != null) {
-            cbMacroCr.setChecked(folosesteMacroCr);
-        }
-
         calculeazaCoeficientiDnr(sampleRateFiltre);
         isInitialLoading = false;
     }
