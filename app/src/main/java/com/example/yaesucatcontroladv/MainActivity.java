@@ -60,11 +60,12 @@ public class MainActivity extends AppCompatActivity {
     private EcranLogger managerEcranLogger;
     private EcranSetariProprii managerEcranSetariProprii;
     private EcranCluster managerEcranCluster;
+    private EcranPskReporter managerEcranPskReporter;
     private EcranCwDeepDecoder managerEcranCwDeep;
 
     private DrawerLayout drawerLayout;
     private FrameLayout containerPrincipal;
-    private Button btnMeniuCAT, btnMeniuSettings, btnMeniuRtty, btnMeniuRttyPy, btnMeniuLogger, btnMeniuMySettings, btnMeniuCluster, btnMeniuCwDeep, btnMeniuExit;
+    private Button btnMeniuCAT, btnMeniuSettings, btnMeniuRtty, btnMeniuRttyPy, btnMeniuLogger, btnMeniuMySettings, btnMeniuCluster, btnMeniuPskReporter, btnMeniuCwDeep, btnMeniuExit;
 
     private boolean isReceiverRegistered = false;
 
@@ -158,6 +159,7 @@ public class MainActivity extends AppCompatActivity {
         managerEcranLogger = new EcranLogger(this, radioManager);
         managerEcranSetariProprii = new EcranSetariProprii(this);
         managerEcranCluster = new EcranCluster(this, radioManager);
+        managerEcranPskReporter = new EcranPskReporter(this, radioManager);
         managerEcranCwDeep = new EcranCwDeepDecoder(this, radioManager);
 
         drawerLayout = new DrawerLayout(this);
@@ -223,6 +225,7 @@ public class MainActivity extends AppCompatActivity {
         btnMeniuRttyPy = creeazaButonMeniu("MACROS EDITOR", v -> comutaEcranMaster(4));
         btnMeniuLogger = creeazaButonMeniu("LOGGER", v -> comutaEcranMaster(5));
         btnMeniuCluster = creeazaButonMeniu("DX CLUSTER", v -> comutaEcranMaster(7));
+        btnMeniuPskReporter = creeazaButonMeniu("PSK REPORTER", v -> comutaEcranMaster(9));
         btnMeniuCwDeep = creeazaButonMeniu("CW AI DECODER", v -> comutaEcranMaster(8));
         btnMeniuMySettings = creeazaButonMeniu("MY SETTINGS", v -> comutaEcranMaster(6));
 
@@ -243,6 +246,7 @@ public class MainActivity extends AppCompatActivity {
         meniuLateral.addView(btnMeniuRttyPy);
         meniuLateral.addView(btnMeniuLogger);
         meniuLateral.addView(btnMeniuCluster);
+        meniuLateral.addView(btnMeniuPskReporter);
         meniuLateral.addView(btnMeniuCwDeep);
         meniuLateral.addView(btnMeniuMySettings);
         meniuLateral.addView(btnMeniuExit);
@@ -341,6 +345,7 @@ public class MainActivity extends AppCompatActivity {
             case 6: if (managerEcranSetariProprii != null) viewDeAfisat = managerEcranSetariProprii.getView(); break;
             case 7: if (managerEcranCluster != null) viewDeAfisat = managerEcranCluster.getView(); break;
             case 8: if (managerEcranCwDeep != null) viewDeAfisat = managerEcranCwDeep.getView(); break;
+            case 9: if (managerEcranPskReporter != null) viewDeAfisat = managerEcranPskReporter.getView(); break;
         }
         if (viewDeAfisat != null) containerPrincipal.addView(viewDeAfisat);
         btnMeniuCAT.setBackgroundColor(Color.parseColor(indexEcran == 1 ? "#BBDEFB" : "#E0E0E0"));
@@ -351,6 +356,7 @@ public class MainActivity extends AppCompatActivity {
         btnMeniuMySettings.setBackgroundColor(Color.parseColor(indexEcran == 6 ? "#BBDEFB" : "#E0E0E0"));
         btnMeniuCluster.setBackgroundColor(Color.parseColor(indexEcran == 7 ? "#BBDEFB" : "#E0E0E0"));
         btnMeniuCwDeep.setBackgroundColor(Color.parseColor(indexEcran == 8 ? "#BBDEFB" : "#E0E0E0"));
+        btnMeniuPskReporter.setBackgroundColor(Color.parseColor(indexEcran == 9 ? "#BBDEFB" : "#E0E0E0"));
         drawerLayout.closeDrawer(GravityCompat.START);
     }
 
@@ -375,6 +381,7 @@ public class MainActivity extends AppCompatActivity {
                     if (managerEcranRtty != null) managerEcranRtty.eliberareResurse();
                     if (managerEcranCwDeep != null) managerEcranCwDeep.eliberareResurse();
                     if (managerEcranCluster != null) managerEcranCluster.eliberareResurse();
+                    if (managerEcranPskReporter != null) managerEcranPskReporter.eliberareResurse();
                     safeUnregisterReceiver();
                     if (radioManager != null) radioManager.opresteToat();
                     new Handler(Looper.getMainLooper()).postDelayed(this::finish, 200);
@@ -427,6 +434,7 @@ public class MainActivity extends AppCompatActivity {
         if (managerEcranCwDeep != null) managerEcranCwDeep.eliberareResurse();
         if (isFinishing()) {
             if (managerEcranCluster != null) managerEcranCluster.eliberareResurse();
+            if (managerEcranPskReporter != null) managerEcranPskReporter.eliberareResurse();
             stopService(new Intent(this, ClusterService.class));
         }
         if (managerEcranComenzi != null) managerEcranComenzi.eliberareResurse();

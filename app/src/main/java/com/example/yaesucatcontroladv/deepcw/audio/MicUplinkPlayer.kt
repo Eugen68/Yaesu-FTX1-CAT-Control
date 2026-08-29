@@ -112,18 +112,13 @@ class MicUplinkPlayer(private val context: Context) {
         audioRecord = record
         isCapturing = true
 
-        // Cand sursa e casca Bluetooth, MODE_IN_COMMUNICATION (necesar pentru intrarea SCO)
-        // trage si iesirea spre casca (sidetone) la urmatoarea emisie, in ciuda USAGE_MEDIA si
-        // setPreferredDevice() din startTransmit() - semnalul nu ajunge deloc la statie.
-        // Descoperit empiric: deschiderea si inchiderea unui stream pe interfata USB (ex. LISTEN
-        // pornit-oprit manual) "scutura" politica audio si o face sa ruteze corect urmatorul
-        // AudioTrack spre USB - vezi si comentariul din AudioRecorder.restart() despre acelasi
-        // efect perceput ca hotplug de device. Facem asta o singura data aici, la pornirea
-        // capturii (inainte de primul PTT, nu la fiecare apasare) - altfel fiecare emisie ar
-        // capata o intarziere perceptibila fata de microfonul intern, care e instant.
-        if (activeMicIsBluetooth) {
-            primeUsbRoute()
-        }
+        // NOTA: cand sursa e casca Bluetooth, MODE_IN_COMMUNICATION (necesar pentru intrarea
+        // SCO) trage si iesirea spre casca (sidetone) la urmatoarea emisie, in ciuda USAGE_MEDIA
+        // si setPreferredDevice() din startTransmit() - semnalul nu ajunge deloc la statie.
+        // "Scuturarea" politicii audio care rezolva asta (deschidere/inchidere stream USB) se
+        // face in EcranComenzi, cu AudioListenPlayer real (nu aici, cu un AudioRecord minimal
+        // de test - incercat, dar empiric nu a avut acelasi efect ca folosirea reala a LISTEN,
+        // posibil din cauza ratei/sursei diferite sau a lipsei citirilor efective de date).
 
         job = scope.launch {
             val chunkSamples = (rate / 10).coerceAtLeast(256) // ~100ms
@@ -369,46 +364,6 @@ class MicUplinkPlayer(private val context: Context) {
         return track
     }
 
-    /**
-     * Deschide si inchide rapid un AudioRecord de test pe intrarea USB, exclusiv ca sa
-     * declanseze "scuturarea" politicii audio descrisa mai sus - esantioanele citite (daca
-     * vreuna) sunt aruncate, nu ne intereseaza continutul. Ruleaza pe thread-ul apelant (UI,
-     * la apasarea PTT), blocant pentru [PRIME_HOLD_MS] - vezi [startTransmit].
-     */
-    @SuppressLint("MissingPermission")
-    private fun primeUsbRoute() {
-        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-        val usbInput = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
-            .firstOrNull { it.type in USB_DEVICE_TYPES } ?: return
-
-        val minBuf = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        if (minBuf <= 0) return
-
-        val record = try {
-            AudioRecord(
-                MediaRecorder.AudioSource.UNPROCESSED, 16000,
-                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, minBuf
-            )
-        } catch (e: Exception) {
-            null
-        } ?: return
-
-        if (record.state != AudioRecord.STATE_INITIALIZED) {
-            record.release()
-            return
-        }
-
-        try {
-            record.setPreferredDevice(usbInput)
-            record.startRecording()
-            Thread.sleep(PRIME_HOLD_MS)
-        } catch (e: Exception) {
-            Log.w(TAG, "Priming ruta USB esuat", e)
-        } finally {
-            try { record.stop() } catch (ignored: Exception) {}
-            try { record.release() } catch (ignored: Exception) {}
-        }
-    }
 
     /**
      * Blocheaza (pe thread-ul apelant - de obicei UI, la apasarea PTT) pana cand [track] apare
@@ -487,12 +442,6 @@ class MicUplinkPlayer(private val context: Context) {
          * a cheia statia - vezi [waitForRouting]. */
         private const val ROUTING_WAIT_MS = 300L
         private const val ROUTING_POLL_MS = 20L
-
-        /** Durata (ms) cat tinem deschis AudioRecord-ul de test din [primeUsbRoute] - pornind
-         * de la durata folosita manual (2-3s de LISTEN pornit) in testele care au confirmat
-         * efectul; poate necesita ajustare in functie de cat de repede se stabilizeaza politica
-         * audio pe teren. */
-        private const val PRIME_HOLD_MS = 600L
 
         private val CANDIDATE_RATES = intArrayOf(48000, 44100, 16000)
 

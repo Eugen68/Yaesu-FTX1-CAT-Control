@@ -42,6 +42,7 @@ public class EcranCluster {
     private Button btnConnect, btnBand, btnMode;
     private CheckBox cbKeepLive;
     private LinearLayout panelFiltre;
+    private EditText etSearch;
     private ClusterRepository.RepoListener repoListener;
 
     private final Handler debounceHandler = new Handler(Looper.getMainLooper());
@@ -190,7 +191,7 @@ public class EcranCluster {
         rowF1.addView(btnMode);
         panelFiltre.addView(rowF1);
 
-        EditText etSearch = new EditText(context);
+        etSearch = new EditText(context);
         etSearch.setHint("Search Callsign...");
         etSearch.setTextColor(Color.WHITE);
         etSearch.setTextSize(14);
@@ -426,6 +427,11 @@ public class EcranCluster {
         filterSearch = p.getString(EcranSetariProprii.PREF_CLUSTER_FILTER_SEARCH, "");
         btnBand.setText(selectedBands.isEmpty() ? "ALL BANDS" : String.join(",", selectedBands));
         btnMode.setText(selectedModes.isEmpty() ? "ALL MODES" : String.join(",", selectedModes));
+        // Bug reparat: caseta de căutare rămânea vizual goală chiar dacă
+        // filterSearch (reîncărcat din prefs) nu era gol - filtrul se aplica
+        // "pe ascuns", eliminând spoturi fără ca userul să vadă vreun text
+        // în câmpul de căutare.
+        etSearch.setText(filterSearch);
 
         // Sincronizăm adaptorul imediat ce s-au încărcat filtrele
         adapter.applyFilter(filterSearch, selectedBands, selectedModes);

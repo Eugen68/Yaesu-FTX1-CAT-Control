@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -27,6 +28,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class ClusterManager {
     private static final String TAG = "ClusterManager";
     private static final int CONNECT_TIMEOUT_MS = 15000;
+    // Dacă serverul nu trimite NICIO linie (nici măcar bannerul/promptul de login)
+    // timp de atâta, considerăm conexiunea blocată (ex: login rămas agățat la
+    // "login:" pentru că username-ul era gol) și forțăm reconectarea.
+    private static final long STALE_DATA_TIMEOUT_MS = 30_000;
+    // Watchdog-ul e verificat la fiecare tick al acestui interval - trebuie sa
+    // fie mai mic decat STALE_DATA_TIMEOUT_MS ca pragul de mai sus sa fie
+    // respectat cat mai aproape de valoarea reala (nu doar verificat o data pe minut).
+    private static final long HEARTBEAT_INTERVAL_SEC = 15;
 
     public interface ClusterListener {
         void onSpotReceived(Spot spot);
@@ -50,6 +59,9 @@ public class ClusterManager {
     private int serverPort;
     private String username;
     private String password;
+
+    private volatile long lastDataAtMillis = 0L;
+    private volatile boolean loginPhaseDone = false;
 
     public ClusterManager(Context context) {
         this.context = context;
@@ -119,10 +131,22 @@ public class ClusterManager {
         heartbeatScheduler = Executors.newSingleThreadScheduledExecutor();
         heartbeatScheduler.scheduleWithFixedDelay(() -> {
             if (isConnected()) {
+                // Conexiune "agățată": serverul nu a trimis absolut nimic de multă
+                // vreme (nici bannerul de login, nici spoturi, nici alt trafic al
+                // clusterului) - simptom tipic pentru un login rămas blocat la
+                // prompt (ex: username gol). Forțăm reconectarea în loc să rămânem
+                // la infinit cu starea "Connected" dar fără spoturi.
+                long silenceMs = System.currentTimeMillis() - lastDataAtMillis;
+                if (silenceMs > STALE_DATA_TIMEOUT_MS) {
+                    Log.w(TAG, "Nicio linie primită de " + (silenceMs / 1000) + "s - reconectare fortata");
+                    notifyError("No response from cluster for " + (silenceMs / 1000) + "s - reconnecting");
+                    disconnect();
+                    return;
+                }
                 // Trimitem un Heartbeat (CRLF) pentru a menține socket-ul activ
                 sendCommand("\r\n");
             }
-        }, 60, 60, TimeUnit.SECONDS);
+        }, HEARTBEAT_INTERVAL_SEC, HEARTBEAT_INTERVAL_SEC, TimeUnit.SECONDS);
     }
 
     private void stopHeartbeat() {
@@ -173,6 +197,13 @@ public class ClusterManager {
             reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             writer = new PrintWriter(socket.getOutputStream(), true);
 
+            // Bază de pornire pentru watchdog-ul de "conexiune blocată" (vezi
+            // startHeartbeat()) - altfel, la valoarea implicită 0, primul tick
+            // de heartbeat ar crede că n-a mai văzut date de zeci de ani.
+            lastDataAtMillis = System.currentTimeMillis();
+            loginPhaseDone = false;
+            long connectStartMillis = System.currentTimeMillis();
+
             Log.d(TAG, "Socket deschis. Pornire autentificare...");
             notifyStatus(true, "Connected. Authenticating...");
 
@@ -191,7 +222,31 @@ public class ClusterManager {
                         break;
                     }
 
+                    // Orice linie primită (banner, prompt, spot, mesaj) dovedește că
+                    // legătura e vie - resetăm watchdog-ul de conexiune blocată.
+                    lastDataAtMillis = System.currentTimeMillis();
+
                     if (!isRunning.get()) break;
+
+                    // Detectare login refuzat (ex: username gol/invalid trimis la
+                    // autentificare -> DXSpider răspunde "Sorry ... invalid callsign"
+                    // și rămâne la promptul de login la nesfârșit). Verificăm doar
+                    // în fereastra de dinaintea confirmării de login, ca să nu
+                    // declanșăm fals pe un comentariu de spot care conține din
+                    // întâmplare cuvântul "sorry".
+                    if (!loginPhaseDone) {
+                        String lower = line.toLowerCase(Locale.US);
+                        if (lower.contains("invalid callsign") || lower.contains("connection refused")) {
+                            notifyError("Login refused by cluster: " + line.trim() + " - check MY CALL in settings");
+                            break;
+                        }
+                        // După primele 15s renunțăm la verificare - o linie de spot
+                        // normală nu are cum să conțină din întâmplare aceste fraze,
+                        // dar nu vrem sa depindem la nesfarsit de un mesaj exact.
+                        if (System.currentTimeMillis() - connectStartMillis > 15_000) {
+                            loginPhaseDone = true;
+                        }
+                    }
 
                     // Parsează linia ca spot
                     Spot spot = parseSpotLine(line);

@@ -56,8 +56,13 @@ public class EcranComenzi {
     private LinearLayout llPttSettings;
     private CheckBox cbPttToggleMode;
     private Button btnPttLineToggle;
+    private Button btnCascaBtToggle;
     private boolean pttToggleMode = false; // false = hold-to-talk, true = apasa o data pentru TX/RX
     private boolean pttUseRts = true;      // linia hardware folosita pentru PTT (ca la CW Keyer)
+    // Alegere manuala a sursei de microfon (in loc de detectie automata, nesigura la
+    // conectare/deconectare live a castii - vezi aplicaSetareCascaBt()). true = incearca SCO
+    // catre casca BT, false = ramane mereu pe microfonul telefonului, fara sa atinga SCO deloc.
+    private boolean cascaBtActivata = true;
     private boolean pttSettingsAfisatePrinHold = false;
     private final Handler handlerPttSettings2 = new Handler(Looper.getMainLooper());
     private final Handler handlerReconnectSco = new Handler(Looper.getMainLooper());
@@ -123,6 +128,7 @@ public class EcranComenzi {
     private static final String PREF_LISTEN_LOCK_CONTROLS = "listen_lock_controls";
     private static final String PREF_PTT_TOGGLE_MODE = "ptt_toggle_mode";
     private static final String PREF_PTT_USE_RTS = "ptt_use_rts";
+    private static final String PREF_CASCA_BT_ACTIVATA = "casca_bt_activata";
 
     private boolean isInitialLoading = false;
 
@@ -416,6 +422,24 @@ public class EcranComenzi {
             reseteazaTemporizatorSetariPtt();
         });
         llPttSettings.addView(btnPttLineToggle);
+
+        btnCascaBtToggle = new Button(context);
+        btnCascaBtToggle.setText(cascaBtActivata ? "MIC: CASCA BT" : "MIC: TELEFON");
+        btnCascaBtToggle.setBackgroundColor(Color.parseColor("#455A64"));
+        btnCascaBtToggle.setTextColor(Color.WHITE);
+        btnCascaBtToggle.setTextSize(11);
+        LinearLayout.LayoutParams pBtnCascaBt = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        pBtnCascaBt.setMargins(15, 0, 0, 0);
+        btnCascaBtToggle.setLayoutParams(pBtnCascaBt);
+        btnCascaBtToggle.setOnClickListener(v -> {
+            cascaBtActivata = !cascaBtActivata;
+            btnCascaBtToggle.setText(cascaBtActivata ? "MIC: CASCA BT" : "MIC: TELEFON");
+            salveazaSetareListen(PREF_CASCA_BT_ACTIVATA, cascaBtActivata);
+            aplicaSetareCascaBt();
+            reseteazaTemporizatorSetariPtt();
+        });
+        llPttSettings.addView(btnCascaBtToggle);
 
         llCAT.addView(llPttSettings);
 
@@ -745,10 +769,7 @@ public class EcranComenzi {
                     trateazaCascaDisparuta("SCO audio");
                 } else if (state == android.media.AudioManager.SCO_AUDIO_STATE_CONNECTED) {
                     handlerReconnectSco.removeCallbacks(runnableReconnectSco);
-                    // Pre-incalzim captura microfonului castii acum, nu la primul PTT - legatura
-                    // SCO are ~1-2s de warm-up la deschiderea unui AudioRecord nou pe ea; daca
-                    // asteptam pana la PTT, primele apasari ajung la statie ca "aer mort".
-                    if (modVoceCurent) micUplink.startCapture();
+                    reevalueazaCapturaPeBt();
                 }
             }
         };
@@ -779,8 +800,16 @@ public class EcranComenzi {
                 android.util.Log.i("EcranComenzi", "Profil HEADSET state=" + state);
                 if (state == android.bluetooth.BluetoothProfile.STATE_DISCONNECTED) {
                     trateazaCascaDisparuta("profil HEADSET");
-                } else if (state == android.bluetooth.BluetoothProfile.STATE_CONNECTED && modVoceCurent) {
+                } else if (state == android.bluetooth.BluetoothProfile.STATE_CONNECTED
+                        && modVoceCurent && cascaBtActivata) {
                     handlerReconnectSco.removeCallbacks(runnableReconnectSco);
+                    // NU chemam reevalueazaCapturaPeBt() aici - porneteScoDacaExistaCasca() de
+                    // mai jos doar INITIAZA conectarea SCO (asincrona); BluetoothScoState.connected
+                    // e inca fals in acest moment, deci am cadea pe microfonul telefonului si am
+                    // ramane blocati acolo (fara captureOwnedByTransmit, care se seteaza doar din
+                    // startTransmit()). Asteptam confirmarea reala prin SCO_AUDIO_STATE_CONNECTED
+                    // (vezi inregistreazaReceiverSco), acolo unde BluetoothScoState.connected e
+                    // deja actualizat corect inainte de reevaluare.
                     porneteScoDacaExistaCasca();
                 }
             }
@@ -811,14 +840,55 @@ public class EcranComenzi {
     }
 
     /**
+     * Apelata cand primim confirmarea (SCO audio sau profil HEADSET) ca legatura catre casca
+     * e disponibila acum. Daca operatorul a apasat PTT INAINTE ca aceasta confirmare sa fi
+     * ajuns (cat BluetoothScoState.connected era inca fals), MicUplinkPlayer.startCapture() a
+     * cazut deja pe microfonul telefonului si a ramas "captureOwnedByTransmit" - iar un simplu
+     * startCapture() de la confirmarea de mai sus ar intoarce ALREADY_RUNNING fara sa faca
+     * nimic, ramanand blocat pe telefon pana la un ciclu PTT care nimereste din intamplare
+     * fereastra buna (uneori zeci de secunde). O repornim explicit aici ca sa treaca pe casca
+     * de indata ce stim ca e disponibila. Nu intrerupem o emisie in curs.
+     */
+    private void reevalueazaCapturaPeBt() {
+        if (!modVoceCurent || !cascaBtActivata) return;
+        if (!micUplink.isTransmitting() && micUplink.isCapturing() && !micUplink.getActiveMicIsBluetooth()) {
+            micUplink.stopCapture();
+        }
+        if (!micUplink.isCapturing()) micUplink.startCapture();
+        scuturaRutaUsbCuListen();
+    }
+
+    /**
+     * Reproduce cu LISTEN real "scuturarea" descoperita empiric de operator (LISTEN ON 2-3s,
+     * apoi OFF, dupa care urmatoarea emisie pe casca BT ajunge efectiv la statie, in loc sa
+     * ramana pe sidetone). O incercare anterioara de a reproduce efectul cu un AudioRecord
+     * minimal de test (fara LISTEN real) NU a avut acelasi efect empiric - probabil conteaza
+     * rata/sursa aleasa de AudioRecorder sau faptul ca LISTEN chiar citeste date, nu doar
+     * deschide streamul (vezi istoricul din MicUplinkPlayer.kt). Nu facem nimic daca operatorul
+     * are deja LISTEN pornit (ruta e deja "calda" prin folosire reala) sau daca PTT e activ chiar
+     * acum (nu are rost sa perturbam o emisie in curs, si LISTEN oricum nu porneste peste TX -
+     * vezi setPttActive). Blocant ~2s pe thread-ul apelant.
+     */
+    private void scuturaRutaUsbCuListen() {
+        if (listenActive || pttActive) return;
+        AudioListenPlayer.StartResult r = listenPlayer.start();
+        if (r == AudioListenPlayer.StartResult.OK) {
+            try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
+            listenPlayer.stop();
+        }
+    }
+
+    /**
      * Porneste/opreste legatura Bluetooth SCO odata cu intrarea/iesirea din modul voce.
      * Best-effort: daca nu exista nicio casca HFP conectata, startBluetoothSco() pur si
      * simplu nu are efect - MicUplinkPlayer verifica separat, la fiecare pornire de PTT,
      * starea reala din BluetoothScoState si cade automat pe microfonul intern daca SCO nu
-     * s-a conectat.
+     * s-a conectat. Nu incearca nimic daca operatorul a dezactivat manual casca BT din
+     * panoul de setari PTT (vezi [cascaBtActivata], [aplicaSetareCascaBt]).
      */
     private void actualizeazaBluetoothScoPentruMod(boolean esteVoce) {
         if (esteVoce) {
+            if (!cascaBtActivata) return;
             if (scoActive) return;
             if (android.os.Build.VERSION.SDK_INT >= 31 &&
                     androidx.core.content.ContextCompat.checkSelfPermission(context,
@@ -834,6 +904,13 @@ public class EcranComenzi {
             return;
         }
 
+        opresteScoCompletDacaActiv();
+    }
+
+    /** Opreste complet legatura SCO si revine la MODE_NORMAL, daca era activa. Extras din
+     * [actualizeazaBluetoothScoPentruMod] ca sa fie reutilizabil si de [aplicaSetareCascaBt]
+     * cand operatorul dezactiveaza manual casca BT in timp ce e deja in mod voce. */
+    private void opresteScoCompletDacaActiv() {
         android.media.AudioManager audioManager =
                 (android.media.AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
         if (audioManager == null || !scoActive) return;
@@ -850,11 +927,45 @@ public class EcranComenzi {
         }
     }
 
+    /**
+     * Aplica manual alegerea sursei de microfon (toggle-ul MIC: CASCA BT / MIC: TELEFON din
+     * panoul de setari PTT) - apelata la schimbarea toggle-ului. Comutarea pe CASCA BT
+     * forteaza o reevaluare curata de la zero (scoActive=false inainte de a reincerca), deci
+     * serveste si ca resetare manuala daca detectia auto ar ramane vreodata desincronizata -
+     * alternativa mai rapida la restartul complet al aplicatiei.
+     */
+    private void aplicaSetareCascaBt() {
+        if (!modVoceCurent) return;
+        handlerReconnectSco.removeCallbacks(runnableReconnectSco);
+        if (cascaBtActivata) {
+            if (android.os.Build.VERSION.SDK_INT >= 31 &&
+                    androidx.core.content.ContextCompat.checkSelfPermission(context,
+                            android.Manifest.permission.BLUETOOTH_CONNECT)
+                            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                androidx.core.app.ActivityCompat.requestPermissions((android.app.Activity) context,
+                        new String[]{android.Manifest.permission.BLUETOOTH_CONNECT}, 125);
+                return;
+            }
+            scoActive = false;
+            porneteScoDacaExistaCasca();
+            // NU facem aici primeUsbRoute() - incercat, dar deschiderea unui AudioRecord pe USB
+            // chiar cat SCO negociaza inca pe fundal (imediat dupa startBluetoothSco()) pare sa
+            // perturbe/saboteze negocierea insasi (aceeasi fragilitate observata cu orice
+            // schimbare concurenta de stream in timpul MODE_IN_COMMUNICATION) - dupa acest
+            // experiment, toggle-ul repetat nu mai producea deloc semnal la statie. Scuturarea
+            // ramane doar in MicUplinkPlayer.startCapture(), care ruleaza abia DUPA ce SCO s-a
+            // confirmat efectiv conectat (broadcast), nu concurent cu negocierea.
+        } else {
+            if (pttActive) setPttActive(false); // siguranta - nu ramanem cu emisia agatata de o sursa tocmai dezactivata
+            opresteScoCompletDacaActiv();
+        }
+    }
+
     /** Reia pornirea SCO dupa ce utilizatorul a acordat BLUETOOTH_CONNECT (apelat din
      * MainActivity.onRequestPermissionsResult, cod 125). Fara asta, SCO nu pornea niciodata
      * dupa primul dialog de permisiune - trebuia sa iesi si sa reintri in LSB/USB manual. */
     public void porneteScoDupaPermisiune() {
-        if (modVoceCurent) porneteScoDacaExistaCasca();
+        if (modVoceCurent && cascaBtActivata) porneteScoDacaExistaCasca();
     }
 
     /**
@@ -875,7 +986,7 @@ public class EcranComenzi {
      * re-programeaza singura peste inca 2s, cat timp suntem in mod voce, ca sa astepte revenirea
      * castii (fara asta bucla s-ar opri definitiv la prima verificare esuata). */
     private void reincearcaSco() {
-        if (!modVoceCurent) return;
+        if (!modVoceCurent || !cascaBtActivata) return;
         if (existaCascaBluetoothConectata()) {
             porneteScoInterna();
         } else {
@@ -1313,8 +1424,12 @@ public class EcranComenzi {
         boolean locked = prefs.getBoolean(PREF_LISTEN_LOCK_CONTROLS, false);
         pttToggleMode = prefs.getBoolean(PREF_PTT_TOGGLE_MODE, false);
         pttUseRts = prefs.getBoolean(PREF_PTT_USE_RTS, true);
+        cascaBtActivata = prefs.getBoolean(PREF_CASCA_BT_ACTIVATA, true);
         if (cbPttToggleMode != null) cbPttToggleMode.setChecked(pttToggleMode);
         if (btnPttLineToggle != null) btnPttLineToggle.setText(pttUseRts ? "USE: RTS" : "USE: DTR");
+        if (btnCascaBtToggle != null) {
+            btnCascaBtToggle.setText(cascaBtActivata ? "MIC: CASCA BT" : "MIC: TELEFON");
+        }
 
         listenPlayer.setWetLevel(wet);
         listenPlayer.setOutputGain(gain);
