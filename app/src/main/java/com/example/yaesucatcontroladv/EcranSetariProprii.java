@@ -26,10 +26,17 @@ import androidx.appcompat.app.AlertDialog;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
+
+import fi.iki.elonen.NanoHTTPD;
 
 public class EcranSetariProprii {
     // Chei SharedPreferences
@@ -55,6 +62,10 @@ public class EcranSetariProprii {
     public static final String PREF_CLUSTER_FILTER_MODE = "cluster_filter_mode";
     public static final String PREF_CLUSTER_FILTER_SEARCH = "cluster_filter_search";
 
+    // Chei Server Fișiere Local
+    public static final String PREF_FILESERVER_PORT = "fileserver_port";
+    private static final int DEFAULT_FILESERVER_PORT = 8080;
+
     // Coduri cereri fișiere
     private static final int REQUEST_IMPORT_BACKUP = 501;
     private static final int REQUEST_IMPORT_ADIF = 601;
@@ -74,6 +85,12 @@ public class EcranSetariProprii {
     // putem detecta dacă userul a EDITAT adresa (redenumire) sau a introdus
     // una complet nouă.
     private String clusterServerOriginal = "";
+
+    // Server HTTP local (acces backup/log din browser)
+    private EditText etFileServerPort;
+    private Button btnFileServerToggle;
+    private TextView tvFileServerStatus;
+    private LocalFileHttpServer fileServer;
 
     public EcranSetariProprii(Context context) {
         this.context = context;
@@ -644,7 +661,197 @@ public class EcranSetariProprii {
         btnShareAdif.setOnClickListener(v -> executaShareAdif());
         llMain.addView(btnShareAdif);
 
+        // Separator vizual
+        View separator3 = new View(context);
+        separator3.setBackgroundColor(Color.GRAY);
+        LinearLayout.LayoutParams pSep3 = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 2);
+        pSep3.setMargins(0, 10, 0, 20);
+        separator3.setLayoutParams(pSep3);
+        llMain.addView(separator3);
+
+        // ============================================================
+        // SERVER HTTP LOCAL (ACCES BACKUP/LOG DINTR-UN BROWSER, PE WIFI)
+        // ============================================================
+        TextView tvFileServerTitlu = new TextView(context);
+        tvFileServerTitlu.setText("Local File Server (Backup & Log Access)");
+        tvFileServerTitlu.setTextColor(Color.parseColor("#AAAAAA"));
+        tvFileServerTitlu.setTextSize(14);
+        tvFileServerTitlu.setPadding(0, 0, 0, 6);
+        llMain.addView(tvFileServerTitlu);
+
+        TextView tvFileServerHint = new TextView(context);
+        tvFileServerHint.setText("Starts a small web server so you can open the exported backup/ADIF files "
+                + "from a browser on another device in the same WiFi network.");
+        tvFileServerHint.setTextColor(Color.parseColor("#888888"));
+        tvFileServerHint.setTextSize(11);
+        tvFileServerHint.setPadding(0, 0, 0, 12);
+        llMain.addView(tvFileServerHint);
+
+        LinearLayout rowPort = new LinearLayout(context);
+        rowPort.setOrientation(LinearLayout.HORIZONTAL);
+        rowPort.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams pRowPort = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pRowPort.setMargins(0, 0, 0, 12);
+        rowPort.setLayoutParams(pRowPort);
+
+        TextView tvPortLabel = new TextView(context);
+        tvPortLabel.setText("Port:");
+        tvPortLabel.setTextColor(Color.WHITE);
+        LinearLayout.LayoutParams pPortLabel = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pPortLabel.setMargins(0, 0, 10, 0);
+        tvPortLabel.setLayoutParams(pPortLabel);
+        rowPort.addView(tvPortLabel);
+
+        etFileServerPort = new EditText(context);
+        etFileServerPort.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        etFileServerPort.setHint(String.valueOf(DEFAULT_FILESERVER_PORT));
+        etFileServerPort.setHintTextColor(Color.GRAY);
+        etFileServerPort.setTextColor(Color.WHITE);
+        etFileServerPort.setGravity(android.view.Gravity.CENTER);
+        LinearLayout.LayoutParams pPort = new LinearLayout.LayoutParams(190, LinearLayout.LayoutParams.WRAP_CONTENT);
+        pPort.setMargins(0, 0, 15, 0);
+        etFileServerPort.setLayoutParams(pPort);
+        rowPort.addView(etFileServerPort);
+
+        btnFileServerToggle = new Button(context);
+        btnFileServerToggle.setText("▶ START FILE SERVER");
+        btnFileServerToggle.setBackgroundColor(Color.parseColor("#37474F"));
+        btnFileServerToggle.setTextColor(Color.WHITE);
+        btnFileServerToggle.setTypeface(null, Typeface.BOLD);
+        btnFileServerToggle.setTextSize(12);
+        LinearLayout.LayoutParams pBtnFileServer = new LinearLayout.LayoutParams(0, 120, 1f);
+        btnFileServerToggle.setLayoutParams(pBtnFileServer);
+        btnFileServerToggle.setOnClickListener(v -> toggleFileServer());
+        rowPort.addView(btnFileServerToggle);
+
+        llMain.addView(rowPort);
+
+        tvFileServerStatus = new TextView(context);
+        tvFileServerStatus.setText("Server stopped.");
+        tvFileServerStatus.setTextColor(Color.parseColor("#AAAAAA"));
+        tvFileServerStatus.setTextSize(12);
+        tvFileServerStatus.setPadding(0, 0, 0, 20);
+        tvFileServerStatus.setTextIsSelectable(true);
+        llMain.addView(tvFileServerStatus);
+
         viewPrincipal.addView(llMain);
+    }
+
+    // ============================================================
+    // SERVER HTTP LOCAL (BACKUP/LOG)
+    // ============================================================
+    private void toggleFileServer() {
+        if (fileServer != null) {
+            stopFileServer();
+        } else {
+            startFileServer();
+        }
+    }
+
+    private static final long FILESERVER_AUTO_STOP_MS = 3 * 60 * 1000L;
+    private final Handler fileServerHandler = new Handler(Looper.getMainLooper());
+    private final Runnable fileServerAutoStopRunnable = this::autoStopFileServer;
+
+    private void startFileServer() {
+        int port = citestePortDinCamp();
+        String token = genereazaTokenScurt(); // token nou la fiecare pornire
+        try {
+            LocalFileHttpServer server = new LocalFileHttpServer(context, port, token);
+            server.start(NanoHTTPD.SOCKET_READ_TIMEOUT, true);
+            fileServer = server;
+
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                    .putInt(PREF_FILESERVER_PORT, port).apply();
+
+            fileServerHandler.removeCallbacks(fileServerAutoStopRunnable);
+            fileServerHandler.postDelayed(fileServerAutoStopRunnable, FILESERVER_AUTO_STOP_MS);
+
+            String ip = getLocalIpAddress();
+            String url = "http://" + (ip != null ? ip : "<phone-ip>") + ":" + port + "/?token=" + token;
+            tvFileServerStatus.setText("Server RUNNING (auto-stop in 3 min):\n" + url);
+            btnFileServerToggle.setText("■ STOP FILE SERVER");
+            etFileServerPort.setEnabled(false);
+        } catch (IOException e) {
+            fileServer = null;
+            tvFileServerStatus.setText("Could not start on port " + port + " (" + e.getMessage()
+                    + "). Edit the port above and try again.");
+            Toast.makeText(context, "Port " + port + " is unavailable. Try a different port.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void stopFileServer() {
+        fileServerHandler.removeCallbacks(fileServerAutoStopRunnable);
+        if (fileServer != null) {
+            fileServer.stop();
+            fileServer = null;
+        }
+        btnFileServerToggle.setText("▶ START FILE SERVER");
+        tvFileServerStatus.setText("Server stopped.");
+        etFileServerPort.setEnabled(true);
+    }
+
+    private void autoStopFileServer() {
+        if (fileServer == null) return;
+        stopFileServer();
+        Toast.makeText(context, "File server stopped automatically after 3 minutes.", Toast.LENGTH_SHORT).show();
+    }
+
+    /**
+     * Oprește serverul HTTP local, dacă rulează. Apelat din MainActivity.onDestroy(),
+     * la fel ca eliberareResurse() de la celelalte ecrane, ca să nu rămână un
+     * thread de server orfan după închiderea aplicației.
+     */
+    public void eliberareResurse() {
+        fileServerHandler.removeCallbacks(fileServerAutoStopRunnable);
+        if (fileServer != null) {
+            fileServer.stop();
+            fileServer = null;
+        }
+    }
+
+    private int citestePortDinCamp() {
+        String txt = etFileServerPort.getText().toString().trim();
+        if (txt.isEmpty()) return DEFAULT_FILESERVER_PORT;
+        try {
+            int p = Integer.parseInt(txt);
+            if (p < 1024 || p > 65535) return DEFAULT_FILESERVER_PORT;
+            return p;
+        } catch (NumberFormatException e) {
+            return DEFAULT_FILESERVER_PORT;
+        }
+    }
+
+    private static final String FILESERVER_TOKEN_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";
+    private static final int FILESERVER_TOKEN_LENGTH = 4;
+
+    private String genereazaTokenScurt() {
+        java.security.SecureRandom random = new java.security.SecureRandom();
+        StringBuilder sb = new StringBuilder(FILESERVER_TOKEN_LENGTH);
+        for (int i = 0; i < FILESERVER_TOKEN_LENGTH; i++) {
+            sb.append(FILESERVER_TOKEN_CHARS.charAt(random.nextInt(FILESERVER_TOKEN_CHARS.length())));
+        }
+        return sb.toString();
+    }
+
+    private String getLocalIpAddress() {
+        try {
+            Enumeration<NetworkInterface> ifaces = NetworkInterface.getNetworkInterfaces();
+            while (ifaces != null && ifaces.hasMoreElements()) {
+                NetworkInterface iface = ifaces.nextElement();
+                if (!iface.isUp() || iface.isLoopback()) continue;
+                Enumeration<InetAddress> addrs = iface.getInetAddresses();
+                while (addrs.hasMoreElements()) {
+                    InetAddress addr = addrs.nextElement();
+                    if (!addr.isLoopbackAddress() && addr instanceof Inet4Address) {
+                        return addr.getHostAddress();
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
     }
 
     // ============================================================
@@ -867,6 +1074,9 @@ public class EcranSetariProprii {
         // Fiecare server din listă are propriul user/pass
         incarcaCredentialePentruServer(serverCurent);
         clusterServerOriginal = serverCurent;
+
+        int portSalvat = prefs.getInt(PREF_FILESERVER_PORT, DEFAULT_FILESERVER_PORT);
+        etFileServerPort.setText(String.valueOf(portSalvat));
     }
 
     // ============================================================

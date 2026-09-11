@@ -110,7 +110,11 @@ public class AdifExporter {
         ContentResolver resolver = context.getContentResolver();
         ContentValues values = new ContentValues();
         values.put(MediaStore.Downloads.DISPLAY_NAME, numeFisier);
-        values.put(MediaStore.Downloads.MIME_TYPE, "text/plain");
+        // "text/plain" e mapat de Android la extensia ".txt" - cum DISPLAY_NAME
+        // se termină în ".adi", MediaStore ar adăuga automat ".txt" la salvare
+        // (rezultând "...adi.txt"). "application/octet-stream" nu are o
+        // extensie canonică asociată, deci numele de fișier rămâne neatins.
+        values.put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream");
         values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/" + PROGRAM_ID);
         Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
         if (uri == null) throw new Exception("Could not create ADIF file.");

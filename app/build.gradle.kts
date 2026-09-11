@@ -111,4 +111,7 @@ dependencies {
     androidTestImplementation(libs.espresso.core)
     androidTestImplementation(libs.ext.junit)
     implementation("com.github.mik3y:usb-serial-for-android:3.10.0")
+
+    // Server HTTP local (acces la fișierele de backup/log dintr-un browser din rețeaua WiFi)
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
 }

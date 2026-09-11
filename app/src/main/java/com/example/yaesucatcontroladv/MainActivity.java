@@ -438,6 +438,7 @@ public class MainActivity extends AppCompatActivity {
             stopService(new Intent(this, ClusterService.class));
         }
         if (managerEcranComenzi != null) managerEcranComenzi.eliberareResurse();
+        if (managerEcranSetariProprii != null) managerEcranSetariProprii.eliberareResurse();
         safeUnregisterReceiver();
         if (radioManager != null) radioManager.opresteToat();
     }
