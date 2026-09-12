@@ -20,6 +20,7 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -98,6 +99,11 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         if (getSupportActionBar() != null) getSupportActionBar().hide();
+
+        // Incarca (si, daca a trecut o saptamana, actualizeaza in fundal) baza
+        // de indicative cunoscute (MASTER.SCP) folosita pentru evidentierea
+        // "de incredere" in CW AI Decoder / RTTY.
+        CallsignDatabase.getInstance().ensureLoadedAndMaybeUpdate(this);
 
         IntentFilter filter = new IntentFilter();
         filter.addAction(ACTION_USB_PERMISSION);
@@ -274,7 +280,7 @@ public class MainActivity extends AppCompatActivity {
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
             splashView.setVisibility(View.GONE);
             ascundeButoaneNavigare();
-        }, 2000);
+        }, 2500);
 
         verificaPermisiuneOverlay();
         verificaPermisiuneNotificari();
@@ -284,7 +290,7 @@ public class MainActivity extends AppCompatActivity {
     private View createSplashView() {
         LinearLayout splash = new LinearLayout(this);
         splash.setOrientation(LinearLayout.VERTICAL);
-        splash.setBackgroundColor(Color.parseColor("#121212"));
+        splash.setBackgroundColor(Color.parseColor("#112855"));
         splash.setGravity(Gravity.CENTER);
         splash.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -297,14 +303,15 @@ public class MainActivity extends AppCompatActivity {
         tvTitle.setGravity(Gravity.CENTER);
         splash.addView(tvTitle);
 
-        TextView tvSub = new TextView(this);
-        tvSub.setText("by YO9VA");
-        tvSub.setTextColor(Color.parseColor("#B71C1C"));
-        tvSub.setTextSize(24);
-        tvSub.setTypeface(null, Typeface.BOLD);
-        tvSub.setGravity(Gravity.CENTER);
-        tvSub.setPadding(0, 20, 0, 0);
-        splash.addView(tvSub);
+        ImageView ivLogo = new ImageView(this);
+        ivLogo.setImageResource(R.drawable.fileserver_logo);
+        ivLogo.setAdjustViewBounds(true);
+        ivLogo.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        LinearLayout.LayoutParams pLogo = new LinearLayout.LayoutParams(
+                dp(260), ViewGroup.LayoutParams.WRAP_CONTENT);
+        pLogo.setMargins(0, dp(24), 0, 0);
+        ivLogo.setLayoutParams(pLogo);
+        splash.addView(ivLogo);
         return splash;
     }
 

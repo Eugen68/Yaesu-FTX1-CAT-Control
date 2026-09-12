@@ -128,8 +128,16 @@ public class CallsignDetector {
         }
     }
 
+    // Auriu: format de indicativ valid (regex), dar negasit in MASTER.SCP.
+    // Verde: format valid SI gasit exact in MASTER.SCP (semnal de incredere).
+    // NU corectam niciodata automat textul - doar evidentiem diferit culoarea.
+    private static final int CULOARE_INDICATIV_FORMAT_VALID = Color.parseColor("#FFD700");
+    private static final int CULOARE_INDICATIV_CONFIRMAT = Color.parseColor("#69F0AE");
+
     private SpannableString creeazaSpanIndicativ(final String callFinal) {
         SpannableString spannable = new SpannableString(callFinal);
+        final int culoare = CallsignDatabase.getInstance().isKnown(callFinal)
+                ? CULOARE_INDICATIV_CONFIRMAT : CULOARE_INDICATIV_FORMAT_VALID;
         ClickableSpan clickableSpan = new ClickableSpan() {
             @Override
             public void onClick(View widget) {
@@ -139,7 +147,7 @@ public class CallsignDetector {
             @Override
             public void updateDrawState(TextPaint ds) {
                 super.updateDrawState(ds);
-                ds.setColor(Color.parseColor("#FFD700"));
+                ds.setColor(culoare);
                 ds.setUnderlineText(true);
             }
         };
