@@ -6,7 +6,12 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Typeface;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
@@ -17,6 +22,7 @@ import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
@@ -143,6 +149,32 @@ public class EcranLogger {
         etCall.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.AllCaps()});
         LinearLayout.LayoutParams pEtCall = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.75f);
         etCall.setLayoutParams(pEtCall);
+
+        etCall.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable s) {
+                if (s.length() > 0) {
+                    etCall.setCompoundDrawablesWithIntrinsicBounds(null, null, createXIcon(), null);
+                } else {
+                    etCall.setCompoundDrawablesWithIntrinsicBounds(null, null, null, null);
+                }
+            }
+        });
+
+        etCall.setOnTouchListener((v, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_UP) {
+                if (etCall.getCompoundDrawables()[2] != null) {
+                    if (event.getRawX() >= (etCall.getRight() - etCall.getCompoundPaddingRight())) {
+                        curataCampuriLoggerSelectiv();
+                        return true;
+                    }
+                }
+                v.performClick();
+            }
+            return false;
+        });
+
         rAndCall.addView(etCall);
 
         Button btnCautaQrz = new Button(context);
@@ -677,6 +709,45 @@ public class EcranLogger {
         if (tvTitluCeas != null) {
             tvTitluCeas.setText(String.format("QSO LOGGER | UTC: %s | LOCAL: %s", utcStr, localStr));
         }
+    }
+
+    private void curataCampuriLoggerSelectiv() {
+        etCall.setText("");
+        etName.setText("");
+        etQth.setText("");
+        etGrid.setText("");
+        etComment.setText("");
+        etFreq.setText("");
+        etBand.setText("");
+        etMode.setText("");
+        etPower.setText("");
+        // NU curatam etMyGrid, etTimeOn, etRstSent, etRstRcvd conform cerintei
+        Toast.makeText(context, "Station data cleared", Toast.LENGTH_SHORT).show();
+    }
+
+    private Drawable createXIcon() {
+        int size = 48; // dimensiune în pixeli
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bitmap);
+
+        // Fundal roșu circular
+        Paint bgPaint = new Paint();
+        bgPaint.setColor(Color.parseColor("#B71C1C"));
+        bgPaint.setAntiAlias(true);
+        canvas.drawCircle(size / 2f, size / 2f, size / 2f, bgPaint);
+
+        // X alb în centru
+        Paint xPaint = new Paint();
+        xPaint.setColor(Color.WHITE);
+        xPaint.setStrokeWidth(4f);
+        xPaint.setAntiAlias(true);
+        xPaint.setStrokeCap(Paint.Cap.ROUND);
+
+        float margin = size * 0.3f;
+        canvas.drawLine(margin, margin, size - margin, size - margin, xPaint);
+        canvas.drawLine(size - margin, margin, margin, size - margin, xPaint);
+
+        return new BitmapDrawable(context.getResources(), bitmap);
     }
 
     public void preiaIndicativDinRtty(String callsign) {

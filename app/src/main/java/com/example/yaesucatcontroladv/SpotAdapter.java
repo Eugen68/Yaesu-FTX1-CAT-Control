@@ -46,12 +46,17 @@ public class SpotAdapter extends RecyclerView.Adapter<SpotAdapter.SpotViewHolder
     public void applyFilter(String search, java.util.Set<String> bands, java.util.Set<String> modes) {
         this.currentFilterSearch = (search != null) ? search.toUpperCase() : "";
 
-        // Copiem seturile de filtre pentru a evita bug-urile de referință (self-clearing)
-        currentFilterBands.clear();
-        if (bands != null) currentFilterBands.addAll(bands);
+        // Copiem seturile de filtre DOAR dacă primim referințe diferite,
+        // pentru a evita bug-ul de self-clearing (dacă bands == currentFilterBands).
+        if (bands != null && bands != currentFilterBands) {
+            currentFilterBands.clear();
+            currentFilterBands.addAll(bands);
+        }
 
-        currentFilterModes.clear();
-        if (modes != null) currentFilterModes.addAll(modes);
+        if (modes != null && modes != currentFilterModes) {
+            currentFilterModes.clear();
+            currentFilterModes.addAll(modes);
+        }
 
         filteredList.clear();
         for (Spot s : fullList) {

@@ -29,7 +29,7 @@ public class Spot {
     public static String deduceBanda(double freqMhz) {
         if (freqMhz >= 1.8 && freqMhz < 2.0) return "160m";
         if (freqMhz >= 3.5 && freqMhz < 4.0) return "80m";
-        if (freqMhz >= 5.3 && freqMhz < 5.4) return "60m";
+        if (freqMhz >= 5.2 && freqMhz < 5.5) return "60m";
         if (freqMhz >= 7.0 && freqMhz < 7.3) return "40m";
         if (freqMhz >= 10.1 && freqMhz < 10.15) return "30m";
         if (freqMhz >= 14.0 && freqMhz < 14.35) return "20m";
@@ -39,35 +39,68 @@ public class Spot {
         if (freqMhz >= 28.0 && freqMhz < 29.7) return "10m";
         if (freqMhz >= 50.0 && freqMhz < 54.0) return "6m";
         if (freqMhz >= 144.0 && freqMhz < 148.0) return "2m";
+        if (freqMhz >= 430.0 && freqMhz < 450.0) return "70cm";
         return "??";
     }
 
     /**
-     * Deduce modul din comentariu sau din frecvență (fallback).
+     * Deduce modul din comentariu sau din frecvență (fallback inteligent).
      */
     public static String deduceMod(String comment, double freqMhz) {
         if (comment == null) comment = "";
         String upper = comment.toUpperCase();
 
-        // Căutăm cuvinte cheie în comentariu
-        if (upper.contains("CW") || upper.contains("MORSE")) return "CW";
-        if (upper.contains("RTTY") || upper.contains("TELETYPE")) return "RTTY";
+        // 1. Prioritate: Detectare explicită din comentariu (cea mai sigură)
         if (upper.contains("FT8")) return "FT8";
         if (upper.contains("FT4")) return "FT4";
+        if (upper.contains("CW") || upper.contains("MORSE") || upper.contains("TEST")) {
+             // TEST poate fi și SSB, dar de obicei pe cluster apare la CW contest.
+             // Dacă e în segment de SSB, ignorăm "TEST".
+             if (!esteInSegmentSSB(freqMhz)) return "CW";
+        }
+        if (upper.contains("RTTY") || upper.contains("TELETYPE")) return "RTTY";
         if (upper.contains("JS8")) return "JS8";
         if (upper.contains("PSK") || upper.contains("PSK31")) return "PSK";
-        if (upper.contains("SSB") || upper.contains("LSB") || upper.contains("USB")) return "SSB";
+        if (upper.contains("SSB") || upper.contains("LSB") || upper.contains("USB") || upper.contains("PHONE")) return "SSB";
         if (upper.contains("AM")) return "AM";
         if (upper.contains("FM")) return "FM";
 
-        // Fallback: deducem din frecvență
-        if (freqMhz < 10.0) {
-            return "CW"; // Benzile joase = CW predominant
-        } else if (freqMhz < 30.0) {
-            return "SSB"; // Benzile înalte = SSB predominant
-        }
+        // 2. Fallback: Deducere din segmentele de bandă (IARU Region 1)
+        int freqKhzInt = (int)((freqMhz * 1000) % 1000);
 
-        return "??";
+        // FT8/FT4 au frecvențe fixe "standard"
+        if (freqKhzInt == 74 || freqKhzInt == 73 || freqKhzInt == 76) return "FT8"; // 14.074, 7.074, 21.074, 28.074...
+        if (freqKhzInt == 80 || freqKhzInt == 91) return "FT4";
+
+        if (esteInSegmentCW(freqMhz)) return "CW";
+        if (esteInSegmentSSB(freqMhz)) return "SSB";
+
+        return "DATA";
+    }
+
+    private static boolean esteInSegmentCW(double f) {
+        if (f >= 1.800 && f < 1.838) return true;
+        if (f >= 3.500 && f < 3.570) return true;
+        if (f >= 7.000 && f < 7.040) return true;
+        if (f >= 10.100 && f < 10.130) return true;
+        if (f >= 14.000 && f < 14.070) return true;
+        if (f >= 18.068 && f < 18.095) return true;
+        if (f >= 21.000 && f < 21.070) return true;
+        if (f >= 24.890 && f < 24.915) return true;
+        if (f >= 28.000 && f < 28.070) return true;
+        return false;
+    }
+
+    private static boolean esteInSegmentSSB(double f) {
+        if (f >= 1.840 && f < 2.000) return true;
+        if (f >= 3.600 && f < 3.800) return true;
+        if (f >= 7.060 && f < 7.200) return true;
+        if (f >= 14.101 && f < 14.350) return true;
+        if (f >= 18.111 && f < 18.168) return true;
+        if (f >= 21.151 && f < 21.450) return true;
+        if (f >= 24.931 && f < 24.990) return true;
+        if (f >= 28.300 && f < 29.700) return true;
+        return false;
     }
 
     /**

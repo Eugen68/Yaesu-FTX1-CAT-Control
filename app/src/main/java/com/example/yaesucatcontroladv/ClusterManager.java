@@ -207,9 +207,56 @@ public class ClusterManager {
             Log.d(TAG, "Socket deschis. Pornire autentificare...");
             notifyStatus(true, "Connected. Authenticating...");
 
-            // Autentificare (dacă e necesară)
-            authenticate();
+            // --- FAZA DE AUTENTIFICARE ROBUSTĂ ---
+            // Citim caracter cu caracter până detectăm "login:" sau "callsign:",
+            // pentru că serverele Telnet nu trimit \n după prompt.
+            socket.setSoTimeout(1000); // Timeout scurt pentru faza de auth
+            StringBuilder sb = new StringBuilder();
+            boolean authenticated = false;
+            long authDeadline = System.currentTimeMillis() + 15000;
 
+            while (isRunning.get() && !authenticated && System.currentTimeMillis() < authDeadline) {
+                try {
+                    int c = reader.read();
+                    if (c == -1) break;
+                    sb.append((char) c);
+                    String current = sb.toString().toLowerCase(Locale.US);
+
+                    if (current.contains("login:") || current.contains("callsign:") || current.contains("input your call")) {
+                        Log.d(TAG, "Detectat prompt login, trimit username: " + username);
+                        writer.print(username + "\r\n");
+                        writer.flush();
+                        sb.setLength(0);
+                        authenticated = true; 
+                    }
+                } catch (java.net.SocketTimeoutException e) {
+                    // Ignorăm, verificăm loop-ul
+                }
+            }
+
+            // Dacă serverul cere și parolă, verificăm scurt dacă apare "password:".
+            if (isRunning.get() && !password.isEmpty()) {
+                long passDeadline = System.currentTimeMillis() + 3000;
+                while (isRunning.get() && System.currentTimeMillis() < passDeadline) {
+                    try {
+                        int c = reader.read();
+                        if (c == -1) break;
+                        sb.append((char) c);
+                        if (sb.toString().toLowerCase(Locale.US).contains("password:")) {
+                            Log.d(TAG, "Detectat prompt password, trimit parola");
+                            writer.print(password + "\r\n");
+                            writer.flush();
+                            break;
+                        }
+                    } catch (java.net.SocketTimeoutException e) {
+                        // Ignorăm
+                    }
+                }
+            }
+
+            socket.setSoTimeout(300000); // Restaurăm timeout-ul lung (5 min)
+
+            loginPhaseDone = true;
             notifyStatus(true, "Connected to " + serverHost + ":" + serverPort);
             Log.d(TAG, "Autentificare finalizată. Încep citirea spoturilor...");
 
@@ -335,28 +382,6 @@ public class ClusterManager {
         }
     }
 
-    /**
-     * Autentificare la server (dacă e necesară).
-     */
-    private void authenticate() throws Exception {
-        // Așteptăm puțin mesajul de welcome ("Login:")
-        Thread.sleep(1500);
-
-        // Trimitem username (obligatoriu pentru majoritatea clusterelor)
-        if (!username.isEmpty()) {
-            Log.d(TAG, "Trimitere username: " + username);
-            writer.print(username + "\r\n"); // Folosim CRLF explicit
-            writer.flush();
-        }
-
-        // Unele servere cer și password
-        if (!password.isEmpty()) {
-            Thread.sleep(1000);
-            Log.d(TAG, "Trimitere password...");
-            writer.print(password + "\r\n");
-            writer.flush();
-        }
-    }
 
     /**
      * Parsează o linie de la cluster ca Spot.
@@ -365,8 +390,10 @@ public class ClusterManager {
     private Spot parseSpotLine(String line) {
         if (line == null || line.isEmpty()) return null;
 
-        // Ignorăm liniile care nu sunt spot-uri
-        if (!line.contains(":") || !line.contains("DX")) return null;
+        // Relaxăm condiția: căutăm structura minimă a unui spot (frecvență numerică la început)
+        // Un spot DXSpider tipic: "DX de YO9VA:  14025.0  W1AW       CQ TEST      1234Z"
+        // Dar poate fi și: "DX de YO9VA-1: 14025.0 ..."
+        if (!line.contains(":")) return null;
 
         try {
             Spot spot = new Spot();
@@ -374,8 +401,14 @@ public class ClusterManager {
             // Extragem spotter-ul (înainte de ":")
             int colonIdx = line.indexOf(":");
             String beforeColon = line.substring(0, colonIdx).trim();
+            
+            // Formatul clasic "DX de ..."
             if (beforeColon.startsWith("DX de ")) {
                 spot.spotter = beforeColon.substring(6).trim();
+            } else {
+                // Dacă nu începe cu "DX de", dar conține ":" și are frecvență după, 
+                // încercăm să-l procesăm oricum (unele servere trimit formate minimaliste)
+                spot.spotter = beforeColon; 
             }
 
             // Extragem restul (după ":")

@@ -56,8 +56,8 @@ public class EcranCluster {
     private final Set<String> selectedModes = new HashSet<>();
     private String filterSearch = "";
 
-    private static final String[] ALL_BANDS = {"160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "2m"};
-    private static final String[] ALL_MODES = {"CW", "SSB", "FT8", "FT4", "RTTY", "PSK"};
+    private static final String[] ALL_BANDS = {"160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "2m", "70cm"};
+    private static final String[] ALL_MODES = {"CW", "SSB", "FT8", "FT4", "RTTY", "PSK", "JS8", "AM", "FM", "DATA"};
 
     public EcranCluster(Context context, RadioManager radioManager) {
         this.context = context;
