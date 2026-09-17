@@ -203,6 +203,13 @@ class MorseAudioProcessor(private val context: Context) {
 
     fun getAvailability(): DecoderAvailability = DecoderAvailability(normalAvailable, pileupAvailable, denoiseAvailable)
 
+    /**
+     * Snapshot al bufferului de audio brut in asteptare (mod NORMAL) - pentru butonul
+     * "Detecteaza tonul" (vezi ToneDetector.kt), care are nevoie de audio ne-decodat, nu de
+     * textul deja transcris. Aceeasi sursa pe care o citeste si streamingLoop la fiecare tur.
+     */
+    fun snapshotPendingAudio(): FloatArray = pendingSamples.snapshot().first
+
     fun getWaterfallMinFreqHz(): Int =
         if (mode == DecoderMode.PILEUP) PILEUP_MIN_FREQ_HZ else Constants.MIN_FREQ_HZ
 

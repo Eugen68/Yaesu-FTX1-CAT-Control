@@ -94,7 +94,7 @@ public class EcranEditorMacro {
 
             // Camp pentru CONTINUT
             editTextsMacros[i] = new EditText(context);
-            editTextsMacros[i].setHint("Macro content...");
+            editTextsMacros[i].setHint("Macro content... use {call} for last tapped callsign");
             editTextsMacros[i].setHintTextColor(Color.GRAY);
             editTextsMacros[i].setTextColor(Color.WHITE);
             editTextsMacros[i].setTextSize(14);

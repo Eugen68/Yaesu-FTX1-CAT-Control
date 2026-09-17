@@ -36,6 +36,20 @@ public class EcranRttyDroid {
     private LinearLayout viewPrincipal;
     public static String callsignBuffer = "";
 
+    /**
+     * Inlocuieste placeholder-ul {call} (orice combinatie de majuscule/minuscule) dintr-un
+     * text de macro cu ultimul indicativ memorat (tap pe indicativ decodat RTTY/CW sau spot
+     * din DX Cluster). Daca nu exista niciun indicativ memorat, placeholder-ul ramane
+     * neschimbat in text, ca sa fie evident ca substitutia nu s-a facut.
+     */
+    public static String inlocuiestePlaceholderIndicativ(String text) {
+        if (text == null || text.isEmpty() || callsignBuffer == null || callsignBuffer.isEmpty()) {
+            return text;
+        }
+        return text.replaceAll("(?i)\\{call\\}",
+                java.util.regex.Matcher.quoteReplacement(callsignBuffer.trim().toUpperCase()));
+    }
+
     // Elemente UI
     private Waterfall waterfall;
     // CIZELARE: constanta unica pentru factorul de subsampling audio -> waterfall
@@ -434,9 +448,12 @@ public class EcranRttyDroid {
                             etRttyInputLive.append(" ");
                         }
 
+                        // {call} -> ultimul indicativ memorat (tap pe indicativ decodat/spot)
+                        String textDeInserat = inlocuiestePlaceholderIndicativ(textFinal);
+
                         // Macrourile se leagă mereu prin spațiu - dacă vrei o linie nouă
                         // explicit, apasă butonul M-CR (inserează \n la poziția cursorului).
-                        etRttyInputLive.append(textFinal + " ");
+                        etRttyInputLive.append(textDeInserat + " ");
                         etRttyInputLive.setSelection(etRttyInputLive.getText().length());
                         // Focus programatic (fără tap) - arată cursorul clipind la final,
                         // dar NU deschide tastatura (asta se întâmplă doar la tap direct

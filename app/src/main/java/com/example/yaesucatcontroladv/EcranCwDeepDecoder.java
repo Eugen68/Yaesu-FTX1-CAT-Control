@@ -24,6 +24,8 @@ import com.example.yaesucatcontroladv.deepcw.audio.MorseAudioProcessor;
 import com.example.yaesucatcontroladv.deepcw.audio.DecoderMode;
 import com.example.yaesucatcontroladv.deepcw.data.PileupTrack;
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants;
+import com.example.yaesucatcontroladv.deepcw.dsp.ToneCandidate;
+import com.example.yaesucatcontroladv.deepcw.dsp.ToneDetector;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -40,7 +42,12 @@ public class EcranCwDeepDecoder {
     private TextView tvStatus, tvFreqInfo, tvLevelVal, tvGainVal;
     private ScrollView svTerminal;
     private LinearLayout llMessagesContainer, llDenoiseControls;
-    private Button btnToggle, btnModeToggle, btnDenoiseToggle;
+    private Button btnToggle, btnModeToggle, btnDetectTone, btnDenoiseToggle;
+
+    // Ultimul Hz pe care "Detecteaza tonul" a retunat - apasat din nou fara alta actiune
+    // intre timp, trece la urmatorul candidat gasit (dupa putere), nu re-gaseste mereu pe
+    // acelasi. -1 = inca nicio detectie in aceasta sesiune. Vezi detecteazaTonul().
+    private int ultimulTonDetectatHz = -1;
     private SeekBar sbLevel, sbGain;
     private CheckBox cbLockDenoiseControls;
     private Spinner spWidth;
@@ -165,7 +172,21 @@ public class EcranCwDeepDecoder {
         btnModeToggle.setTextSize(11);
         btnModeToggle.setLayoutParams(new LinearLayout.LayoutParams(0, 110, 1.2f));
         btnModeToggle.setOnClickListener(v -> toggleMode());
+        // Ascuns deocamdata (nu exista inca un model PILEUP) - toata logica din spate
+        // (toggleMode/sincronizeazaUiMod/PREF_CW_AI_MODE/restaurarea la pornire) ramane
+        // intacta si nefolosita, gata de reactivat cand va exista un model. View.GONE nu
+        // ocupa loc in rControls, deci "Detecteaza tonul" de mai jos ii ia locul vizual.
+        btnModeToggle.setVisibility(View.GONE);
         rControls.addView(btnModeToggle);
+
+        btnDetectTone = new Button(context);
+        btnDetectTone.setText("DETECTEAZĂ TONUL");
+        btnDetectTone.setBackgroundColor(Color.parseColor("#37474F"));
+        btnDetectTone.setTextColor(Color.WHITE);
+        btnDetectTone.setTextSize(11);
+        btnDetectTone.setLayoutParams(new LinearLayout.LayoutParams(0, 110, 1.2f));
+        btnDetectTone.setOnClickListener(v -> detecteazaTonul());
+        rControls.addView(btnDetectTone);
 
         View spacerMode = new View(context);
         spacerMode.setLayoutParams(new LinearLayout.LayoutParams(15, 1));
@@ -304,6 +325,20 @@ public class EcranCwDeepDecoder {
         rButtons.addView(btnClear, new LinearLayout.LayoutParams(0, 120, 0.4f));
         
         viewPrincipal.addView(rButtons);
+
+        // Row 3: CW Messages (M1-M5)
+        LinearLayout rCw = creeazaRandButoane();
+        for (int i = 1; i <= 5; i++) {
+            final int canal = i;
+            Button btnM = new Button(context);
+            btnM.setText("M" + i);
+            btnM.setBackgroundColor(Color.parseColor("#607D8B"));
+            btnM.setTextColor(Color.WHITE);
+            btnM.setLayoutParams(new LinearLayout.LayoutParams(0, 130, 1f));
+            btnM.setOnClickListener(v -> executaMesajPeCanal(canal));
+            rCw.addView(btnM);
+        }
+        viewPrincipal.addView(rCw);
     }
 
     private void configurareObservatori() {
@@ -391,6 +426,52 @@ public class EcranCwDeepDecoder {
 
         processor.setMode(next);
         salveazaSetare(PREF_CW_AI_MODE, next.ordinal());
+    }
+
+    /**
+     * Detecteaza un ton in bufferul curent de audio si retuneaza pe el - inlocuitor rapid
+     * pentru cautarea manuala pe waterfall. Port al DetectToneButton_Click din aplicatia
+     * Windows sora, simplificat: acolo trebuie evitate benzile ALTOR canale active
+     * (multi-banda); aici exista un singur canal tunat, deci nu e nevoie de acea logica de
+     * coliziune. Apasat din nou (fara alta actiune intre timp), trece la urmatorul candidat
+     * gasit dupa putere, revenind la primul cand lista se epuizeaza - vezi ultimulTonDetectatHz.
+     */
+    private void detecteazaTonul() {
+        if (processor.getMode() != DecoderMode.NORMAL) return;
+
+        float[] snapshot = processor.snapshotPendingAudio();
+        List<ToneCandidate> candidati = ToneDetector.detectAllTonesHz(
+                snapshot,
+                (double) Constants.SAMPLE_RATE,
+                (double) Constants.DECODABLE_MIN_FREQ_HZ,
+                (double) Constants.DECODABLE_MAX_FREQ_HZ,
+                Constants.FFT_LENGTH,
+                Constants.HOP_LENGTH);
+
+        if (candidati.isEmpty()) {
+            Toast.makeText(context, "Nu am destul audio inca pentru detectare - mai asteapta putin.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        int indexAnterior = -1;
+        if (ultimulTonDetectatHz >= 0) {
+            for (int i = 0; i < candidati.size(); i++) {
+                if (Math.abs(candidati.get(i).getFreqHz() - ultimulTonDetectatHz) < 1.0) {
+                    indexAnterior = i;
+                    break;
+                }
+            }
+        }
+        ToneCandidate ales = indexAnterior >= 0
+                ? candidati.get((indexAnterior + 1) % candidati.size())
+                : candidati.get(0);
+        int freqHz = Math.round(ales.getFreqHz());
+        ultimulTonDetectatHz = freqHz;
+
+        processor.setFilterFreq(freqHz);
+        tvFreqInfo.setText("Tune: " + freqHz + " Hz");
+        waterfall.setFilterBand(freqHz, processor.getFilterWidthHz());
+        showTemporaryStatus("Ton detectat la " + freqHz + " Hz.");
     }
 
     private void toggleDenoise() {
@@ -631,6 +712,7 @@ public class EcranCwDeepDecoder {
         tvStatus.setText("CW AI DECODER - PAUSED");
         tvStatus.setTextColor(Color.parseColor("#00E5FF"));
         processor.stop();
+        ultimulTonDetectatHz = -1;
     }
 
     public void startDecoderDupaPermisiune() {
@@ -643,5 +725,28 @@ public class EcranCwDeepDecoder {
 
     public void eliberareResurse() {
         stopDecoder();
+    }
+
+    private LinearLayout creeazaRandButoane() {
+        LinearLayout r = new LinearLayout(context);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        p.setMargins(0, 5, 0, 5);
+        r.setLayoutParams(p);
+        return r;
+    }
+
+    private void executaMesajPeCanal(int canal) {
+        android.content.SharedPreferences prefs = context.getSharedPreferences("CW_MACROS", Context.MODE_PRIVATE);
+        String content = prefs.getString("cw_content_" + (canal - 1), "");
+
+        if (!content.isEmpty()) {
+            content = EcranRttyDroid.inlocuiestePlaceholderIndicativ(content);
+            radioManager.trimiteComandaCAT("KY " + content.toUpperCase() + ";");
+        } else {
+            // Dacă e gol, forțăm declanșarea memoriei interne prin KY0
+            radioManager.trimiteComandaCAT("KY0" + canal + ";");
+        }
     }
 }

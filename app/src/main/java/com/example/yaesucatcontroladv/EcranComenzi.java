@@ -1097,6 +1097,7 @@ public class EcranComenzi {
         } else {
             // 2. MOD TELEGRAFIE (CW)
             if (!content.isEmpty()) {
+                content = EcranRttyDroid.inlocuiestePlaceholderIndicativ(content);
                 radioManager.trimiteComandaCAT("KY " + content.toUpperCase() + ";");
             } else {
                 // Dacă e gol, forțăm strict declanșarea memoriei prin KY0, eliminând complet formatul KY1 parazit!
