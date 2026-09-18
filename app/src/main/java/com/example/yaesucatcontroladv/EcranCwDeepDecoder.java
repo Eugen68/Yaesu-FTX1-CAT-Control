@@ -605,7 +605,10 @@ public class EcranCwDeepDecoder {
             confirmedRawBuilder.append(trimmed);
         }
         String confirmedRaw = confirmedRawBuilder.toString();
-        String confirmedFormatted = formatCallGroups(confirmedRaw);
+        // Reparam blocurile lipite (model CTC care "uita" sa prezica spatiul intre cuvinte)
+        // INAINTE de formatCallGroups, ca sa recunoasca si CQ/DE/etc. ascunse in blob-uri.
+        String confirmedRepaired = CallsignDetector.repareazaCuvinteLipite(confirmedRaw);
+        String confirmedFormatted = formatCallGroups(confirmedRepaired);
 
         android.text.SpannableStringBuilder builder = new android.text.SpannableStringBuilder();
         builder.append(callsignDetector.proceseazaTextComplet(confirmedFormatted));
@@ -617,7 +620,8 @@ public class EcranCwDeepDecoder {
             // Formatam pending impreuna cu coada textului confirmat, ca sa stim daca
             // primul cuvant din pending incepe o serie noua de CQ (deci merita linie noua).
             String fullRaw = confirmedRaw.isEmpty() ? pending.trim() : confirmedRaw + " " + pending.trim();
-            String fullFormatted = formatCallGroups(fullRaw);
+            String fullRepaired = CallsignDetector.repareazaCuvinteLipite(fullRaw);
+            String fullFormatted = formatCallGroups(fullRepaired);
             String pendingFormatted = fullFormatted.length() >= confirmedFormatted.length()
                     ? fullFormatted.substring(confirmedFormatted.length())
                     : " " + pending;
@@ -644,7 +648,8 @@ public class EcranCwDeepDecoder {
 
             android.text.SpannableStringBuilder linie = new android.text.SpannableStringBuilder();
             linie.append(String.format(Locale.US, "[%d Hz]: ", entry.getKey()));
-            linie.append(callsignDetector.proceseazaTextComplet(entry.getValue()));
+            linie.append(callsignDetector.proceseazaTextComplet(
+                    CallsignDetector.repareazaCuvinteLipite(entry.getValue())));
             tv.setText(linie);
 
             llMessagesContainer.addView(tv);

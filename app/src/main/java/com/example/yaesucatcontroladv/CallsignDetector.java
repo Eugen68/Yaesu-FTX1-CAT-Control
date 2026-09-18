@@ -15,6 +15,9 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.LinkedList;
+import java.util.List;
+
 /**
  * REFACTORIZARE: extras din EcranRttyDroid.java - detectarea indicativelor in fluxul de
  * caractere decodate, afisarea lor colorata/clicabila in terminal, si actiunea la tap
@@ -88,11 +91,116 @@ public class CallsignDetector {
         bufferCuvantCurent.setLength(0);
     }
 
-    private boolean esteIndicativValid(String text) {
+    private static boolean esteIndicativValid(String text) {
         if (text == null) return false;
         text = text.trim().toUpperCase();
         if (text.length() < 3 || text.length() > 10) return false;
-        return text.matches("^(?:[A-Z]{1,2}|[0-9][A-Z]|[A-Z][0-9])[0-9][A-Z]{1,4}$");
+        // Fara alternativa "litera+cifra" ca prefix - combinata cu cifra obligatorie de mai
+        // jos, ar cere 2 cifre lipite (ex. "I00P"), ceea ce nu corespunde niciunui format
+        // real de indicativ (fie prefixul e din litere, fie incepe cu cifra fixa de tara).
+        return text.matches("^(?:[A-Z]{1,2}|[0-9][A-Z])[0-9][A-Z]{1,4}$");
+    }
+
+    // ============================================================
+    // REPARARE CUVINTE LIPITE (decodorul CW e un model CTC care prezice el insusi
+    // caracterul "spatiu" - la transmisii rapide/zgomotoase, "uita" sa prezica spatiul intre
+    // doua cuvinte, rezultand blocuri lipite gen "CQCQDETM4GGRTM4GGR". Nu putem regla un prag
+    // de timp (nu exista, modelul nu lucreaza cu durate), asa ca reparam la nivel de text:
+    // recunoastem un set mic de prosemne/abrevieri CW fixe si folosim faptul ca dupa "DE"
+    // urmeaza sigur un indicativ, plus conventia de a trimite indicativul de doua ori.
+    // ============================================================
+
+    // Prosemne/abrevieri CW fixe, cunoscute dinainte - baza vocabularului de segmentare.
+    private static final java.util.Set<String> ANCORE_CUNOSCUTE = new java.util.HashSet<>(java.util.Arrays.asList(
+            "CQ", "DE", "BK", "AR", "KN", "K", "QTH", "QRZ", "POTA", "QRT", "QRX", "CUAGN", "CALL", "DX", "73", "88"));
+
+    // Scoruri PE CARACTER (nu fixe pe token!) - un token e in cele din urma o SUMA peste
+    // caractere, deci daca am pune scoruri fixe, o ancora scurta (ex. "DX", 2 caractere) ar
+    // avea o "densitate" de scor pe caracter mult mai mare decat un indicativ valid de 6
+    // caractere - asta a produs exact bug-ul raportat: DP taia "OV1CDXOV1CDX" (doua copii ale
+    // indicativului OV1CDX, lipite) in "OV1C | DX | OV1CDX", pentru ca scotea bonus-ul fix de
+    // ancora din interiorul indicativului real. Cu scor proportional cu lungimea, a pastra
+    // indicativul intreg (sau dublat) aduna mereu mai mult decat a rupe artificial o bucata
+    // doar ca sa incasezi separat bonusul de ancora.
+    // Ordinea ramane relevanta doar relativ: confirmat in MASTER.SCP > forma valida > ancora.
+    private static final int SCOR_PE_CARACTER_ANCORA = 10;
+    private static final int SCOR_PE_CARACTER_INDICATIV_CONFIRMAT = 15;
+    private static final int SCOR_PE_CARACTER_INDICATIV_FORMAT = 12;
+    // Penalizare FIXA pe bloc (nu proportionala cu lungimea) - astfel incat, daca nimic nu se
+    // recunoaste, DP prefera UN singur bloc "necunoscut" mare in loc sa il taie in bucati mici
+    // (fiecare bucata ar aduna din nou aceeasi penalizare, deci mai multe bucati = scor mai rau).
+    private static final int PENALIZARE_NECUNOSCUT = -1000;
+
+    private static int scorFragment(String fragment) {
+        if (ANCORE_CUNOSCUTE.contains(fragment)) return fragment.length() * SCOR_PE_CARACTER_ANCORA;
+        if (esteIndicativValid(fragment)) {
+            int rataPeCaracter = CallsignDatabase.getInstance().isKnown(fragment)
+                    ? SCOR_PE_CARACTER_INDICATIV_CONFIRMAT : SCOR_PE_CARACTER_INDICATIV_FORMAT;
+            return fragment.length() * rataPeCaracter;
+        }
+        return PENALIZARE_NECUNOSCUT;
+    }
+
+    /**
+     * Repara un text complet (cuvinte deja despartite prin spatii de model) cautand, in
+     * cuvintele care nu sunt deja un indicativ valid de sine statator, prosemne/abrevieri CW
+     * lipite de restul textului - si reintroduce spatiul care ar fi trebuit sa fie acolo.
+     * Cuvintele care nu contin nimic recognoscibil raman neschimbate (fallback sigur).
+     */
+    public static String repareazaCuvinteLipite(String text) {
+        if (text == null || text.isEmpty()) return text;
+        String[] cuvinte = text.split(" ", -1);
+        StringBuilder rezultat = new StringBuilder(text.length() + 16);
+        for (int i = 0; i < cuvinte.length; i++) {
+            if (i > 0) rezultat.append(' ');
+            String cuv = cuvinte[i];
+            if (cuv.isEmpty()) continue;
+            if (cuv.length() <= 2 || esteIndicativValid(cuv)) {
+                rezultat.append(cuv);
+            } else {
+                List<String> descompus = descompuneBlobLipit(cuv.toUpperCase());
+                for (int j = 0; j < descompus.size(); j++) {
+                    if (j > 0) rezultat.append(' ');
+                    rezultat.append(descompus.get(j));
+                }
+            }
+        }
+        return rezultat.toString();
+    }
+
+    /**
+     * Segmentare Viterbi (programare dinamica): alege taietura cu scorul total maxim, in loc
+     * sa aplice reguli separate pentru inceput/mijloc/sfarsit de bloc. Un indicativ valid nu
+     * se rupe in bucati decat daca bucatile rezultate scoreaza, la randul lor, la fel de bine
+     * - ceea ce practic nu se intampla din intamplare, deci nu mai e nevoie sa restrictionam
+     * manual pozitia ancorelor riscante (K/AR/KN).
+     */
+    private static List<String> descompuneBlobLipit(String blob) {
+        int n = blob.length();
+        int[] dp = new int[n + 1];
+        int[] taiere = new int[n + 1];
+        java.util.Arrays.fill(dp, Integer.MIN_VALUE);
+        dp[0] = 0;
+
+        for (int i = 1; i <= n; i++) {
+            for (int start = 0; start < i; start++) {
+                if (dp[start] == Integer.MIN_VALUE) continue;
+                int scor = dp[start] + scorFragment(blob.substring(start, i));
+                if (scor > dp[i]) {
+                    dp[i] = scor;
+                    taiere[i] = start;
+                }
+            }
+        }
+
+        LinkedList<String> rezultat = new LinkedList<>();
+        int pos = n;
+        while (pos > 0) {
+            int start = taiere[pos];
+            rezultat.addFirst(blob.substring(start, pos));
+            pos = start;
+        }
+        return rezultat;
     }
 
     // ============================================================

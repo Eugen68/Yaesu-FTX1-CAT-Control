@@ -16,8 +16,10 @@ import java.net.URLEncoder;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import fi.iki.elonen.NanoHTTPD;
 
@@ -125,6 +127,8 @@ class LocalFileHttpServer extends NanoHTTPD {
             return serveIndex();
         } else if (uri.equals("/download")) {
             return serveDownload(session.getParms().get("name"));
+        } else if (uri.equals("/delete")) {
+            return serveDelete(session);
         }
         return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not found");
     }
@@ -162,30 +166,110 @@ class LocalFileHttpServer extends NanoHTTPD {
     private Response serveIndex() {
         List<ExportedFile> files = listExportedFiles();
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US);
+        String tokenSafe = accessToken == null ? "" : accessToken;
         StringBuilder html = new StringBuilder();
         html.append("<html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
                 .append("<title>YaesuCatControlADV - Files</title>")
                 .append("<style>body{font-family:sans-serif;background:#112855;color:#eee;padding:16px;padding-top:104px;text-align:left}")
                 .append("img.logo{position:absolute;top:16px;left:16px;width:225px;height:auto}")
-                .append("a{color:#4FC3F7;text-decoration:none} li{margin:12px 0} .meta{color:#A9B8DC;font-size:12px}</style>")
-                .append("</head><body><img class=\"logo\" src=\"/logo.png\" alt=\"logo\"><h2>Backup &amp; Log Files</h2>");
+                .append("a{color:#4FC3F7;text-decoration:none} li{margin:12px 0} .meta{color:#A9B8DC;font-size:12px}")
+                .append(".rand-titlu{display:flex;align-items:center;flex-wrap:wrap}")
+                .append(".rand-titlu h2{margin:0}")
+                .append(".buton-actiune{margin-left:2cm;font-size:14px;padding:8px 18px;border:none;border-radius:4px;color:#fff;cursor:pointer}")
+                .append("#btnDelete{background:#546E7A}")
+                .append("#btnDelete.activ{background:#B71C1C}")
+                .append("#btnCancel{margin-left:10px;background:#546E7A;display:none}")
+                .append(".bifa-stergere{display:none;margin-right:10px;transform:scale(1.3);vertical-align:middle}")
+                .append("</style>")
+                .append("</head><body><img class=\"logo\" src=\"/logo.png\" alt=\"logo\">")
+                .append("<div class=\"rand-titlu\"><h2>Backup &amp; Log Files</h2>")
+                .append("<button type=\"button\" id=\"btnDelete\" class=\"buton-actiune\" onclick=\"onDeleteClick()\">DELETE</button>")
+                .append("<button type=\"button\" id=\"btnCancel\" class=\"buton-actiune\" onclick=\"onCancelClick()\">CANCEL</button>")
+                .append("</div>");
         if (files.isEmpty()) {
             html.append("<p>No exported files found. Use EXPORT BACKUP / EXPORT ADIF LOG in the app first.</p>");
         } else {
+            html.append("<form id=\"formStergere\" method=\"POST\" action=\"/delete?token=")
+                    .append(urlEncode(tokenSafe)).append("\">");
             html.append("<ul>");
             for (ExportedFile ef : files) {
                 String link = "/download?name=" + urlEncode(ef.displayName)
-                        + "&token=" + urlEncode(accessToken == null ? "" : accessToken);
-                html.append("<li><a href=\"").append(link).append("\">")
+                        + "&token=" + urlEncode(tokenSafe);
+                html.append("<li><input type=\"checkbox\" class=\"bifa-stergere\" name=\"name\" value=\"")
+                        .append(escapeHtml(ef.displayName)).append("\">")
+                        .append("<a href=\"").append(link).append("\">")
                         .append(escapeHtml(ef.displayName)).append("</a>")
                         .append("<div class=\"meta\">").append(formatSize(ef.size))
                         .append(" &middot; ").append(sdf.format(new Date(ef.lastModified)))
                         .append("</div></li>");
             }
             html.append("</ul>");
+            html.append("</form>");
         }
+        html.append("<script>")
+                .append("var modSelectie=false;")
+                .append("function onDeleteClick(){")
+                .append("if(!modSelectie){")
+                .append("modSelectie=true;")
+                .append("document.querySelectorAll('.bifa-stergere').forEach(function(c){c.style.display='inline-block';});")
+                .append("document.getElementById('btnCancel').style.display='inline-block';")
+                .append("document.getElementById('btnDelete').classList.add('activ');")
+                .append("return;}")
+                .append("var bifate=Array.prototype.filter.call(document.querySelectorAll('.bifa-stergere'),function(c){return c.checked;});")
+                .append("if(bifate.length===0){alert('Selecteaza cel putin un fisier.');return;}")
+                .append("if(confirm('Chiar vrei sa le stergi?')){document.getElementById('formStergere').submit();}")
+                .append("}")
+                .append("function onCancelClick(){")
+                .append("modSelectie=false;")
+                .append("document.querySelectorAll('.bifa-stergere').forEach(function(c){c.style.display='none';c.checked=false;});")
+                .append("document.getElementById('btnCancel').style.display='none';")
+                .append("document.getElementById('btnDelete').classList.remove('activ');")
+                .append("}")
+                .append("</script>");
         html.append("</body></html>");
         return newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html.toString());
+    }
+
+    private Response serveDelete(IHTTPSession session) {
+        if (!Method.POST.equals(session.getMethod())) {
+            return newFixedLengthResponse(Response.Status.METHOD_NOT_ALLOWED, "text/plain", "POST required");
+        }
+        try {
+            Map<String, String> corpIgnorat = new HashMap<>();
+            session.parseBody(corpIgnorat);
+        } catch (Exception e) {
+            return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Bad request");
+        }
+        List<String> numeDeSters = session.getParameters().get("name");
+        if (numeDeSters != null && !numeDeSters.isEmpty()) {
+            // Comparam cu numele gasite in listarea proaspata - la fel ca la /download,
+            // nu construim niciodata o cale de fisier direct dintr-un parametru primit.
+            List<ExportedFile> curente = listExportedFiles();
+            for (String nume : numeDeSters) {
+                for (ExportedFile ef : curente) {
+                    if (ef.displayName.equals(nume)) {
+                        stergeFisierExportat(ef);
+                        break;
+                    }
+                }
+            }
+        }
+        Response resp = newFixedLengthResponse(Response.Status.REDIRECT_SEE_OTHER, "text/plain", "");
+        resp.addHeader("Location", "/?token=" + urlEncode(accessToken == null ? "" : accessToken));
+        return resp;
+    }
+
+    private void stergeFisierExportat(ExportedFile ef) {
+        try {
+            if (ef.legacyFile != null) {
+                ef.legacyFile.delete();
+            } else if (ef.mediaStoreId >= 0) {
+                Uri contentUri = ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, ef.mediaStoreId);
+                context.getContentResolver().delete(contentUri, null, null);
+            }
+        } catch (Exception ignored) {
+            // Best-effort - daca stergerea unui fisier esueaza (permisiuni etc.), continuam cu restul.
+        }
     }
 
     private Response serveDownload(String name) {
