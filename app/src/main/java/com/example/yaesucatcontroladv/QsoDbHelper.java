@@ -144,6 +144,22 @@ public class QsoDbHelper extends SQLiteOpenHelper {
         db.delete(TABLE_QSO, COL_ID + "=?", new String[]{String.valueOf(id)});
     }
 
+    /** Completează grid-ul unui QSO, doar dacă e încă gol (nu suprascrie ce a pus utilizatorul). */
+    public boolean completeazaGridDacaLipseste(long id, String grid) {
+        SQLiteDatabase db = getWritableDatabase();
+        ContentValues cv = new ContentValues();
+        cv.put(COL_GRIDSQUARE, grid);
+        return db.update(TABLE_QSO, cv,
+                COL_ID + "=? AND (" + COL_GRIDSQUARE + " IS NULL OR TRIM(" + COL_GRIDSQUARE + ")='')",
+                new String[]{String.valueOf(id)}) > 0;
+    }
+
+    /** Șterge toate QSO-urile din log. Returnează numărul de rânduri șterse. */
+    public int stergeTotLogul() {
+        SQLiteDatabase db = getWritableDatabase();
+        return db.delete(TABLE_QSO, "1", null);
+    }
+
     /** Returneaza toate QSO-urile, cele mai recente primele (dupa id descrescator). */
     public List<Qso> getToateQsourile() {
         List<Qso> lista = new ArrayList<>();

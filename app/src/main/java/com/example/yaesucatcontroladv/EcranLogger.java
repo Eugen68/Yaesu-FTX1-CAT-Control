@@ -20,6 +20,11 @@ import android.os.Handler;
 import android.os.Looper;
 import android.text.Editable;
 import android.text.InputType;
+import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.RelativeSizeSpan;
+import android.text.style.StyleSpan;
 import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -27,6 +32,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
@@ -61,6 +67,19 @@ public class EcranLogger {
     private Long idQsoInEditare = null;
     private String qsoDateInEditare = null;
 
+    // Frecvența și modul "de sesiune": ultimele valori introduse (manual sau din radio)
+    // pe un QSO nou. Rămân în formular de la un QSO la altul până la EXIT (instanța
+    // EcranLogger trăiește cât aplicația); editarea unui QSO vechi nu le modifică.
+    private String sesiuneFreq = "";
+    private String sesiuneMod = "";
+
+    // Ora QSO-ului = momentul în care se introduce indicativul (câmpul trece din gol în
+    // ne-gol). Dacă utilizatorul scrie ora de mână (ex. logare întârziată), o respectăm
+    // și nu o mai suprascriem automat până la salvarea / anularea acelui QSO.
+    private boolean oraSetataManual = false;
+    private boolean setamOraProgramatic = false;
+    private boolean callEraGol = true;
+
     private long lastQrzClickTime = 0;
     private static final long DOUBLE_CLICK_TIME_DELTA = 500; // milisecunde
 
@@ -90,21 +109,21 @@ public class EcranLogger {
 
             etCall.setText(call.toUpperCase());
             etCall.setSelection(etCall.getText().length());
+            // Indicativ nou (poate înlocui unul existent) -> ora de acum
+            if (!oraSetataManual) puneOraUtcAcum();
 
-            SimpleDateFormat sdfOraAcum = new SimpleDateFormat("HH:mm", Locale.US);
-            sdfOraAcum.setTimeZone(TimeZone.getTimeZone("UTC"));
-            etTimeOn.setText(sdfOraAcum.format(Calendar.getInstance(TimeZone.getTimeZone("UTC")).getTime()));
-
-            solicitaFrecventaSiModDinRadio();
+            solicitaFrecventaSiModDinRadio(true);
             executaCautareQrz(call);
         } else {
-            // Comportamentul normal cand nu avem nimic in buffer
+            // Comportamentul normal cand nu avem nimic in buffer. Radioul completeaza
+            // doar campurile goale - nu suprascrie frecventa/modul de sesiune.
             refreshListaQso();
-            solicitaFrecventaSiModDinRadio();
-            if (idQsoInEditare == null) {
-                SimpleDateFormat sdfOraAcum = new SimpleDateFormat("HH:mm", Locale.US);
-                sdfOraAcum.setTimeZone(TimeZone.getTimeZone("UTC"));
-                etTimeOn.setText(sdfOraAcum.format(Calendar.getInstance(TimeZone.getTimeZone("UTC")).getTime()));
+            solicitaFrecventaSiModDinRadio(false);
+            // Doar ca valoare afișată pentru formularul gol; ora reală a QSO-ului se pune
+            // când se introduce indicativul. Nu atingem un QSO început deja (indicativ scris).
+            if (idQsoInEditare == null && !oraSetataManual
+                    && etCall.getText().toString().trim().isEmpty()) {
+                puneOraUtcAcum();
             }
             if (etMyGrid.getText().toString().trim().isEmpty()) {
                 String gridDeBaza = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE)
@@ -128,9 +147,7 @@ public class EcranLogger {
         tvTitluCeas.setPadding(0, 0, 0, 20);
         tvTitluCeas.setClickable(true);
         tvTitluCeas.setOnClickListener(v -> {
-            SimpleDateFormat sdf = new SimpleDateFormat("HH:mm", Locale.US);
-            sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
-            etTimeOn.setText(sdf.format(Calendar.getInstance(TimeZone.getTimeZone("UTC")).getTime()));
+            puneOraUtcAcum();
             Toast.makeText(context, "UTC Time Updated", Toast.LENGTH_SHORT).show();
         });
         viewPrincipal.addView(tvTitluCeas);
@@ -151,9 +168,16 @@ public class EcranLogger {
         etCall.setLayoutParams(pEtCall);
 
         etCall.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+                callEraGol = s.toString().trim().isEmpty();
+            }
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
             @Override public void afterTextChanged(Editable s) {
+                // Prima literă a unui indicativ nou = începutul QSO-ului -> ora UTC de acum
+                if (callEraGol && s.toString().trim().length() > 0
+                        && idQsoInEditare == null && !oraSetataManual) {
+                    puneOraUtcAcum();
+                }
                 if (s.length() > 0) {
                     etCall.setCompoundDrawablesWithIntrinsicBounds(null, null, createXIcon(), null);
                 } else {
@@ -216,6 +240,14 @@ public class EcranLogger {
         etTimeOn.setFocusable(true);
         etTimeOn.setClickable(true);
         etTimeOn.setCursorVisible(true);
+        etTimeOn.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable s) {
+                // Modificare făcută de utilizator (nu de cod) pe un QSO nou -> oră manuală
+                if (!setamOraProgramatic && idQsoInEditare == null) oraSetataManual = true;
+            }
+        });
         
         rAndRst.addView(etRstSent);
         rAndRst.addView(spatiuOrizontal());
@@ -230,12 +262,21 @@ public class EcranLogger {
         etBand = creeazaEditTextPondere("Band", InputType.TYPE_CLASS_TEXT);
         etMode = creeazaEditTextPondere("Mode", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
         etMode.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.AllCaps()});
+        etMode.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable s) {
+                if (idQsoInEditare == null) sesiuneMod = s.toString().trim();
+            }
+        });
 
         // AUTO-BAND logic
         etFreq.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
             @Override public void afterTextChanged(Editable s) {
+                // Pe un QSO nou, orice frecvență (tastată sau din radio) devine frecvența de sesiune
+                if (idQsoInEditare == null) sesiuneFreq = s.toString().trim();
                 try {
                     String val = s.toString();
                     if (!val.isEmpty()) {
@@ -268,7 +309,7 @@ public class EcranLogger {
         btnPreiaDinRadio.setBackgroundColor(Color.parseColor("#007ACC"));
         btnPreiaDinRadio.setTextColor(Color.WHITE);
         btnPreiaDinRadio.setLayoutParams(pBtnHalf);
-        btnPreiaDinRadio.setOnClickListener(v -> solicitaFrecventaSiModDinRadio());
+        btnPreiaDinRadio.setOnClickListener(v -> solicitaFrecventaSiModDinRadio(true));
         rAndActionButtons.addView(btnPreiaDinRadio);
 
         btnAnuleazaEditare = new Button(context);
@@ -383,31 +424,55 @@ public class EcranLogger {
         return v;
     }
 
-    private void solicitaFrecventaSiModDinRadio() {
+    /**
+     * Cere frecvența și modul de la radio și le pune în formular.
+     * fortat=true (butonul "Preia din radio", indicativ importat din RTTY/Cluster):
+     * suprascrie ambele câmpuri. fortat=false (simpla intrare în Logger): completează
+     * doar câmpurile goale, ca să nu se piardă frecvența/modul de sesiune introduse manual.
+     */
+    private void solicitaFrecventaSiModDinRadio(boolean fortat) {
         if (radioManager == null) return;
         try {
             radioManager.trimiteComandaCAT("FA;");
             radioManager.trimiteComandaCAT("MD0;");
         } catch (Exception e) { return; }
         handler.postDelayed(() -> {
+            // În editarea unui QSO vechi nu atingem câmpurile lui
+            if (idQsoInEditare != null) return;
             long hz = StareRadio.getFrecventaHz();
-            if (hz > 0) {
+            if (hz > 0 && (fortat || etFreq.getText().toString().trim().isEmpty())) {
                 double mhz = hz / 1_000_000.0;
                 etFreq.setText(String.format(Locale.US, "%.6f", mhz));
                 String banda = StareRadio.deriveazaBanda(hz);
                 if (!banda.isEmpty()) etBand.setText(banda);
             }
             String modText = StareRadio.getModText();
-            if (modText != null && !modText.isEmpty()) etMode.setText(traduModCatInText(modText));
+            if (modText != null && !modText.isEmpty()
+                    && (fortat || etMode.getText().toString().trim().isEmpty())) {
+                etMode.setText(traduModCatInText(modText));
+            }
         }, 400);
     }
 
+    /**
+     * Răspunsul CAT "MD0x" -> denumirea modului pentru log. Codurile x (FTX-1):
+     * 1 LSB, 2 USB, 3 CW-U, 4 FM, 5 AM, 6 RTTY-L, 7 CW-L, 8 DATA-L, 9 RTTY-U,
+     * A DATA-FM, B FM-N, C DATA-U, D AM-N, E PSK, F DATA-FM-N.
+     */
     private String traduModCatInText(String codMod) {
-        if (codMod.startsWith("01")) return "LSB";
-        if (codMod.startsWith("02")) return "USB";
-        if (codMod.startsWith("03") || codMod.startsWith("07")) return "CW";
-        if (codMod.startsWith("06") || codMod.startsWith("09")) return "RTTY";
-        return codMod;
+        String c = codMod.replace(";", "").trim().toUpperCase(Locale.US);
+        if (c.length() < 2) return c;
+        switch (c.charAt(1)) {
+            case '1': return "LSB";
+            case '2': return "USB";
+            case '3': case '7': return "CW";
+            case '4': case 'B': return "FM";
+            case '5': case 'D': return "AM";
+            case '6': case '9': return "RTTY";
+            case '8': case 'A': case 'C': case 'F': return "DATA";
+            case 'E': return "PSK";
+            default: return c;
+        }
     }
 
     private void salveazaQso() {
@@ -446,8 +511,16 @@ public class EcranLogger {
             dbHelper.actualizeazaQso(qso);
             Toast.makeText(context, "QSO updated: " + call, Toast.LENGTH_SHORT).show();
         } else {
-            dbHelper.insereazaQso(qso);
+            long idNou = dbHelper.insereazaQso(qso);
             Toast.makeText(context, "QSO saved: " + call, Toast.LENGTH_SHORT).show();
+            // Fără grid -> îl căutăm în fundal (QRZ, apoi HamQTH) și completăm QSO-ul salvat
+            if (idNou > 0 && qso.gridsquare.isEmpty() && GridLookup.areCont(context)) {
+                GridLookup.cauta(context, call, grid -> {
+                    if (grid != null && dbHelper.completeazaGridDacaLipseste(idNou, grid)) {
+                        refreshListaQso();
+                    }
+                });
+            }
         }
         iesiDinModEditare();
         refreshListaQso();
@@ -481,9 +554,30 @@ public class EcranLogger {
         tvStareEditare.setVisibility(View.VISIBLE);
     }
 
+    /** Pune ora UTC curentă în câmpul de oră, fără să o marcheze ca introdusă manual. */
+    private void puneOraUtcAcum() {
+        SimpleDateFormat sdf = new SimpleDateFormat("HH:mm", Locale.US);
+        sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
+        setamOraProgramatic = true;
+        try {
+            etTimeOn.setText(sdf.format(Calendar.getInstance(TimeZone.getTimeZone("UTC")).getTime()));
+        } finally {
+            setamOraProgramatic = false;
+        }
+    }
+
     private void iesiDinModEditare() {
+        boolean eraInEditare = idQsoInEditare != null;
         idQsoInEditare = null;
         qsoDateInEditare = null;
+        if (eraInEditare) {
+            // Revenim la frecvența/modul de sesiune (formularul arăta valorile QSO-ului editat)
+            etFreq.setText(sesiuneFreq);
+            etMode.setText(sesiuneMod);
+        }
+        // QSO încheiat (salvat / anulat) -> următorul pornește cu ora automată
+        oraSetataManual = false;
+        puneOraUtcAcum();
         etCall.setText("");
         etName.setText("");
         etQth.setText("");
@@ -635,6 +729,7 @@ public class EcranLogger {
     private void refreshListaQso() {
         List<QsoDbHelper.Qso> qsouri = dbHelper.getToateQsourile();
         List<String> linii = new ArrayList<>();
+        List<CharSequence> liniiStilizate = new ArrayList<>();
         final List<Long> idUri = new ArrayList<>();
         for (QsoDbHelper.Qso q : qsouri) {
             idUri.add(q.id);
@@ -651,12 +746,24 @@ public class EcranLogger {
             String oraFormatata = timeOn.length() == 4
                     ? timeOn.substring(0, 2) + ":" + timeOn.substring(2, 4)
                     : timeOn;
-            String linie = String.format(Locale.US, "%s %sZ  |  %-10s  |  %6s %-5s  |  RST %s/%s",
-                    dataFormatata, oraFormatata, callStr, freqStr, modeStr, rstSentStr, rstRcvdStr);
+            String inainteDeCall = dataFormatata + " " + oraFormatata + "Z  |  ";
+            String linie = String.format(Locale.US, "%s%-10s  |  %6s %-5s  |  RST %s/%s",
+                    inainteDeCall, callStr, freqStr, modeStr, rstSentStr, rstRcvdStr);
             linii.add(linie);
+
+            // Indicativul evidentiat: bold, galben-verzui, putin mai mare. Span-ul acopera
+            // tot campul de 10 caractere (cu spatiile de padding), ca latimea coloanei sa fie
+            // aceeasi pe toate randurile si restul sa ramana aliniat.
+            SpannableString linieStilizata = new SpannableString(linie);
+            int start = inainteDeCall.length();
+            int end = start + Math.max(10, callStr.length());
+            linieStilizata.setSpan(new ForegroundColorSpan(Color.parseColor("#C6FF00")), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            linieStilizata.setSpan(new StyleSpan(Typeface.BOLD), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            linieStilizata.setSpan(new RelativeSizeSpan(1.2f), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            liniiStilizate.add(linieStilizata);
         }
 
-        ArrayAdapter<String> adapter = new ArrayAdapter<String>(context, android.R.layout.simple_list_item_1, linii) {
+        ArrayAdapter<CharSequence> adapter = new ArrayAdapter<CharSequence>(context, android.R.layout.simple_list_item_1, liniiStilizate) {
             @Override
             public View getView(int position, View convertView, ViewGroup parent) {
                 View view = super.getView(position, convertView, parent);
@@ -691,10 +798,76 @@ public class EcranLogger {
                         if (idQsoInEditare != null && idQsoInEditare == idQsoDeSters) iesiDinModEditare();
                         refreshListaQso();
                     })
+                    .setNeutralButton("Delete ALL", (dialog, which) -> confirmaStergereTotLogul(qsouri.size()))
                     .setNegativeButton("Cancel", null)
                     .show();
             return true;
         });
+    }
+
+    /**
+     * A doua confirmare pentru ștergerea întregului log: butonul Delete rămâne
+     * dezactivat până când utilizatorul bifează explicit căsuța de confirmare.
+     * Opțional (bifat implicit) se face întâi un backup ADIF - același export ca
+     * "EXPORT ADIF LOG" din My Settings; dacă backup-ul eșuează, NU se șterge nimic.
+     */
+    private void confirmaStergereTotLogul(int numarQso) {
+        CheckBox cbConfirm = new CheckBox(context);
+        cbConfirm.setText("Yes, delete all " + numarQso + " QSOs");
+        CheckBox cbBackup = new CheckBox(context);
+        cbBackup.setText("Make ADIF backup first (Downloads)");
+        cbBackup.setChecked(true);
+        LinearLayout container = new LinearLayout(context);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setPadding(50, 20, 50, 0);
+        container.addView(cbBackup);
+        container.addView(cbConfirm);
+
+        AlertDialog dialog = new AlertDialog.Builder(context)
+                .setTitle("Delete entire log")
+                .setMessage("Do you really want to delete ALL QSOs from the log?\n\nThis cannot be undone.")
+                .setView(container)
+                .setPositiveButton("Delete", (d, which) -> {
+                    if (cbBackup.isChecked()) {
+                        backupApoiStergeTotLogul();
+                    } else {
+                        stergeTotLogulSiActualizeaza(null);
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .create();
+        dialog.setOnShowListener(d -> {
+            Button btnDelete = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            btnDelete.setEnabled(false);
+            btnDelete.setTextColor(Color.GRAY);
+            cbConfirm.setOnCheckedChangeListener((cb, bifat) -> {
+                btnDelete.setEnabled(bifat);
+                btnDelete.setTextColor(bifat ? Color.parseColor("#D32F2F") : Color.GRAY);
+            });
+        });
+        dialog.show();
+    }
+
+    private void backupApoiStergeTotLogul() {
+        Toast.makeText(context, "Creating ADIF backup...", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                String numeBackup = AdifExporter.exportaAdif(context, dbHelper);
+                handler.post(() -> stergeTotLogulSiActualizeaza(numeBackup));
+            } catch (Exception e) {
+                handler.post(() -> Toast.makeText(context,
+                        "Backup FAILED - log was NOT deleted.\n" + e.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        }, "LogBackupDelete").start();
+    }
+
+    private void stergeTotLogulSiActualizeaza(String numeBackup) {
+        int sterse = dbHelper.stergeTotLogul();
+        if (idQsoInEditare != null) iesiDinModEditare();
+        refreshListaQso();
+        String mesaj = sterse + " QSOs deleted.";
+        if (numeBackup != null) mesaj = "Backup saved:\n" + numeBackup + "\n\n" + mesaj;
+        Toast.makeText(context, mesaj, Toast.LENGTH_LONG).show();
     }
 
     private void actualizeazaCeasHeader() {
@@ -717,11 +890,9 @@ public class EcranLogger {
         etQth.setText("");
         etGrid.setText("");
         etComment.setText("");
-        etFreq.setText("");
-        etBand.setText("");
-        etMode.setText("");
         etPower.setText("");
-        // NU curatam etMyGrid, etTimeOn, etRstSent, etRstRcvd conform cerintei
+        // NU curatam etMyGrid, etTimeOn, etRstSent, etRstRcvd conform cerintei.
+        // Nici etFreq/etBand/etMode - sunt frecventa/modul de sesiune (pana la EXIT).
         Toast.makeText(context, "Station data cleared", Toast.LENGTH_SHORT).show();
     }
 
@@ -754,12 +925,9 @@ public class EcranLogger {
         if (callsign == null || callsign.isEmpty()) return;
         etCall.setText(callsign.toUpperCase());
         etCall.setSelection(etCall.getText().length());
-        if (etTimeOn.getText().toString().isEmpty()) {
-            java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("HH:mm", java.util.Locale.US);
-            sdf.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
-            etTimeOn.setText(sdf.format(java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).getTime()));
-        }
-        solicitaFrecventaSiModDinRadio();
+        // Indicativ nou (poate înlocui unul existent) -> ora de acum
+        if (!oraSetataManual) puneOraUtcAcum();
+        solicitaFrecventaSiModDinRadio(true);
         executaCautareQrz(callsign);
         Toast.makeText(context, callsign + " imported into Logger", Toast.LENGTH_SHORT).show();
     }

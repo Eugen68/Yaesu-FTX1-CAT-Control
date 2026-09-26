@@ -59,6 +59,7 @@ public class MainActivity extends AppCompatActivity {
     private EcranSetari managerEcranSetari;
     private EcranEditorMacro managerEcranEditorMacro;
     private EcranLogger managerEcranLogger;
+    private EcranStatisticiLog managerEcranStatisticiLog;
     private EcranSetariProprii managerEcranSetariProprii;
     private EcranCluster managerEcranCluster;
     private EcranPskReporter managerEcranPskReporter;
@@ -66,7 +67,7 @@ public class MainActivity extends AppCompatActivity {
 
     private DrawerLayout drawerLayout;
     private FrameLayout containerPrincipal;
-    private Button btnMeniuCAT, btnMeniuSettings, btnMeniuRtty, btnMeniuRttyPy, btnMeniuLogger, btnMeniuMySettings, btnMeniuCluster, btnMeniuPskReporter, btnMeniuCwDeep, btnMeniuExit;
+    private Button btnMeniuCAT, btnMeniuSettings, btnMeniuRtty, btnMeniuRttyPy, btnMeniuLogger, btnMeniuLogStats, btnMeniuMySettings, btnMeniuCluster, btnMeniuPskReporter, btnMeniuCwDeep, btnMeniuExit;
 
     private boolean isReceiverRegistered = false;
 
@@ -104,6 +105,8 @@ public class MainActivity extends AppCompatActivity {
         // de indicative cunoscute (MASTER.SCP) folosita pentru evidentierea
         // "de incredere" in CW AI Decoder / RTTY.
         CallsignDatabase.getInstance().ensureLoadedAndMaybeUpdate(this);
+        // Idem pentru cty.dat (prefix -> tara DXCC), folosit de LOG STATISTICS.
+        CtyDatabase.ensureLoadedAndMaybeUpdate(this);
 
         IntentFilter filter = new IntentFilter();
         filter.addAction(ACTION_USB_PERMISSION);
@@ -163,6 +166,7 @@ public class MainActivity extends AppCompatActivity {
         managerEcranSetari = new EcranSetari(this, radioManager);
         managerEcranEditorMacro = new EcranEditorMacro(this);
         managerEcranLogger = new EcranLogger(this, radioManager);
+        managerEcranStatisticiLog = new EcranStatisticiLog(this);
         managerEcranSetariProprii = new EcranSetariProprii(this);
         managerEcranCluster = new EcranCluster(this, radioManager);
         managerEcranPskReporter = new EcranPskReporter(this, radioManager);
@@ -230,6 +234,7 @@ public class MainActivity extends AppCompatActivity {
         btnMeniuRtty = creeazaButonMeniu("RTTY CENTER", v -> comutaEcranMaster(3));
         btnMeniuRttyPy = creeazaButonMeniu("MACROS EDITOR", v -> comutaEcranMaster(4));
         btnMeniuLogger = creeazaButonMeniu("LOGGER", v -> comutaEcranMaster(5));
+        btnMeniuLogStats = creeazaButonMeniu("LOG STATISTICS", v -> comutaEcranMaster(10));
         btnMeniuCluster = creeazaButonMeniu("DX CLUSTER", v -> comutaEcranMaster(7));
         btnMeniuPskReporter = creeazaButonMeniu("PSK REPORTER", v -> comutaEcranMaster(9));
         btnMeniuCwDeep = creeazaButonMeniu("CW AI DECODER", v -> comutaEcranMaster(8));
@@ -251,6 +256,7 @@ public class MainActivity extends AppCompatActivity {
         meniuLateral.addView(btnMeniuRtty);
         meniuLateral.addView(btnMeniuRttyPy);
         meniuLateral.addView(btnMeniuLogger);
+        meniuLateral.addView(btnMeniuLogStats);
         meniuLateral.addView(btnMeniuCluster);
         meniuLateral.addView(btnMeniuPskReporter);
         meniuLateral.addView(btnMeniuCwDeep);
@@ -353,6 +359,7 @@ public class MainActivity extends AppCompatActivity {
             case 7: if (managerEcranCluster != null) viewDeAfisat = managerEcranCluster.getView(); break;
             case 8: if (managerEcranCwDeep != null) viewDeAfisat = managerEcranCwDeep.getView(); break;
             case 9: if (managerEcranPskReporter != null) viewDeAfisat = managerEcranPskReporter.getView(); break;
+            case 10: if (managerEcranStatisticiLog != null) viewDeAfisat = managerEcranStatisticiLog.getView(); break;
         }
         if (viewDeAfisat != null) containerPrincipal.addView(viewDeAfisat);
         btnMeniuCAT.setBackgroundColor(Color.parseColor(indexEcran == 1 ? "#BBDEFB" : "#E0E0E0"));
@@ -364,6 +371,7 @@ public class MainActivity extends AppCompatActivity {
         btnMeniuCluster.setBackgroundColor(Color.parseColor(indexEcran == 7 ? "#BBDEFB" : "#E0E0E0"));
         btnMeniuCwDeep.setBackgroundColor(Color.parseColor(indexEcran == 8 ? "#BBDEFB" : "#E0E0E0"));
         btnMeniuPskReporter.setBackgroundColor(Color.parseColor(indexEcran == 9 ? "#BBDEFB" : "#E0E0E0"));
+        btnMeniuLogStats.setBackgroundColor(Color.parseColor(indexEcran == 10 ? "#BBDEFB" : "#E0E0E0"));
         drawerLayout.closeDrawer(GravityCompat.START);
     }
 
