@@ -18,6 +18,7 @@ import android.widget.TextView;
 
 import com.example.yaesucatcontroladv.deepcw.audio.AudioListenPlayer;
 import com.example.yaesucatcontroladv.deepcw.audio.MicUplinkPlayer;
+import com.example.yaesucatcontroladv.deepcw.audio.CwTrainingKeyer;
 import com.hoho.android.usbserial.driver.UsbSerialPort;
 
 import android.annotation.SuppressLint;
@@ -113,10 +114,22 @@ public class EcranComenzi {
     private boolean stareWidth200On = false;
     private int modLucruCurent = 1; // 1 = Voce, 2 = CW
 
+    // --- MOD ANTRENAMENT CW (paletele suna in difuzor/casca, nu ating statia) ---
+    // Comutat prin dublu-tap pe BK-IN (vezi handler-ul butonului). Un singur tap in fereastra
+    // de asteptare executa comportamentul normal (toggle BK-IN pe statie); doua tap-uri
+    // consecutive rapide intra/ies din antrenament, fara sa mai trimita CAT-ul de BK-IN.
+    private boolean modAntrenamentCw = false;
+    // Keyer separat, doar audio (vezi CwTrainingKeyer) - CwKeyer (emisia reala) nu e atins.
+    private final CwTrainingKeyer trainingKeyer = new CwTrainingKeyer();
+    private long ultimulTapBkIn = 0;
+    private static final long FEREASTRA_DUBLU_TAP_MS = 350;
+    private final Handler handlerBkInTap = new Handler(Looper.getMainLooper());
+    private Runnable singurTapBkIn;
+
     // Chei SharedPreferences pentru Keyer
     private static final String PREF_CW_WPM = "cw_keyer_wpm";
     private static final String PREF_CW_REV = "cw_keyer_rev";
-    private static final String PREF_CW_STR = "cw_keyer_str";
+    private static final String PREF_CW_TON = "cw_training_ton_hz";
     private static final String PREF_CW_IAMBIC_B = "cw_keyer_iambic_b";
     private static final String PREF_CW_RTS = "cw_keyer_rts";
 
@@ -529,7 +542,19 @@ public class EcranComenzi {
         btnBkInToggle.setBackgroundColor(Color.parseColor("#757575"));
         btnBkInToggle.setTextColor(Color.WHITE);
         btnBkInToggle.setLayoutParams(pButonOrizontal);
-        btnBkInToggle.setOnClickListener(v -> radioManager.trimiteComandaCAT(stareBkInOn ? "BI0;" : "BI1;"));
+        singurTapBkIn = () -> radioManager.trimiteComandaCAT(stareBkInOn ? "BI0;" : "BI1;");
+        btnBkInToggle.setOnClickListener(v -> {
+            long acum = System.currentTimeMillis();
+            if (acum - ultimulTapBkIn < FEREASTRA_DUBLU_TAP_MS) {
+                // Dublu-tap: anulam CAT-ul de BK-IN programat de primul tap si comutam antrenamentul.
+                handlerBkInTap.removeCallbacks(singurTapBkIn);
+                ultimulTapBkIn = 0;
+                toggleModAntrenamentCw();
+            } else {
+                ultimulTapBkIn = acum;
+                handlerBkInTap.postDelayed(singurTapBkIn, FEREASTRA_DUBLU_TAP_MS);
+            }
+        });
         randCw1.addView(btnBkInToggle);
         containerButoaneCwExtra.addView(randCw1);
 
@@ -576,7 +601,7 @@ public class EcranComenzi {
         containerCwKeyer.setPadding(20, 20, 20, 20);
         containerCwKeyer.setVisibility(View.GONE); // Vizibil doar în modul CW
         
-        // Rândul 1: Setări (REV, STR, LINE)
+        // Rândul 1: Setări (REV, TON, IAMBIC, LINE)
         LinearLayout rSettings = new LinearLayout(context);
         rSettings.setOrientation(LinearLayout.HORIZONTAL);
         rSettings.setGravity(Gravity.CENTER_VERTICAL);
@@ -586,16 +611,23 @@ public class EcranComenzi {
         cbRev.setTextColor(Color.YELLOW);
         cbRev.setOnCheckedChangeListener((v, isChecked) -> {
             cwKeyer.setReversed(isChecked);
+            trainingKeyer.setReversed(isChecked);
             actualizeazaEtichetePadele(isChecked);
             if (!isInitialLoading) salveazaSetareKeyer(PREF_CW_REV, isChecked);
         });
         
-        CheckBox cbStr = new CheckBox(context);
-        cbStr.setText("STR");
-        cbStr.setTextColor(Color.CYAN);
-        cbStr.setOnCheckedChangeListener((v, isChecked) -> {
-            cwKeyer.setStraightKeyMode(isChecked);
-            if (!isInitialLoading) salveazaSetareKeyer(PREF_CW_STR, isChecked);
+        // Frecventa tonului din modul antrenament: 400 -> 500 -> 600 -> 700 -> 400 Hz.
+        Button btnTon = new Button(context);
+        btnTon.setText("TON: 600Hz");
+        btnTon.setBackgroundColor(Color.parseColor("#424242"));
+        btnTon.setTextColor(Color.WHITE);
+        btnTon.setTextSize(10);
+        btnTon.setLayoutParams(new LinearLayout.LayoutParams(0, 100, 1f));
+        btnTon.setOnClickListener(v -> {
+            int ton = trainingKeyer.getToneHz() >= 700 ? 400 : trainingKeyer.getToneHz() + 100;
+            trainingKeyer.setToneHz(ton);
+            btnTon.setText("TON: " + ton + "Hz");
+            salveazaSetareKeyer(PREF_CW_TON, ton);
         });
 
         Button btnIambicMode = new Button(context);
@@ -609,10 +641,12 @@ public class EcranComenzi {
             if (isNowB) {
                 btnIambicMode.setText("IAMBIC A");
                 cwKeyer.setIambicModeB(false);
+                trainingKeyer.setIambicModeB(false);
                 salveazaSetareKeyer(PREF_CW_IAMBIC_B, false);
             } else {
                 btnIambicMode.setText("IAMBIC B");
                 cwKeyer.setIambicModeB(true);
+                trainingKeyer.setIambicModeB(true);
                 salveazaSetareKeyer(PREF_CW_IAMBIC_B, true);
             }
         });
@@ -622,7 +656,7 @@ public class EcranComenzi {
         btnLine.setBackgroundColor(Color.parseColor("#424242"));
         btnLine.setTextColor(Color.WHITE);
         btnLine.setTextSize(10);
-        btnLine.setLayoutParams(new LinearLayout.LayoutParams(0, 100, 1.2f));
+        btnLine.setLayoutParams(new LinearLayout.LayoutParams(0, 100, 1f));
         btnLine.setOnClickListener(v -> {
             boolean useRtsNow = btnLine.getText().toString().contains("RTS");
             if (useRtsNow) {
@@ -638,7 +672,7 @@ public class EcranComenzi {
 
         rSettings.addView(cbRev);
         rSettings.addView(creeazaSpatiuOrizontal());
-        rSettings.addView(cbStr);
+        rSettings.addView(btnTon);
         rSettings.addView(creeazaSpatiuOrizontal());
         rSettings.addView(btnIambicMode);
         rSettings.addView(creeazaSpatiuOrizontal());
@@ -656,7 +690,10 @@ public class EcranComenzi {
         tvWpm.setTextColor(Color.WHITE);
         tvWpm.setTextSize(14);
         tvWpm.setTypeface(null, Typeface.BOLD);
-        tvWpm.setLayoutParams(new LinearLayout.LayoutParams(180, LinearLayout.LayoutParams.WRAP_CONTENT));
+        // Latime dupa text si un singur rand - cu latime fixa "20 WPM" se rupea pe doua randuri.
+        tvWpm.setSingleLine(true);
+        tvWpm.setPadding(0, 0, 20, 0);
+        tvWpm.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
         SeekBar sbWpm = new SeekBar(context);
         sbWpm.setMax(25); // 35 - 10 = 25
@@ -668,6 +705,7 @@ public class EcranComenzi {
                 int wpm = progress + 10;
                 tvWpm.setText(wpm + " WPM");
                 cwKeyer.setWpm(wpm);
+                trainingKeyer.setWpm(wpm);
                 if (fromUser) salveazaSetareKeyer(PREF_CW_WPM, wpm);
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
@@ -690,11 +728,13 @@ public class EcranComenzi {
         btnPaddleLeft.setOnTouchListener((v, event) -> {
             if (event.getAction() == MotionEvent.ACTION_DOWN) {
                 btnPaddleLeft.setBackgroundColor(Color.parseColor("#00E676"));
-                cwKeyer.setLeftPaddle(true);
+                if (modAntrenamentCw) trainingKeyer.setLeftPaddle(true);
+                else cwKeyer.setLeftPaddle(true);
                 return true;
             } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
                 btnPaddleLeft.setBackgroundColor(Color.parseColor("#37474F"));
-                cwKeyer.setLeftPaddle(false);
+                if (modAntrenamentCw) trainingKeyer.setLeftPaddle(false);
+                else cwKeyer.setLeftPaddle(false);
                 return true;
             }
             return false;
@@ -708,11 +748,13 @@ public class EcranComenzi {
         btnPaddleRight.setOnTouchListener((v, event) -> {
             if (event.getAction() == MotionEvent.ACTION_DOWN) {
                 btnPaddleRight.setBackgroundColor(Color.parseColor("#00E676"));
-                cwKeyer.setRightPaddle(true);
+                if (modAntrenamentCw) trainingKeyer.setRightPaddle(true);
+                else cwKeyer.setRightPaddle(true);
                 return true;
             } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
                 btnPaddleRight.setBackgroundColor(Color.parseColor("#37474F"));
-                cwKeyer.setRightPaddle(false);
+                if (modAntrenamentCw) trainingKeyer.setRightPaddle(false);
+                else cwKeyer.setRightPaddle(false);
                 return true;
             }
             return false;
@@ -1186,10 +1228,43 @@ public class EcranComenzi {
         if (containerCwKeyer != null) {
             containerCwKeyer.setVisibility(esteCW ? View.VISIBLE : View.GONE);
         }
-        
-        // Activăm ieșirea hardware a Keyer-ului DOAR dacă suntem în CW
+
+        // Daca parasim modul CW, iesim si din antrenament (paletele/UI-ul lui dispar oricum).
+        if (!esteCW && modAntrenamentCw) {
+            toggleModAntrenamentCw();
+        }
+
+        // Activăm ieșirea hardware a Keyer-ului DOAR dacă suntem în CW ȘI nu suntem în antrenament.
         if (cwKeyer != null) {
-            cwKeyer.setHardwareOutputEnabled(esteCW);
+            cwKeyer.setHardwareOutputEnabled(esteCW && !modAntrenamentCw);
+        }
+    }
+
+    /**
+     * Comuta modul antrenament CW (dublu-tap pe BK-IN): cand e activ, paletele nu mai
+     * manipuleaza linia RTS/DTR catre statie - genereaza doar un ton audibil (sidetone) in
+     * difuzorul telefonului sau in casca Bluetooth conectata (rutare automata Android, nu e
+     * nevoie de SCO fiindca nu captam microfonul). Cat timp e activ, paletele de pe ecran sunt
+     * rutate spre CwTrainingKeyer (keyer separat, temporizat de fluxul audio); CwKeyer ramane
+     * neatins. Setarile (WPM, REV, IAMBIC A/B) sunt aplicate ambelor keyere;
+     * TON (frecventa sunetului) doar celui de antrenament.
+     */
+    private void toggleModAntrenamentCw() {
+        modAntrenamentCw = !modAntrenamentCw;
+        if (modAntrenamentCw) {
+            cwKeyer.setLeftPaddle(false);
+            cwKeyer.setRightPaddle(false);
+            cwKeyer.setHardwareOutputEnabled(false);
+            trainingKeyer.start();
+            btnBkInToggle.setText("TRAINING");
+            btnBkInToggle.setBackgroundColor(Color.parseColor("#6A1B9A"));
+            Toast.makeText(context, "CW TRAINING MODE ON - paddles no longer key the radio", Toast.LENGTH_SHORT).show();
+        } else {
+            trainingKeyer.stop();
+            cwKeyer.setHardwareOutputEnabled(modLucruCurent == 2);
+            btnBkInToggle.setText(stareBkInOn ? "BK-IN: ON" : "BK-IN: OFF");
+            btnBkInToggle.setBackgroundColor(Color.parseColor(stareBkInOn ? "#2E7D32" : "#757575"));
+            Toast.makeText(context, "CW TRAINING MODE OFF", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -1209,15 +1284,22 @@ public class EcranComenzi {
         
         int wpm = prefs.getInt(PREF_CW_WPM, 20);
         boolean rev = prefs.getBoolean(PREF_CW_REV, false);
-        boolean str = prefs.getBoolean(PREF_CW_STR, false);
+        int ton = prefs.getInt(PREF_CW_TON, 600);
         boolean iambicB = prefs.getBoolean(PREF_CW_IAMBIC_B, true);
         boolean rts = prefs.getBoolean(PREF_CW_RTS, true);
 
         cwKeyer.setWpm(wpm);
         cwKeyer.setReversed(rev);
-        cwKeyer.setStraightKeyMode(str);
+        // Cheia dreapta (STR) a fost scoasa din UI - fortam iambic, ca o setare STR salvata
+        // anterior sa nu ramana activa fara buton de oprire.
+        cwKeyer.setStraightKeyMode(false);
         cwKeyer.setIambicModeB(iambicB);
         cwKeyer.setUseRts(rts);
+
+        trainingKeyer.setWpm(wpm);
+        trainingKeyer.setReversed(rev);
+        trainingKeyer.setToneHz(ton);
+        trainingKeyer.setIambicModeB(iambicB);
 
         // Actualizăm etichetele padelelor
         actualizeazaEtichetePadele(rev);
@@ -1233,10 +1315,11 @@ public class EcranComenzi {
                         if (child instanceof CheckBox) {
                             CheckBox cb = (CheckBox) child;
                             if (cb.getText().equals("REV")) cb.setChecked(rev);
-                            else if (cb.getText().equals("STR")) cb.setChecked(str);
                         } else if (child instanceof Button) {
                             Button b = (Button) child;
-                            if (b.getText().toString().contains("IAMBIC")) {
+                            if (b.getText().toString().startsWith("TON:")) {
+                                b.setText("TON: " + ton + "Hz");
+                            } else if (b.getText().toString().contains("IAMBIC")) {
                                 b.setText(iambicB ? "IAMBIC B" : "IAMBIC A");
                             } else if (b.getText().toString().startsWith("USE:")) {
                                 b.setText(rts ? "USE: RTS" : "USE: DTR");
@@ -1269,6 +1352,7 @@ public class EcranComenzi {
             btnConnect.setBackgroundColor(Color.parseColor("#007ACC"));
             containerButoaneCwExtra.setVisibility(View.GONE);
             if (containerCwKeyer != null) containerCwKeyer.setVisibility(View.GONE);
+            if (modAntrenamentCw) toggleModAntrenamentCw();
             if (cwKeyer != null) cwKeyer.setHardwareOutputEnabled(false);
             if (listenActive) stopListen();
         }
@@ -1278,6 +1362,7 @@ public class EcranComenzi {
         if (cwKeyer != null) {
             cwKeyer.shutdown();
         }
+        trainingKeyer.stop();
         if (listenPlayer != null) {
             listenPlayer.stop();
         }
