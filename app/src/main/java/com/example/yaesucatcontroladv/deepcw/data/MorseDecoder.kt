@@ -1,6 +1,8 @@
 package com.example.yaesucatcontroladv.deepcw.data
 
 import android.content.Context
+import com.example.yaesucatcontroladv.deepcw.dsp.Constants.FFT_LENGTH
+import com.example.yaesucatcontroladv.deepcw.dsp.Constants.HOP_LENGTH
 import com.example.yaesucatcontroladv.deepcw.dsp.SpectrogramGenerator
 
 /**
@@ -41,6 +43,22 @@ class MorseDecoder(context: Context, val modelFile: String, val lang: String = "
 
         val result = inferenceWrapper.runInference(spectrogram.data, spectrogram.dims) ?: return null
         return ctcDecoder.decodeDetailed(result.first, result.second)
+    }
+
+    /**
+     * Ca `decodeDetailed` (spectrograma deplasata pe centrul modelului), dar intoarce
+     * caracterele cu pozitia lor (esantion relativ la inceputul lui `audio`, centrul cadrului
+     * STFT) si increderea - intrarea pentru `OverlapMerger`.
+     */
+    fun decodeTokens(audio: FloatArray, targetFreq: Float, filterWidth: Float): List<CtcToken>? {
+        if (!isAvailable) return null
+
+        val spectrogram = spectrogramGenerator.generateShiftedSpectrogram(audio, targetFreq, filterWidth)
+            ?: return null
+        val result = inferenceWrapper.runInference(spectrogram.data, spectrogram.dims) ?: return null
+        return CtcTokens.greedy(result.first, result.second, MorseVocabularies.ENGLISH_BLANK_INDEX).map {
+            CtcToken(Math.round(it.frame * HOP_LENGTH + FFT_LENGTH / 2f).toLong(), it.index, it.score)
+        }
     }
 
     /** Decodare cu modelul narrow de 5 bin-uri (pileup). */
