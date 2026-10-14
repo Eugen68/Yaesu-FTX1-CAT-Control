@@ -1,5 +1,6 @@
 package com.example.yaesucatcontroladv.deepcw.audio
 
+import com.example.yaesucatcontroladv.cwtraining.MorseKeyerListener
 import com.example.yaesucatcontroladv.cwtraining.PaddleKeyerEngine
 
 /**
@@ -33,6 +34,9 @@ class CwTrainingKeyer {
             engine?.setSoundFrequency(field)
         }
 
+    /** Primeste caracterele decodate din palete (pe firul keyer-ului); setat inainte de start(). */
+    @Volatile var listener: MorseKeyerListener? = null
+
     @Volatile var isRunning: Boolean = false
         private set
 
@@ -54,7 +58,7 @@ class CwTrainingKeyer {
 
     fun start() {
         if (isRunning) return
-        engine = PaddleKeyerEngine(wpm, toneHz, null).also {
+        engine = PaddleKeyerEngine(wpm, toneHz, listener).also {
             it.setIambicModeB(iambicModeB)
             it.startKeyer()
         }

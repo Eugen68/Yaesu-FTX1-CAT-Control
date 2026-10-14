@@ -64,10 +64,11 @@ public class MainActivity extends AppCompatActivity {
     private EcranCluster managerEcranCluster;
     private EcranPskReporter managerEcranPskReporter;
     private EcranCwDeepDecoder managerEcranCwDeep;
+    private EcranCwTrainer managerEcranCwTrainer;
 
     private DrawerLayout drawerLayout;
     private FrameLayout containerPrincipal;
-    private Button btnMeniuCAT, btnMeniuSettings, btnMeniuRtty, btnMeniuRttyPy, btnMeniuLogger, btnMeniuLogStats, btnMeniuMySettings, btnMeniuCluster, btnMeniuPskReporter, btnMeniuCwDeep, btnMeniuExit;
+    private Button btnMeniuCAT, btnMeniuSettings, btnMeniuRtty, btnMeniuRttyPy, btnMeniuLogger, btnMeniuLogStats, btnMeniuMySettings, btnMeniuCluster, btnMeniuPskReporter, btnMeniuCwDeep, btnMeniuCwTrainer, btnMeniuExit;
 
     private boolean isReceiverRegistered = false;
 
@@ -171,6 +172,7 @@ public class MainActivity extends AppCompatActivity {
         managerEcranCluster = new EcranCluster(this, radioManager);
         managerEcranPskReporter = new EcranPskReporter(this, radioManager);
         managerEcranCwDeep = new EcranCwDeepDecoder(this, radioManager);
+        managerEcranCwTrainer = new EcranCwTrainer(this);
 
         drawerLayout = new DrawerLayout(this);
         drawerLayout.setLayoutParams(new ViewGroup.LayoutParams(
@@ -239,6 +241,7 @@ public class MainActivity extends AppCompatActivity {
         btnMeniuPskReporter = creeazaButonMeniu("PSK REPORTER", v -> comutaEcranMaster(9));
         btnMeniuCwDeep = creeazaButonMeniu("CW AI DECODER", v -> comutaEcranMaster(8));
         btnMeniuMySettings = creeazaButonMeniu("MY SETTINGS", v -> comutaEcranMaster(6));
+        btnMeniuCwTrainer = creeazaButonMeniu("CW TRAINER", v -> comutaEcranMaster(11));
 
         btnMeniuExit = new Button(this);
         btnMeniuExit.setText("❌ EXIT APPLICATION");
@@ -252,14 +255,15 @@ public class MainActivity extends AppCompatActivity {
         btnMeniuExit.setOnClickListener(v -> exitAplicatie());
 
         meniuLateral.addView(btnMeniuCAT);
-        meniuLateral.addView(btnMeniuSettings);
+        meniuLateral.addView(btnMeniuCwDeep);
         meniuLateral.addView(btnMeniuRtty);
-        meniuLateral.addView(btnMeniuRttyPy);
         meniuLateral.addView(btnMeniuLogger);
         meniuLateral.addView(btnMeniuLogStats);
         meniuLateral.addView(btnMeniuCluster);
         meniuLateral.addView(btnMeniuPskReporter);
-        meniuLateral.addView(btnMeniuCwDeep);
+        meniuLateral.addView(btnMeniuRttyPy);
+        meniuLateral.addView(btnMeniuCwTrainer);
+        meniuLateral.addView(btnMeniuSettings);
         meniuLateral.addView(btnMeniuMySettings);
         meniuLateral.addView(btnMeniuExit);
 
@@ -360,6 +364,7 @@ public class MainActivity extends AppCompatActivity {
             case 8: if (managerEcranCwDeep != null) viewDeAfisat = managerEcranCwDeep.getView(); break;
             case 9: if (managerEcranPskReporter != null) viewDeAfisat = managerEcranPskReporter.getView(); break;
             case 10: if (managerEcranStatisticiLog != null) viewDeAfisat = managerEcranStatisticiLog.getView(); break;
+            case 11: if (managerEcranCwTrainer != null) viewDeAfisat = managerEcranCwTrainer.getView(); break;
         }
         if (viewDeAfisat != null) containerPrincipal.addView(viewDeAfisat);
         btnMeniuCAT.setBackgroundColor(Color.parseColor(indexEcran == 1 ? "#BBDEFB" : "#E0E0E0"));
@@ -372,6 +377,7 @@ public class MainActivity extends AppCompatActivity {
         btnMeniuCwDeep.setBackgroundColor(Color.parseColor(indexEcran == 8 ? "#BBDEFB" : "#E0E0E0"));
         btnMeniuPskReporter.setBackgroundColor(Color.parseColor(indexEcran == 9 ? "#BBDEFB" : "#E0E0E0"));
         btnMeniuLogStats.setBackgroundColor(Color.parseColor(indexEcran == 10 ? "#BBDEFB" : "#E0E0E0"));
+        btnMeniuCwTrainer.setBackgroundColor(Color.parseColor(indexEcran == 11 ? "#BBDEFB" : "#E0E0E0"));
         drawerLayout.closeDrawer(GravityCompat.START);
     }
 
@@ -395,6 +401,7 @@ public class MainActivity extends AppCompatActivity {
                     }
                     if (managerEcranRtty != null) managerEcranRtty.eliberareResurse();
                     if (managerEcranCwDeep != null) managerEcranCwDeep.eliberareResurse();
+                    if (managerEcranCwTrainer != null) managerEcranCwTrainer.eliberareResurse();
                     if (managerEcranCluster != null) managerEcranCluster.eliberareResurse();
                     if (managerEcranPskReporter != null) managerEcranPskReporter.eliberareResurse();
                     safeUnregisterReceiver();
@@ -447,6 +454,7 @@ public class MainActivity extends AppCompatActivity {
         super.onDestroy();
         if (managerEcranRtty != null) managerEcranRtty.eliberareResurse();
         if (managerEcranCwDeep != null) managerEcranCwDeep.eliberareResurse();
+        if (managerEcranCwTrainer != null) managerEcranCwTrainer.eliberareResurse();
         if (isFinishing()) {
             if (managerEcranCluster != null) managerEcranCluster.eliberareResurse();
             if (managerEcranPskReporter != null) managerEcranPskReporter.eliberareResurse();

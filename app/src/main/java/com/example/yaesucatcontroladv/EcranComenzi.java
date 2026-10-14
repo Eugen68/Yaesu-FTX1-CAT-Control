@@ -164,6 +164,8 @@ public class EcranComenzi {
     }
 
     public View getView() {
+        // WPM/TON/REV/IAMBIC pot fi schimbate si din CW TRAINER (aceleasi preferinte).
+        incarcaSetariKeyer();
         return viewPrincipal;
     }
 

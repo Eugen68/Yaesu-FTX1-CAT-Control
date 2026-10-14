@@ -39,7 +39,9 @@ public class MorseTimingEngine {
         this.dahDurationMs = 3600 / wpm;
         this.elementSpaceMs = 1200 / wpm;
         this.characterSpaceMs = 2400 / wpm;
-        this.wordSpaceMs = 7200 / wpm;
+        // Masurat dupa pauza de caracter (3 puncte de liniste): +2 puncte => spatiu de cuvant
+        // la 5 puncte de liniste, la mijloc intre pauza de caracter (3) si cea de cuvant (7).
+        this.wordSpaceMs = 2400 / wpm;
     }
 
     public int getWpm() {

@@ -14,8 +14,10 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -56,6 +58,13 @@ final class CallsignDatabase {
     }
 
     private CallsignDatabase() {}
+
+    /** Copie a tuturor indicativelor (pentru exercitiile din CW TRAINER); goala daca baza nu e incarcata. */
+    List<String> copieIndicative() {
+        synchronized (callsigns) {
+            return new ArrayList<>(callsigns);
+        }
+    }
 
     boolean isKnown(String callsign) {
         if (callsign == null) return false;

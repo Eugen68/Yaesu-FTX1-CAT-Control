@@ -132,8 +132,9 @@ public abstract class MorseKeyerThread extends MorseTimingEngine implements Runn
 
     private void onCharacterSpaceDone() {
         String decoded = dictionary.decode(currentSymbol);
-        if (decoded != null && listener != null) {
-            listener.onCharacterDecoded(decoded);
+        if (listener != null) {
+            // "*" = combinatie de puncte/linii care nu e un caracter Morse valid.
+            listener.onCharacterDecoded(decoded != null ? decoded : "*");
         }
         currentSymbol.reset();
         scheduleWordSpace(this::onWordSpaceDone);
