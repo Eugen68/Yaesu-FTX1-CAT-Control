@@ -22,6 +22,7 @@ import android.widget.ArrayAdapter;
 
 import com.example.yaesucatcontroladv.deepcw.audio.MorseAudioProcessor;
 import com.example.yaesucatcontroladv.deepcw.audio.DecoderMode;
+import com.example.yaesucatcontroladv.deepcw.audio.StreamingMethod;
 import com.example.yaesucatcontroladv.deepcw.data.PileupTrack;
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants;
 import com.example.yaesucatcontroladv.deepcw.dsp.ToneCandidate;
@@ -42,7 +43,7 @@ public class EcranCwDeepDecoder {
     private TextView tvStatus, tvFreqInfo, tvLevelVal, tvGainVal;
     private ScrollView svTerminal;
     private LinearLayout llMessagesContainer, llDenoiseControls;
-    private Button btnToggle, btnModeToggle, btnDetectTone, btnDenoiseToggle;
+    private Button btnToggle, btnModeToggle, btnDetectTone, btnDenoiseToggle, btnStreamMethod;
 
     // Ultimul Hz pe care "Detecteaza tonul" a retunat - apasat din nou fara alta actiune
     // intre timp, trece la urmatorul candidat gasit (dupa putere), nu re-gaseste mereu pe
@@ -75,6 +76,7 @@ public class EcranCwDeepDecoder {
     private static final String PREF_CW_AI_WET = "cw_ai_wet";
     private static final String PREF_CW_AI_GAIN = "cw_ai_gain";
     private static final String PREF_CW_AI_LOCK_CONTROLS = "cw_ai_lock_controls";
+    private static final String PREF_CW_AI_STREAM_METHOD = "cw_ai_stream_method";
 
     /** Starea vizuala a butonului DENOISE (optimista la click, corectata de availabilityListener). */
     private boolean denoiseUiOn = false;
@@ -323,7 +325,17 @@ public class EcranCwDeepDecoder {
         btnClear.setTextColor(Color.WHITE);
         btnClear.setOnClickListener(v -> clearTerminal());
         rButtons.addView(btnClear, new LinearLayout.LayoutParams(0, 120, 0.4f));
-        
+
+        // Metoda de confirmare a textului in modul NORMAL (vezi StreamingMethod): pauze de
+        // cuvant (implicit) sau ferestre suprapuse - pentru comparatie pe banda.
+        btnStreamMethod = new Button(context);
+        btnStreamMethod.setBackgroundColor(Color.parseColor("#37474F"));
+        btnStreamMethod.setTextColor(Color.WHITE);
+        btnStreamMethod.setTextSize(11);
+        btnStreamMethod.setOnClickListener(v -> toggleStreamingMethod());
+        rButtons.addView(btnStreamMethod, new LinearLayout.LayoutParams(0, 120, 0.6f));
+        syncStreamMethodButtonUi(StreamingMethod.WORD_GAP);
+
         viewPrincipal.addView(rButtons);
 
         // Row 3: CW Messages (M1-M5)
@@ -472,6 +484,27 @@ public class EcranCwDeepDecoder {
         tvFreqInfo.setText("Tune: " + freqHz + " Hz");
         waterfall.setFilterBand(freqHz, processor.getFilterWidthHz());
         showTemporaryStatus("Ton detectat la " + freqHz + " Hz.");
+    }
+
+    private void toggleStreamingMethod() {
+        StreamingMethod next = processor.getStreamingMethod() == StreamingMethod.WORD_GAP
+                ? StreamingMethod.OVERLAP : StreamingMethod.WORD_GAP;
+        aplicaStreamingMethod(next);
+        showTemporaryStatus(next == StreamingMethod.OVERLAP
+                ? "Text confirmat din ferestre suprapuse (12 s / 8 s)"
+                : "Text confirmat la pauzele dintre cuvinte");
+    }
+
+    private void aplicaStreamingMethod(StreamingMethod method) {
+        processor.useStreamingMethod(method);
+        syncStreamMethodButtonUi(method);
+        salveazaSetare(PREF_CW_AI_STREAM_METHOD, method.ordinal());
+    }
+
+    private void syncStreamMethodButtonUi(StreamingMethod method) {
+        boolean overlap = method == StreamingMethod.OVERLAP;
+        btnStreamMethod.setText(overlap ? "STREAM: FERESTRE" : "STREAM: PAUZE");
+        btnStreamMethod.setBackgroundColor(overlap ? Color.parseColor("#2E7D32") : Color.parseColor("#37474F"));
     }
 
     private void toggleDenoise() {
@@ -668,6 +701,7 @@ public class EcranCwDeepDecoder {
         int wetVal = prefs.getInt(PREF_CW_AI_WET, 100);
         int gainVal = prefs.getInt(PREF_CW_AI_GAIN, 100);
         boolean locked = prefs.getInt(PREF_CW_AI_LOCK_CONTROLS, 0) == 1;
+        int streamMethodIdx = prefs.getInt(PREF_CW_AI_STREAM_METHOD, 0);
 
         processor.setWetLevel(wetVal / 100f);
         processor.setOutputGain(gainVal / 100f);
@@ -677,6 +711,7 @@ public class EcranCwDeepDecoder {
         cbLockDenoiseControls.setChecked(locked);
 
         if (modeIdx == 1) toggleMode();
+        if (streamMethodIdx == StreamingMethod.OVERLAP.ordinal()) aplicaStreamingMethod(StreamingMethod.OVERLAP);
         if (denoiseVal == 1) toggleDenoise();
         spWidth.setSelection(widthIdx);
     }

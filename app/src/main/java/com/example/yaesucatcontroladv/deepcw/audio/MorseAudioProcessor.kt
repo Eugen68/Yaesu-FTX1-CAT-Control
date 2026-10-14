@@ -3,8 +3,11 @@ package com.example.yaesucatcontroladv.deepcw.audio
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import com.example.yaesucatcontroladv.deepcw.data.CtcToken
 import com.example.yaesucatcontroladv.deepcw.data.CwDetector
 import com.example.yaesucatcontroladv.deepcw.data.MorseDecoder
+import com.example.yaesucatcontroladv.deepcw.data.MorseVocabularies
+import com.example.yaesucatcontroladv.deepcw.data.OverlapMerger
 import com.example.yaesucatcontroladv.deepcw.data.PileupCandidates
 import com.example.yaesucatcontroladv.deepcw.data.PileupTrack
 import com.example.yaesucatcontroladv.deepcw.data.StreamingTranscript
@@ -45,6 +48,15 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 enum class DecoderMode { NORMAL, PILEUP }
+
+/**
+ * Cum transforma modul NORMAL bufferul audio in text confirmat:
+ * - WORD_GAP: re-decodeaza tot bufferul in asteptare si confirma textul la o pauza de
+ *   cuvant (port al `useStreamingDecode.ts`).
+ * - OVERLAP: ferestre fixe de 12 s, pornite la fiecare 8 s, imbinate dupa pozitia in timp
+ *   a caracterelor (metoda receptorului streaming DeepRTTY). Textul gri ramane live.
+ */
+enum class StreamingMethod { WORD_GAP, OVERLAP }
 
 /**
  * Disponibilitatea celor doua moduri, in functie de modelele ONNX care s-au incarcat.
@@ -128,6 +140,10 @@ class MorseAudioProcessor(private val context: Context) {
 
     @Volatile
     var filterWidthHz: Int = Constants.DEFAULT_FILTER_WIDTH_HZ
+        private set
+
+    @Volatile
+    var streamingMethod: StreamingMethod = StreamingMethod.WORD_GAP
         private set
 
     @Volatile
@@ -228,6 +244,12 @@ class MorseAudioProcessor(private val context: Context) {
     fun setFilterWidth(widthHz: Int) {
         if (widthHz == filterWidthHz) return
         filterWidthHz = widthHz
+        if (isRunning && mode == DecoderMode.NORMAL) restartModeLoops()
+    }
+
+    fun useStreamingMethod(method: StreamingMethod) {
+        if (method == streamingMethod) return
+        streamingMethod = method
         if (isRunning && mode == DecoderMode.NORMAL) restartModeLoops()
     }
 
@@ -378,7 +400,14 @@ class MorseAudioProcessor(private val context: Context) {
     private fun startModeLoopsLocked() {
         modeJobs.clear()
         when (mode) {
-            DecoderMode.NORMAL -> modeJobs.add(scope.launch { streamingLoop() })
+            DecoderMode.NORMAL -> modeJobs.add(
+                scope.launch {
+                    when (streamingMethod) {
+                        StreamingMethod.WORD_GAP -> streamingLoop()
+                        StreamingMethod.OVERLAP -> overlapStreamingLoop()
+                    }
+                }
+            )
             DecoderMode.PILEUP -> {
                 val tracksState = PileupTracksState()
                 modeJobs.add(scope.launch { pileupDetectLoop(tracksState) })
@@ -518,6 +547,129 @@ class MorseAudioProcessor(private val context: Context) {
             }
         }
     }
+
+    /**
+     * Decodare streaming cu ferestre suprapuse (mod Normal, StreamingMethod.OVERLAP).
+     *
+     * Fiecare fereastra de OVERLAP_WINDOW_S secunde e decodata o singura data, iar
+     * caracterele ei (cu pozitie absoluta si incredere) sunt imbinate cu fereastra
+     * anterioara de `OverlapMerger` - un caracter taiat de marginea unei ferestre e citit din
+     * fereastra care l-a vazut intreg. Textul confirmat e trimis doar pana la ultima pauza de
+     * cuvant (UI-ul pune spatiu intre segmente), restul cuvantului ramane in textul gri.
+     * Textul gri e re-decodat cel mult o data pe secunda, de la inceputul ultimei ferestre.
+     */
+    private suspend fun overlapStreamingLoop() {
+        val window = OVERLAP_WINDOW_SAMPLES.toLong()
+        val hop = OVERLAP_HOP_SAMPLES.toLong()
+        val tolerance = OVERLAP_TOLERANCE_SAMPLES.toDouble()
+
+        var epoch = -1L
+        var merger = OverlapMerger(OVERLAP_EDGE_GUARD_SAMPLES.toLong(), tolerance)
+        var nextWindow = 0L
+        var lastWindowStart = -1L
+        val carry = ArrayList<CtcToken>() // confirmate, dar dupa ultima pauza de cuvant
+        var lastCommittedSample = Long.MIN_VALUE
+        var lastVersion = -1L
+        var lastPreviewAt = 0L
+
+        segmentsMutex.withLock {
+            notifySegments(segments, "")
+        }
+
+        while (coroutineScopeActive()) {
+            val snapshot = pendingSamples.positionedSnapshot()
+            if (snapshot.epoch != epoch) {
+                // Buffer golit (CLEAR): stream nou, fara legatura in timp cu cel vechi.
+                epoch = snapshot.epoch
+                merger = OverlapMerger(OVERLAP_EDGE_GUARD_SAMPLES.toLong(), tolerance)
+                nextWindow = snapshot.start
+                lastWindowStart = -1L
+                carry.clear()
+                lastCommittedSample = Long.MIN_VALUE
+            }
+            if (snapshot.version == lastVersion) {
+                delay(POLL_INTERVAL_MS)
+                continue
+            }
+            lastVersion = snapshot.version
+            val end = snapshot.start + snapshot.data.size
+
+            var cutWindow = false
+            while (nextWindow + window <= end) {
+                val offset = (nextWindow - snapshot.start).toInt()
+                val audio = snapshot.data.copyOfRange(offset, offset + window.toInt())
+                val tokens = mainDecoder.decodeTokens(audio, filterFreqHz.toFloat(), filterWidthHz.toFloat())
+                    ?: emptyList()
+                if (!coroutineScopeActive()) return
+                val windowStart = nextWindow
+                val committed = merger.push(windowStart, window, tokens.map { it.copy(sample = it.sample + windowStart) })
+                lastWindowStart = windowStart
+                nextWindow += hop
+                cutWindow = true
+
+                carry.addAll(committed)
+                committed.lastOrNull()?.let { lastCommittedSample = it.sample }
+                val confirmedText = takeConfirmedWords(carry)
+                if (confirmedText.isNotEmpty()) {
+                    segmentsMutex.withLock { segments.add(confirmedText) }
+                }
+            }
+            if (cutWindow) {
+                // Audio-ul de dinaintea ultimei ferestre nu mai e necesar nici pentru textul gri.
+                pendingSamples.dropBefore(lastWindowStart, epoch)
+            }
+
+            val now = SystemClock.elapsedRealtime()
+            if (!cutWindow && now - lastPreviewAt < ANALYSIS_MIN_INTERVAL_MS) {
+                delay(POLL_INTERVAL_MS)
+                continue
+            }
+
+            val previewStart = if (lastWindowStart >= 0) lastWindowStart else snapshot.start
+            val previewOffset = (previewStart - snapshot.start).toInt()
+            var previewTokens = emptyList<CtcToken>()
+            if (snapshot.data.size - previewOffset >= MIN_PENDING_SAMPLES) {
+                lastPreviewAt = now
+                val audio = snapshot.data.copyOfRange(previewOffset, snapshot.data.size)
+                previewTokens = mainDecoder.decodeTokens(audio, filterFreqHz.toFloat(), filterWidthHz.toFloat())
+                    ?.map { it.copy(sample = it.sample + previewStart) }
+                    ?: emptyList()
+                if (!coroutineScopeActive()) return
+            }
+            // Doar ce urmeaza dupa textul deja confirmat (cu toleranta pentru jitter-ul pozitiei).
+            val after = max(merger.committedUntil, lastCommittedSample + tolerance)
+            val pendingText = collapseWhitespace(
+                tokensText(carry) + tokensText(previewTokens.filter { it.sample > after })
+            )
+            segmentsMutex.withLock {
+                notifySegments(segments, pendingText)
+            }
+        }
+    }
+
+    /**
+     * Scoate din `carry` caracterele pana la ultimul spatiu (inclusiv) si le intoarce ca text.
+     * Daca nu exista spatiu dar s-au strans prea multe caractere, le confirma pe toate.
+     */
+    private fun takeConfirmedWords(carry: MutableList<CtcToken>): String {
+        var lastSpace = -1
+        for (i in carry.indices.reversed()) {
+            if (MorseVocabularies.ENGLISH_VOCABULARY.getOrNull(carry[i].index) == " ") {
+                lastSpace = i
+                break
+            }
+        }
+        val count = if (lastSpace >= 0) lastSpace + 1 else if (carry.size > OVERLAP_MAX_CARRY_CHARS) carry.size else 0
+        if (count == 0) return ""
+        val text = collapseWhitespace(tokensText(carry.subList(0, count)))
+        carry.subList(0, count).clear()
+        return text
+    }
+
+    private fun tokensText(tokens: List<CtcToken>): String =
+        tokens.joinToString("") { MorseVocabularies.ENGLISH_VOCABULARY.getOrElse(it.index) { "" } }
+
+    private fun collapseWhitespace(text: String): String = text.replace(Regex("\\s+"), " ").trim()
 
     /** Loop de detectie pileup (echivalent `usePileupDetection`). */
     private suspend fun pileupDetectLoop(state: PileupTracksState) {
@@ -738,6 +890,14 @@ class MorseAudioProcessor(private val context: Context) {
         private var data = FloatArray(0)
         private var version = 0L
 
+        /** Pozitia absoluta (in stream) a lui data[0]; reporneste de la 0 la `clear`. */
+        private var start = 0L
+
+        /** Creste la fiecare `clear`, ca bucla OVERLAP sa stie ca a inceput un stream nou. */
+        private var epoch = 0L
+
+        class Positioned(val data: FloatArray, val version: Long, val start: Long, val epoch: Long)
+
         @Synchronized
         fun append(chunk: FloatArray) {
             val next = FloatArray(data.size + chunk.size)
@@ -751,15 +911,29 @@ class MorseAudioProcessor(private val context: Context) {
         fun snapshot(): Pair<FloatArray, Long> = data.copyOf() to version
 
         @Synchronized
+        fun positionedSnapshot(): Positioned = Positioned(data.copyOf(), version, start, epoch)
+
+        @Synchronized
         fun dropLeading(count: Int) {
             if (count <= 0) return
+            val dropped = min(count, data.size)
             data = if (count >= data.size) FloatArray(0) else data.copyOfRange(count, data.size)
+            start += dropped
             version++
+        }
+
+        /** Elimina esantioanele de dinaintea pozitiei absolute `sample`, daca stream-ul e acelasi. */
+        @Synchronized
+        fun dropBefore(sample: Long, expectedEpoch: Long) {
+            if (expectedEpoch != epoch || sample <= start) return
+            dropLeading(min(sample - start, data.size.toLong()).toInt())
         }
 
         @Synchronized
         fun clear() {
             data = FloatArray(0)
+            start = 0L
+            epoch++
             version++
         }
     }
@@ -817,5 +991,22 @@ class MorseAudioProcessor(private val context: Context) {
         val TAIL_GUARD_SAMPLES = (TAIL_GUARD_S * SAMPLE_RATE).roundToInt()
         val MIN_PENDING_SAMPLES = MIN_PENDING_S * SAMPLE_RATE
         val MIN_CONFIRMED_SAMPLES = MIN_CONFIRMED_S * SAMPLE_RATE
+
+        // StreamingMethod.OVERLAP. Fereastra si pasul sunt multipli de HOP_LENGTH, ca
+        // pozitiile caracterelor din ferestre diferite sa cada pe aceeasi grila de cadre.
+        const val OVERLAP_WINDOW_S = 12
+        const val OVERLAP_HOP_S = 8
+        const val OVERLAP_EDGE_GUARD_S = 1.0f
+        const val OVERLAP_TOLERANCE_S = 0.1f
+        const val OVERLAP_MAX_CARRY_CHARS = 30
+
+        val OVERLAP_WINDOW_SAMPLES = OVERLAP_WINDOW_S * SAMPLE_RATE
+        val OVERLAP_HOP_SAMPLES = OVERLAP_HOP_S * SAMPLE_RATE
+        val OVERLAP_EDGE_GUARD_SAMPLES = (OVERLAP_EDGE_GUARD_S * SAMPLE_RATE).roundToInt()
+        val OVERLAP_TOLERANCE_SAMPLES = (OVERLAP_TOLERANCE_S * SAMPLE_RATE).roundToInt()
+
+        init {
+            require(OVERLAP_WINDOW_SAMPLES % HOP_LENGTH == 0 && OVERLAP_HOP_SAMPLES % HOP_LENGTH == 0)
+        }
     }
 }
