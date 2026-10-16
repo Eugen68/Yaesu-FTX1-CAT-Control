@@ -52,6 +52,13 @@ public class CwTextRepairTest {
     }
 
     @Test
+    public void nuTaieCuvinteScurteSauRecunoscute() {
+        assertEquals("73 GL SK", repara("73 GL SK"));
+        assertEquals("GL IK", repara("GL IK"));
+        assertEquals("NAME EUGEN QTH ROMANIA", repara("NAME EUGENQTH ROMANIA"));
+    }
+
+    @Test
     public void textGolRamaneNeschimbat() {
         assertEquals("", repara(""));
         assertEquals(null, repara(null));

@@ -128,6 +128,14 @@ final class CwTextRepair {
         }
         String s = sb.toString();
         int n = s.length();
+        // Un cuvant al modelului scurt sau deja recunoscut nu se taie IN INTERIOR (se poate
+        // lipi in continuare de vecini, daca nu e recunoscut) - garda din vechea reparare pe
+        // cuvant. Fara ea, orice cuvant necunoscut care contine o ancora era taiat in jurul
+        // ei: "SK" -> "S K" ("S" -1000 + "K" +10 bate "SK" -1000).
+        boolean[] pastreazaIntreg = new boolean[cuvinte.length];
+        for (int w = 0; w < cuvinte.length; w++) {
+            pastreazaIntreg[w] = cuvinte[w].length() <= 2 || esteRecunoscut(cuvinte[w]);
+        }
         int[] dp = new int[n + 1];
         int[] taiere = new int[n + 1];
         Arrays.fill(dp, Integer.MIN_VALUE);
@@ -135,9 +143,12 @@ final class CwTextRepair {
 
         for (int i = 1; i <= n; i++) {
             int inceputCuvant = startCuvant.get(i - 1);
+            int cuvantCurent = idCuvant.get(i - 1);
+            boolean laSfarsitCuvant = i == inceputCuvant + cuvinte[cuvantCurent].length();
             // Blocuri in interiorul cuvantului curent.
             for (int start = inceputCuvant; start < i; start++) {
                 if (dp[start] == Integer.MIN_VALUE) continue;
+                if (pastreazaIntreg[cuvantCurent] && (start != inceputCuvant || !laSfarsitCuvant)) continue;
                 int scor = dp[start] + scorFragment(s.substring(start, i), indicativCunoscut);
                 if (scor > dp[i]) {
                     dp[i] = scor;
