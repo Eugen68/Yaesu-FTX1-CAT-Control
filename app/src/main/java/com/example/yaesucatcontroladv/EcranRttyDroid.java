@@ -139,6 +139,7 @@ public class EcranRttyDroid {
     private static final String PREF_RTTY_SNRG_ON = "rtty_snrg_on";
     private static final String PREF_RTTY_SNRG_K = "rtty_snrg_k";
     private static final String PREF_RTTY_USE_RTS_PTT = "rtty_use_rts_ptt";
+    private static final String PREF_RTTY_US_TTY = "rtty_us_tty";
 
     private boolean isInitialLoading = false;
 
@@ -149,7 +150,7 @@ public class EcranRttyDroid {
     private volatile boolean folosesteDiddle = true; // Emisie caractere de umplutură în idle
     private volatile boolean folosesteRtsPtPtt = false;
     private CheckBox cbDiddle;
-    private Button btnToggleLine, btnMacroCr;
+    private Button btnToggleLine, btnMacroCr, btnVariantaBaudot;
     private LinearLayout rAndSetariAscunsePtt;
 
     // Gestionare vizibilitate setări PTT (Long Press / Auto-hide)
@@ -941,6 +942,24 @@ public class EcranRttyDroid {
             reseteazaTemporizatorSetari(8000);
         });
         rAndSetariAscunsePtt.addView(btnToggleLine);
+
+        // Varianta tabelului Baudot (FIGS): ITA2 sau US-TTY - se aplica si la RX si la TX.
+        btnVariantaBaudot = new Button(context);
+        btnVariantaBaudot.setText(rxBaudotCodec.isUsTty() ? "US-TTY" : "ITA2");
+        btnVariantaBaudot.setBackgroundColor(Color.parseColor("#455A64"));
+        btnVariantaBaudot.setTextColor(Color.WHITE);
+        btnVariantaBaudot.setTextSize(13);
+        btnVariantaBaudot.setPadding(24, 0, 24, 0);
+        LinearLayout.LayoutParams pBtnBaudot = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, 90);
+        pBtnBaudot.setMargins(20, 0, 0, 0);
+        btnVariantaBaudot.setLayoutParams(pBtnBaudot);
+        btnVariantaBaudot.setOnClickListener(v -> {
+            aplicaVariantaBaudot(!rxBaudotCodec.isUsTty());
+            salveazaSetareRtty(PREF_RTTY_US_TTY, rxBaudotCodec.isUsTty());
+            reseteazaTemporizatorSetari(8000);
+        });
+        rAndSetariAscunsePtt.addView(btnVariantaBaudot);
         llBottomOperare.addView(rAndSetariAscunsePtt);
 
         // CAMP EDITARE FSK (multi-line)
@@ -1664,6 +1683,12 @@ public class EcranRttyDroid {
         editor.apply();
     }
 
+    private void aplicaVariantaBaudot(boolean usTty) {
+        rxBaudotCodec.setUsTty(usTty);
+        txBaudotCodec.setUsTty(usTty);
+        if (btnVariantaBaudot != null) btnVariantaBaudot.setText(usTty ? "US-TTY" : "ITA2");
+    }
+
     private void incarcaSetariRtty() {
         isInitialLoading = true;
         SharedPreferences prefs = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
@@ -1677,6 +1702,7 @@ public class EcranRttyDroid {
         demod.snrGatingK = 1.0 + snrGKProgress * (2.0 / 20.0);
 
         folosesteRtsPtPtt = prefs.getBoolean(PREF_RTTY_USE_RTS_PTT, false);
+        aplicaVariantaBaudot(prefs.getBoolean(PREF_RTTY_US_TTY, false));
 
         // Actualizăm UI
         if (btnDnr != null) {

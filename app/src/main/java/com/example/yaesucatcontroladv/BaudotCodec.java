@@ -21,23 +21,50 @@ public class BaudotCodec {
             '\0', '3', '\n', '-', ' ', '\'', '8', '7', '\n', '4', '4', '\u0007', ',', '!', ':', '(',
             '5', '+', ')', '2', '#', '6', '0', '1', '9', '?', '&', '\0', '.', '/', ';', '\0'
     };
+    /**
+     * Varianta US-TTY (folosita de multe statii americane, ex. W6IWI): fata de tabelul de mai
+     * sus difera doar in FIGS - S = BELL, J = apostrof, Z = ghilimele, D = $.
+     */
+    public static final char[] US_TTY_FIGS_MAP = {
+            '\0', '3', '\n', '-', ' ', '\u0007', '8', '7', '\n', '$', '4', '\'', ',', '!', ':', '(',
+            '5', '"', ')', '2', '#', '6', '0', '1', '9', '?', '&', '\0', '.', '/', ';', '\0'
+    };
+
     private static final int[] CHAR_TO_BAUDOT_CODE = new int[256];
     private static final boolean[] CHAR_IS_FIGS = new boolean[256];
+    private static final int[] CHAR_TO_BAUDOT_CODE_US = new int[256];
+    private static final boolean[] CHAR_IS_FIGS_US = new boolean[256];
 
     static {
+        construiesteTabelEmisie(ITA2_FIGS_MAP, CHAR_TO_BAUDOT_CODE, CHAR_IS_FIGS);
+        construiesteTabelEmisie(US_TTY_FIGS_MAP, CHAR_TO_BAUDOT_CODE_US, CHAR_IS_FIGS_US);
+    }
+
+    private static void construiesteTabelEmisie(char[] figsMap, int[] coduri, boolean[] esteFigs) {
         for (int i = 0; i < 32; i++) {
             char l = ITA2_LTRS_MAP[i];
-            if (l != '\0' && l != '\n') { CHAR_TO_BAUDOT_CODE[l] = i; CHAR_IS_FIGS[l] = false; }
-            char f = ITA2_FIGS_MAP[i];
-            if (f != '\0' && f != '\n' && f != '\u0007') { CHAR_TO_BAUDOT_CODE[f] = i; CHAR_IS_FIGS[f] = true; }
+            if (l != '\0' && l != '\n') { coduri[l] = i; esteFigs[l] = false; }
+            char f = figsMap[i];
+            if (f != '\0' && f != '\n' && f != '\u0007') { coduri[f] = i; esteFigs[f] = true; }
         }
-        CHAR_TO_BAUDOT_CODE[' '] = 4;  CHAR_IS_FIGS[' '] = false;
-        CHAR_TO_BAUDOT_CODE['\n'] = 2; CHAR_IS_FIGS['\n'] = false;
-        CHAR_TO_BAUDOT_CODE['\r'] = 8; CHAR_IS_FIGS['\r'] = false;
+        coduri[' '] = 4;  esteFigs[' '] = false;
+        coduri['\n'] = 2; esteFigs['\n'] = false;
+        coduri['\r'] = 8; esteFigs['\r'] = false;
     }
 
     /** Starea curenta LTRS('L')/FIGS('F') a acestei instante (RX sau TX, independente). */
     private char shift = 'L';
+
+    /** false = tabelul ITA2 de mai sus, true = US-TTY. */
+    private volatile boolean usTty = false;
+
+    public boolean isUsTty() {
+        return usTty;
+    }
+
+    public void setUsTty(boolean usTty) {
+        this.usTty = usTty;
+    }
 
     public char getShift() {
         return shift;
@@ -48,12 +75,12 @@ public class BaudotCodec {
         shift = 'L';
     }
 
-    public static boolean esteFigs(char c) {
-        return CHAR_IS_FIGS[c];
+    private boolean esteFigs(char c) {
+        return c < 256 && (usTty ? CHAR_IS_FIGS_US : CHAR_IS_FIGS)[c];
     }
 
-    public static int codBaudotPentru(char c) {
-        return CHAR_TO_BAUDOT_CODE[c];
+    private int codBaudotPentru(char c) {
+        return c < 256 ? (usTty ? CHAR_TO_BAUDOT_CODE_US : CHAR_TO_BAUDOT_CODE)[c] : 0;
     }
 
     /**
@@ -65,7 +92,7 @@ public class BaudotCodec {
         if (code == 0x1F) { shift = 'L'; return '\0'; }
         if (code == 0x1B) { shift = 'F'; return '\0'; }
         if (code == 0x04) { shift = 'L'; } // spatiul reseteaza mereu la LTRS (comportament original pastrat)
-        return (shift == 'L') ? ITA2_LTRS_MAP[code] : ITA2_FIGS_MAP[code];
+        return (shift == 'L') ? ITA2_LTRS_MAP[code] : (usTty ? US_TTY_FIGS_MAP : ITA2_FIGS_MAP)[code];
     }
 
     /**
