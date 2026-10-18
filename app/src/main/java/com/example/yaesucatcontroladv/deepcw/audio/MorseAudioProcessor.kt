@@ -178,6 +178,7 @@ class MorseAudioProcessor(private val context: Context) {
     // ---- Buffere audio ----
     private val pendingSamples = PendingSamples()
     private val pileupRing = RingBuffer(PILEUP_WINDOW_S * SAMPLE_RATE)
+    private val toneHistory = RingBuffer(TONE_HISTORY_S * SAMPLE_RATE)
     private val waterfallChannel = Channel<FloatArray>(
         capacity = 32,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
@@ -209,6 +210,7 @@ class MorseAudioProcessor(private val context: Context) {
                 DecoderMode.NORMAL -> pendingSamples.append(processedChunk)
                 DecoderMode.PILEUP -> pileupRing.write(processedChunk)
             }
+            toneHistory.write(processedChunk)
             waterfallChannel.trySend(processedChunk)
         }
     }
@@ -225,6 +227,14 @@ class MorseAudioProcessor(private val context: Context) {
      * textul deja transcris. Aceeasi sursa pe care o citeste si streamingLoop la fiecare tur.
      */
     fun snapshotPendingAudio(): FloatArray = pendingSamples.snapshot().first
+
+    /**
+     * Ultimele TONE_HISTORY_S secunde de audio, in ordine cronologica - sursa butonului
+     * "Detecteaza tonul". Spre deosebire de bufferul "pending" (golit la fiecare cuvant
+     * confirmat si la fiecare reacordare), istoricul asta nu e afectat de decodare, deci
+     * contine si semnalul de dinaintea ultimei pauze a stației.
+     */
+    fun snapshotRecentAudio(): FloatArray = toneHistory.snapshotFilled()
 
     fun getWaterfallMinFreqHz(): Int =
         if (mode == DecoderMode.PILEUP) PILEUP_MIN_FREQ_HZ else Constants.MIN_FREQ_HZ
@@ -382,6 +392,7 @@ class MorseAudioProcessor(private val context: Context) {
 
                 pendingSamples.clear()
                 pileupRing.clear()
+                toneHistory.clear()
 
                 mainDecoder.release()
                 cwDenoiser.release()
@@ -944,13 +955,24 @@ class MorseAudioProcessor(private val context: Context) {
         private var writeIndex = 0
         private var version = 0L
 
+        /** Cate esantioane reale contine bufferul (restul e inca zero de la creare/clear). */
+        private var filled = 0
+
         @Synchronized
         fun write(chunk: FloatArray) {
             for (sample in chunk) {
                 data[writeIndex] = sample
                 writeIndex = (writeIndex + 1) % data.size
             }
+            filled = min(data.size, filled + chunk.size)
             version++
+        }
+
+        /** Doar esantioanele scrise efectiv, cele mai vechi primele. */
+        @Synchronized
+        fun snapshotFilled(): FloatArray {
+            val start = (writeIndex - filled + data.size) % data.size
+            return FloatArray(filled) { data[(start + it) % data.size] }
         }
 
         @Synchronized
@@ -964,6 +986,7 @@ class MorseAudioProcessor(private val context: Context) {
         fun clear() {
             data.fill(0f)
             writeIndex = 0
+            filled = 0
             version++
         }
     }
@@ -986,6 +1009,9 @@ class MorseAudioProcessor(private val context: Context) {
         const val MIN_CONFIRMED_S = 2
         const val ANALYSIS_MIN_INTERVAL_MS = 1000L
         const val POLL_INTERVAL_MS = 50L
+
+        /** Istoricul audio analizat de "Detecteaza tonul". */
+        const val TONE_HISTORY_S = 10
 
         val MAX_SEGMENT_SAMPLES = MAX_SEGMENT_S * SAMPLE_RATE
         val TAIL_GUARD_SAMPLES = (TAIL_GUARD_S * SAMPLE_RATE).roundToInt()

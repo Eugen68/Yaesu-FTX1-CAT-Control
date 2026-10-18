@@ -37,9 +37,9 @@ object ToneDetector {
     /**
      * Toate varfurile tip-ton din [minFreqHz, maxFreqHz] care trec pragul SNR/proeminenta
      * peste zgomotul lor local, sortate de la cel mai puternic (SNR maxim) - lista goala daca
-     * audio-ul e prea scurt pentru un cadru FFT intreg. Daca nimic nu trece pragul (semnal
-     * slab sau plat), intoarce un singur candidat de rezerva la bin-ul cu energia bruta
-     * maxima, ca apelantul sa primeasca mereu o presupunere cat de cat, nu nimic.
+     * audio-ul e prea scurt pentru un cadru FFT intreg sau daca nimic nu trece pragul. Fara
+     * candidat de rezerva: bin-ul cu energia bruta maxima dintr-un spectru fara ton e doar
+     * zgomot, iar acordarea pe el muta decodorul de pe semnalul vizibil intr-un loc gol.
      */
     @JvmStatic
     fun detectAllTonesHz(
@@ -105,19 +105,6 @@ object ToneDetector {
         }
 
         candidates.sortByDescending { it.snrDb }
-
-        if (candidates.isEmpty()) {
-            var fallbackIndex = 0
-            var fallbackEnergy = binEnergy[0]
-            for (i in 1 until binEnergy.size) {
-                if (binEnergy[i] > fallbackEnergy) {
-                    fallbackEnergy = binEnergy[i]
-                    fallbackIndex = i
-                }
-            }
-            candidates.add(ToneCandidate(((startBin + fallbackIndex) * binResolution).toFloat(), snr[fallbackIndex].toFloat()))
-        }
-
         return candidates
     }
 

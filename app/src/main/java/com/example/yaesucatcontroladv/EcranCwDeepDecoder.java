@@ -6,6 +6,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -49,6 +50,11 @@ public class EcranCwDeepDecoder {
     // intre timp, trece la urmatorul candidat gasit (dupa putere), nu re-gaseste mereu pe
     // acelasi. -1 = inca nicio detectie in aceasta sesiune. Vezi detecteazaTonul().
     private int ultimulTonDetectatHz = -1;
+    private long ultimaDetectareLaMs = 0L;
+
+    private static final int TONE_SEARCH_MIN_HZ = 200;
+    private static final int TONE_MIN_AUDIO_SAMPLES = Constants.SAMPLE_RATE; // 1 s
+    private static final long TONE_CYCLE_WINDOW_MS = 4000L;
     private SeekBar sbLevel, sbGain;
     private CheckBox cbLockDenoiseControls;
     private Spinner spWidth;
@@ -445,28 +451,43 @@ public class EcranCwDeepDecoder {
      * pentru cautarea manuala pe waterfall. Port al DetectToneButton_Click din aplicatia
      * Windows sora, simplificat: acolo trebuie evitate benzile ALTOR canale active
      * (multi-banda); aici exista un singur canal tunat, deci nu e nevoie de acea logica de
-     * coliziune. Apasat din nou (fara alta actiune intre timp), trece la urmatorul candidat
-     * gasit dupa putere, revenind la primul cand lista se epuizeaza - vezi ultimulTonDetectatHz.
+     * coliziune. Apasat din nou in TONE_CYCLE_WINDOW_MS (fara alta acordare intre timp), trece
+     * la urmatorul candidat gasit dupa putere, revenind la primul cand lista se epuizeaza -
+     * vezi ultimulTonDetectatHz. O apasare mai tarzie porneste iar de la cel mai puternic ton.
      */
     private void detecteazaTonul() {
         if (processor.getMode() != DecoderMode.NORMAL) return;
 
-        float[] snapshot = processor.snapshotPendingAudio();
-        List<ToneCandidate> candidati = ToneDetector.detectAllTonesHz(
-                snapshot,
-                (double) Constants.SAMPLE_RATE,
-                (double) Constants.DECODABLE_MIN_FREQ_HZ,
-                (double) Constants.DECODABLE_MAX_FREQ_HZ,
-                Constants.FFT_LENGTH,
-                Constants.HOP_LENGTH);
-
-        if (candidati.isEmpty()) {
+        // Istoricul audio al procesorului, nu bufferul "pending": acela e golit la fiecare
+        // cuvant confirmat si la fiecare reacordare, deci ar contine adesea doar o pauza.
+        float[] snapshot = processor.snapshotRecentAudio();
+        if (snapshot.length < TONE_MIN_AUDIO_SAMPLES) {
             Toast.makeText(context, "Nu am destul audio inca pentru detectare - mai asteapta putin.", Toast.LENGTH_SHORT).show();
             return;
         }
 
+        // Toata zona afisata pe waterfall (minus 100-200 Hz, unde stau armonicele retelei).
+        List<ToneCandidate> candidati = ToneDetector.detectAllTonesHz(
+                snapshot,
+                (double) Constants.SAMPLE_RATE,
+                (double) TONE_SEARCH_MIN_HZ,
+                (double) Constants.MAX_FREQ_HZ,
+                Constants.FFT_LENGTH,
+                Constants.HOP_LENGTH);
+
+        if (candidati.isEmpty()) {
+            Toast.makeText(context, "Nu am gasit niciun ton clar - acordeaza manual cu tap pe waterfall.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        long acum = SystemClock.elapsedRealtime();
+        boolean continuaCiclul = ultimulTonDetectatHz >= 0
+                && ultimulTonDetectatHz == processor.getFilterFreqHz()
+                && acum - ultimaDetectareLaMs < TONE_CYCLE_WINDOW_MS;
+        ultimaDetectareLaMs = acum;
+
         int indexAnterior = -1;
-        if (ultimulTonDetectatHz >= 0) {
+        if (continuaCiclul) {
             for (int i = 0; i < candidati.size(); i++) {
                 if (Math.abs(candidati.get(i).getFreqHz() - ultimulTonDetectatHz) < 1.0) {
                     indexAnterior = i;
