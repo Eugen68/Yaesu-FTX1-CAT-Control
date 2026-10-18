@@ -77,6 +77,30 @@ public class RttyDemodulatorTest {
         }
     }
 
+    /** Fading selectiv lent (0.2 Hz) la 10 dB: ATC trebuie sa repare ce strica fadingul. */
+    @Test
+    public void fadingSelectivCuAtc() {
+        double faraAtc = 0, cuAtc = 0;
+        for (int seed = 1; seed <= 3; seed++) {
+            short[] a = genereaza(TEXT + TEXT + TEXT, 10.0, seed, 0, BAUD, 0.2);
+            faraAtc += cer(TEXT + TEXT + TEXT, decodeaza(a, false, d -> { })) / 3;
+            cuAtc += cer(TEXT + TEXT + TEXT, decodeaza(a, false, d -> d.folosesteAtc = true)) / 3;
+        }
+        assertTrue("CER fading 0.2 Hz cu ATC = " + cuAtc, cuAtc < 0.03);
+        assertTrue("ATC (" + cuAtc + ") trebuie sa bata decizia simpla (" + faraAtc + ")", cuAtc < faraAtc);
+    }
+
+    /** Fading selectiv rapid (1 Hz) la 20 dB - prinde regresii la constantele anvelopei ATC. */
+    @Test
+    public void fadingRapidCuAtc() {
+        double cer = 0;
+        for (int seed = 1; seed <= 3; seed++) {
+            short[] a = genereaza(TEXT + TEXT + TEXT, 20.0, seed, 0, BAUD, 1.0);
+            cer += cer(TEXT + TEXT + TEXT, decodeaza(a, false, d -> d.folosesteAtc = true)) / 3;
+        }
+        assertTrue("CER fading 1 Hz cu ATC = " + cer, cer < 0.10);
+    }
+
     /** Baleiaj de SNR: afiseaza CER-ul (medie pe 3 seed-uri) pentru ambii detectori. */
     @Test
     public void raportSnr() {
@@ -96,7 +120,11 @@ public class RttyDemodulatorTest {
     // ============================================================
 
     private double cer(String decodat) {
-        return (double) levenshtein(normalizeaza(TEXT), normalizeaza(decodat)) / normalizeaza(TEXT).length();
+        return cer(TEXT, decodat);
+    }
+
+    private static double cer(String asteptat, String decodat) {
+        return (double) levenshtein(normalizeaza(asteptat), normalizeaza(decodat)) / normalizeaza(asteptat).length();
     }
 
     private static String normalizeaza(String s) {
@@ -142,8 +170,19 @@ public class RttyDemodulatorTest {
         return out.toString();
     }
 
-    /** AFSK RTTY cu faza continua: 0.5 s idle Mark, cateva LTRS, textul, 0.5 s idle Mark. */
     static short[] genereaza(String text, double snrDb, long seed, double offsetHz, double baud) {
+        return genereaza(text, snrDb, seed, offsetHz, baud, 0);
+    }
+
+    /**
+     * AFSK RTTY cu faza continua: 0.5 s idle Mark, cateva LTRS, textul, 0.5 s idle Mark.
+     *
+     * fadingHz > 0: fading selectiv - fiecare ton trece printr-un canal Rayleigh propriu,
+     * independent de al celuilalt (latime Doppler fadingHz), cu puterea medie 1, deci SNR-ul
+     * ramane cel mediu. Pe HF, Mark si Space (170 Hz distanta) se sting de regula separat.
+     */
+    static short[] genereaza(String text, double snrDb, long seed, double offsetHz, double baud,
+                             double fadingHz) {
         StringBuilder biti = new StringBuilder(); // '1' = Mark, '0' = Space, fiecare = 1/2 bit
         BaudotCodec tx = new BaudotCodec();
         for (int i = 0; i < 46; i++) biti.append("11"); // ~0.5 s idle Mark
@@ -158,12 +197,16 @@ public class RttyDemodulatorTest {
         int n = (int) Math.ceil(biti.length() * samplesPerHalfBit);
         double amplitudine = 0.3;
         double[] semnal = new double[n];
+        double[] castigMark = fadingHz > 0 ? castigRayleigh(n, fadingHz, seed * 31 + 7) : null;
+        double[] castigSpace = fadingHz > 0 ? castigRayleigh(n, fadingHz, seed * 31 + 11) : null;
         double faza = 0;
         for (int i = 0; i < n; i++) {
             int idx = Math.min(biti.length() - 1, (int) (i / samplesPerHalfBit));
-            double f = (biti.charAt(idx) == '1' ? MARK_HZ : MARK_HZ + RttyDemodulator.SHIFT_HZ) + offsetHz;
+            boolean mark = biti.charAt(idx) == '1';
+            double f = (mark ? MARK_HZ : MARK_HZ + RttyDemodulator.SHIFT_HZ) + offsetHz;
             faza += 2 * Math.PI * f / FS;
-            semnal[i] = amplitudine * Math.sin(faza);
+            double castig = castigMark == null ? 1.0 : (mark ? castigMark[i] : castigSpace[i]);
+            semnal[i] = amplitudine * castig * Math.sin(faza);
         }
 
         if (!Double.isInfinite(snrDb)) {
@@ -190,6 +233,35 @@ public class RttyDemodulatorTest {
             pcm[i] = (short) Math.max(-32768, Math.min(32767, Math.round(semnal[i] * 32767)));
         }
         return pcm;
+    }
+
+    /**
+     * |g(t)| al unui canal Rayleigh: zgomot gaussian complex trecut printr-un trece-jos la
+     * fadingHz (calculat la 200 Hz si interpolat liniar), normalizat la putere medie 1.
+     */
+    private static double[] castigRayleigh(int n, double fadingHz, long seed) {
+        double rataControl = 200.0;
+        int m = (int) Math.ceil(n / (double) FS * rataControl) + 2;
+        Random rnd = new Random(seed);
+        Biquad lpRe = Biquad.lowpass(fadingHz, rataControl), lpIm = Biquad.lowpass(fadingHz, rataControl);
+        double[] mag = new double[m];
+        // incalzire, ca filtrul sa iasa din tranzitoriul de pornire
+        for (int k = 0; k < 2000; k++) { lpRe.proceseaza(rnd.nextGaussian()); lpIm.proceseaza(rnd.nextGaussian()); }
+        double putere = 0;
+        for (int k = 0; k < m; k++) {
+            double re = lpRe.proceseaza(rnd.nextGaussian()), im = lpIm.proceseaza(rnd.nextGaussian());
+            mag[k] = Math.sqrt(re * re + im * im);
+            putere += mag[k] * mag[k];
+        }
+        double norm = Math.sqrt(putere / m);
+        double[] g = new double[n];
+        for (int i = 0; i < n; i++) {
+            double t = i / (double) FS * rataControl;
+            int k = (int) t;
+            double fr = t - k;
+            g[i] = (mag[k] * (1 - fr) + mag[k + 1] * fr) / norm;
+        }
+        return g;
     }
 
     /** Start (1 bit Space), 5 biti de date LSB-first, stop 1.5 biti Mark - in jumatati de bit. */

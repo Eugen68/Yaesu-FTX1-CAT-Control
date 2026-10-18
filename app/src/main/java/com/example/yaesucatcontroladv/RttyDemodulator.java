@@ -67,7 +67,24 @@ public class RttyDemodulator {
      * gresit cu +/-15 Hz sau baud 45.0/45.9. Testat si 30/60/90 Hz - mai slab. 0 = dezactivat.
      */
     double lpfDecizieHz = BAUD_RTTY;
-    private final Biquad lpfDecizie = new Biquad();
+    private final Biquad lpfMark = new Biquad();
+    private final Biquad lpfSpace = new Biquad();
+
+    /**
+     * ATC (Automatic Threshold Correction), varianta "optimal ATC" a lui W7AY (cea din fldigi):
+     * urmareste separat anvelopa si podeaua de zgomot a fiecarui ton si pondereaza decizia cu
+     * cat de puternic e fiecare ton acum. La fading selectiv (Mark si Space se sting separat),
+     * diferenta simpla Mark-Space ar fi trasa spre tonul puternic si ar rata bitii tonului slab.
+     *
+     * Masurat (Chebyshev, CER): fading selectiv 0.2 Hz la 10 dB 8.5% -> ~0.5%, la 0 dB
+     * 25% -> ~16%; fading 1 Hz la 20 dB 14.5% -> ~5%. Costul: fara fading, la -3 dB
+     * 0% -> ~2.5%, iar pe inregistrarea reala cu QRN (W6IWI) 34 -> 30 transmisii perfecte
+     * din 60. De aceea e o optiune (ca in fldigi/MMTTY), oprita implicit.
+     * Pe inregistrarea reala cu fading selectiv (W6IWI, 14086 kHz, 95 de transmisii):
+     * 157 -> 104 caractere gresite, 72 -> 73 randuri perfecte. Actioneaza doar pe Chebyshev.
+     */
+    volatile boolean folosesteAtc = false;
+    private double atcMarkEnv, atcSpaceEnv, atcMarkZgomot, atcSpaceZgomot;
 
     // ---- Coeficienti derivati din frecventa ----
     private double qMarkA, qSpaceA;
@@ -321,7 +338,11 @@ public class RttyDemodulator {
         freqErrorFiltrat = 0;
 
         noiseFloor = 1e-9;
-        if (lpfDecizieHz > 0) lpfDecizie.configureazaTreceJos(lpfDecizieHz, sampleRate);
+        if (lpfDecizieHz > 0) {
+            lpfMark.configureazaTreceJos(lpfDecizieHz, sampleRate);
+            lpfSpace.configureazaTreceJos(lpfDecizieHz, sampleRate);
+        }
+        reseteazaAtc();
 
         if (folosesteMatchedFilter) {
             initMatchedFilterTemplates(sampleRate, BAUD_RTTY);
@@ -351,7 +372,9 @@ public class RttyDemodulator {
             nbContorBlankConsecutiv = 0;
             noiseFloor = 1e-9; // Resetam si podeaua de zgomot pentru a recalibra SNR-G
             dnrX1 = 0; dnrX2 = 0; dnrY1 = 0; dnrY2 = 0;
-            lpfDecizie.reseteaza();
+            lpfMark.reseteaza();
+            lpfSpace.reseteaza();
+            reseteazaAtc();
             if (folosesteMatchedFilter && mfBuffer != null) {
                 for (int k = 0; k < mfBuffer.length; k++) mfBuffer[k] = 0;
                 mfBufferPos = 0;
@@ -435,7 +458,15 @@ public class RttyDemodulator {
                 diferentaBruta = magMark - magSpace;
             }
 
-            if (lpfDecizieHz > 0) diferentaBruta = lpfDecizie.proceseaza(diferentaBruta);
+            // Filtrul de decizie se aplica separat pe fiecare ton (liniar, deci fara ATC e
+            // identic cu filtrarea diferentei), ca ATC sa primeasca anvelopele netezite.
+            double markFiltrat = lpfDecizieHz > 0 ? lpfMark.proceseaza(magMark) : magMark;
+            double spaceFiltrat = lpfDecizieHz > 0 ? lpfSpace.proceseaza(magSpace) : magSpace;
+            // ATC doar pe Chebyshev: pe inregistrarea reala cu fading (W6IWI, 14086 kHz) MF + ATC
+            // a scos 36 de randuri perfecte din 95, fata de 55 la MF simplu.
+            diferentaBruta = folosesteAtc && !folosesteMatchedFilter
+                    ? decizieAtc(markFiltrat, spaceFiltrat)
+                    : markFiltrat - spaceFiltrat;
 
             // AFC/PLL
             double newPhaseRe = fazaVectRe * afcRotRe - fazaVectIm * afcRotIm;
@@ -579,6 +610,39 @@ public class RttyDemodulator {
                 }
             }
         }
+    }
+
+    private void reseteazaAtc() {
+        atcMarkEnv = atcSpaceEnv = 0;
+        atcMarkZgomot = atcSpaceZgomot = 0;
+    }
+
+    private static double medieDescrescatoare(double medie, double x, double fereastra) {
+        return medie + (x - medie) / fereastra;
+    }
+
+    /**
+     * Anvelopa: atac rapid (1/4 bit), decadere in 8 biti. Zgomotul: coboara rapid (1/4 bit),
+     * urca lent (48 de biti). fldigi foloseste 16 biti la decadere; in RttyDemodulatorTest,
+     * pe fading selectiv de 1 Hz la 20 dB, 8 biti dau ~5% CER fata de ~14% cu 16, iar la
+     * fading lent (0.2 Hz) sunt la fel. 4 si 2 biti strica semnalele slabe fara fading.
+     */
+    private double decizieAtc(double mark, double space) {
+        double bit = samplesPerBit;
+        atcMarkEnv = medieDescrescatoare(atcMarkEnv, mark, mark > atcMarkEnv ? bit / 4 : bit * 8);
+        atcSpaceEnv = medieDescrescatoare(atcSpaceEnv, space, space > atcSpaceEnv ? bit / 4 : bit * 8);
+        atcMarkZgomot = medieDescrescatoare(atcMarkZgomot, mark, mark < atcMarkZgomot ? bit / 4 : bit * 48);
+        atcSpaceZgomot = medieDescrescatoare(atcSpaceZgomot, space, space < atcSpaceZgomot ? bit / 4 : bit * 48);
+
+        double zgomot = Math.min(atcMarkZgomot, atcSpaceZgomot);
+        double m = Math.max(Math.min(mark, atcMarkEnv), zgomot) - zgomot;
+        double s = Math.max(Math.min(space, atcSpaceEnv), zgomot) - zgomot;
+        double em = Math.max(atcMarkEnv - zgomot, 0);
+        double es = Math.max(atcSpaceEnv - zgomot, 0);
+        double v = m * em - s * es - 0.25 * (em * em - es * es);
+        // Normalizat la unitatea unei amplitudini, ca pragul de Sensibilitate (relativ la
+        // nivelZgomotMediu) sa ramana pe aceeasi scara ca diferenta Mark-Space simpla.
+        return v / Math.max(em + es, 1e-12);
     }
 
     /** Biquad RBJ trece-jos, Q = 1/sqrt(2) (Butterworth de ordin 2). */

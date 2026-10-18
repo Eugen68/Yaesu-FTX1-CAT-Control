@@ -119,6 +119,7 @@ public class EcranRttyDroid {
 
     // SNR Gating - îngheață decizia de bit la energie insuficientă, vezi RttyDemodulator
     private Button btnSnrGate;
+    private Button btnAtc;
     private LinearLayout rAndSliderSnrGate;
     private SeekBar sbSnrGateK;
     private TextView tvSnrGateValoare;
@@ -141,6 +142,7 @@ public class EcranRttyDroid {
     private static final String PREF_RTTY_SNRG_K = "rtty_snrg_k";
     private static final String PREF_RTTY_USE_RTS_PTT = "rtty_use_rts_ptt";
     private static final String PREF_RTTY_US_TTY = "rtty_us_tty";
+    private static final String PREF_RTTY_ATC_ON = "rtty_atc_on";
 
     private boolean isInitialLoading = false;
 
@@ -711,6 +713,29 @@ public class EcranRttyDroid {
             }
         });
         llTrkSiNb.addView(btnSnrGate);
+        pBtnSnrG.setMargins(2, 0, 2, 0);
+
+        // ATC (fading selectiv / QSB) - vezi RttyDemodulator.folosesteAtc. Simplu click, fara
+        // setari ascunse (deci nesubliniat).
+        btnAtc = new Button(context);
+        btnAtc.setText("ATC");
+        btnAtc.setBackgroundColor(Color.parseColor("#757575"));
+        btnAtc.setTextColor(Color.WHITE);
+        btnAtc.setTypeface(null, Typeface.BOLD);
+        btnAtc.setTextSize(10);
+        btnAtc.setMinHeight(0);
+        btnAtc.setPadding(0, 0, 0, 0);
+        LinearLayout.LayoutParams pBtnAtc = new LinearLayout.LayoutParams(0, inaltimeDnrSnrG, 0.25f);
+        pBtnAtc.setMargins(2, 0, 5, 0);
+        btnAtc.setLayoutParams(pBtnAtc);
+        btnAtc.setOnClickListener(v -> {
+            aplicaAtc(!demod.folosesteAtc);
+            salveazaSetareRtty(PREF_RTTY_ATC_ON, demod.folosesteAtc);
+            Toast.makeText(context, demod.folosesteAtc
+                    ? "ATC pornit (decodor Chebyshev) - pentru QSB / fading selectiv"
+                    : "ATC oprit", Toast.LENGTH_SHORT).show();
+        });
+        llTrkSiNb.addView(btnAtc);
         // Sincronizarea reală de înălțime (SNR-G <-> DNR) se face în
         // sincronizeazaInaltimileButoanelor(), apelată din constructor -
         // acolo așteptăm atașarea la fereastră, nu aici (prea devreme).
@@ -1702,6 +1727,11 @@ public class EcranRttyDroid {
         if (btnVariantaBaudot != null) btnVariantaBaudot.setText(usTty ? "US-TTY" : "ITA2");
     }
 
+    private void aplicaAtc(boolean pornit) {
+        demod.folosesteAtc = pornit;
+        if (btnAtc != null) btnAtc.setBackgroundColor(Color.parseColor(pornit ? "#00897B" : "#757575"));
+    }
+
     private void incarcaSetariRtty() {
         isInitialLoading = true;
         SharedPreferences prefs = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
@@ -1716,6 +1746,7 @@ public class EcranRttyDroid {
 
         folosesteRtsPtPtt = prefs.getBoolean(PREF_RTTY_USE_RTS_PTT, false);
         aplicaVariantaBaudot(prefs.getBoolean(PREF_RTTY_US_TTY, false));
+        aplicaAtc(prefs.getBoolean(PREF_RTTY_ATC_ON, false));
 
         // Actualizăm UI
         if (btnDnr != null) {
