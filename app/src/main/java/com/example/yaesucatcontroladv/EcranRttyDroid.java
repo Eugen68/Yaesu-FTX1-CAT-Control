@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
@@ -551,6 +552,9 @@ public class EcranRttyDroid {
         llTrkSiNb.addView(btnTrackToggle);
 
         btnNoiseBlanker = new Button(context);
+        // Subliniat = are setari ascunse la apasare lunga (flag pe Paint, nu in text,
+        // ca sa ramana si cand textul butonului se schimba).
+        btnNoiseBlanker.setPaintFlags(btnNoiseBlanker.getPaintFlags() | Paint.UNDERLINE_TEXT_FLAG);
         btnNoiseBlanker.setText("NB");
         btnNoiseBlanker.setBackgroundColor(Color.parseColor("#757575"));
         btnNoiseBlanker.setTextColor(Color.WHITE);
@@ -605,6 +609,9 @@ public class EcranRttyDroid {
         final int inaltimeDnrSnrG = 110;
 
         btnDnr = new Button(context);
+        // Subliniat = are setari ascunse la apasare lunga (flag pe Paint, nu in text,
+        // ca sa ramana si cand textul butonului se schimba).
+        btnDnr.setPaintFlags(btnDnr.getPaintFlags() | Paint.UNDERLINE_TEXT_FLAG);
         btnDnr.setText("DNR");
         btnDnr.setBackgroundColor(Color.parseColor("#757575"));
         btnDnr.setTextColor(Color.WHITE);
@@ -654,6 +661,9 @@ public class EcranRttyDroid {
         llTrkSiNb.addView(btnDnr);
 
         btnSnrGate = new Button(context);
+        // Subliniat = are setari ascunse la apasare lunga (flag pe Paint, nu in text,
+        // ca sa ramana si cand textul butonului se schimba).
+        btnSnrGate.setPaintFlags(btnSnrGate.getPaintFlags() | Paint.UNDERLINE_TEXT_FLAG);
         btnSnrGate.setText("SNR-G");
         btnSnrGate.setBackgroundColor(Color.parseColor("#757575"));
         btnSnrGate.setTextColor(Color.WHITE);
@@ -1047,6 +1057,9 @@ public class EcranRttyDroid {
         });
 
         btnRttyPttToggle = new Button(context);
+        // Subliniat = are setari ascunse la apasare lunga (flag pe Paint, nu in text,
+        // ca sa ramana si cand textul butonului se schimba).
+        btnRttyPttToggle.setPaintFlags(btnRttyPttToggle.getPaintFlags() | Paint.UNDERLINE_TEXT_FLAG);
         btnRttyPttToggle.setText("PTT");
         btnRttyPttToggle.setBackgroundColor(Color.parseColor("#424242"));
         btnRttyPttToggle.setTextColor(Color.WHITE);

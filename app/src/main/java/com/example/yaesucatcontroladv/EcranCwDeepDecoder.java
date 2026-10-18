@@ -3,6 +3,7 @@ package com.example.yaesucatcontroladv;
 import android.app.Activity;
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
@@ -201,6 +202,9 @@ public class EcranCwDeepDecoder {
         rControls.addView(spacerMode);
 
         btnDenoiseToggle = new Button(context);
+        // Subliniat = are setari ascunse la apasare lunga (flag pe Paint, nu in text,
+        // ca sa ramana si cand textul butonului se schimba).
+        btnDenoiseToggle.setPaintFlags(btnDenoiseToggle.getPaintFlags() | Paint.UNDERLINE_TEXT_FLAG);
         btnDenoiseToggle.setText("DENOISE: OFF");
         btnDenoiseToggle.setBackgroundColor(Color.parseColor("#37474F"));
         btnDenoiseToggle.setTextColor(Color.WHITE);

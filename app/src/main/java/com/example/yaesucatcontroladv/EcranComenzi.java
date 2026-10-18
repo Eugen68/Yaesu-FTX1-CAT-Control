@@ -2,6 +2,7 @@ package com.example.yaesucatcontroladv;
 
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
@@ -219,6 +220,9 @@ public class EcranComenzi {
         rListen.addView(spacerListen);
 
         btnListenDenoiseToggle = new Button(context);
+        // Subliniat = are setari ascunse la apasare lunga (flag pe Paint, nu in text,
+        // ca sa ramana si cand textul butonului se schimba).
+        btnListenDenoiseToggle.setPaintFlags(btnListenDenoiseToggle.getPaintFlags() | Paint.UNDERLINE_TEXT_FLAG);
         btnListenDenoiseToggle.setText("DENOISE: OFF");
         btnListenDenoiseToggle.setBackgroundColor(Color.parseColor("#37474F"));
         btnListenDenoiseToggle.setTextColor(Color.WHITE);
@@ -383,6 +387,9 @@ public class EcranComenzi {
 
         // --- BUTON PTT (doar mod voce LSB/USB, hold-to-talk prin RTS/DTR) ---
         btnPtt = new Button(context);
+        // Subliniat = are setari ascunse la apasare lunga (flag pe Paint, nu in text,
+        // ca sa ramana si cand textul butonului se schimba).
+        btnPtt.setPaintFlags(btnPtt.getPaintFlags() | Paint.UNDERLINE_TEXT_FLAG);
         btnPtt.setText("PTT");
         btnPtt.setBackgroundColor(Color.parseColor("#757575"));
         btnPtt.setTextColor(Color.WHITE);
@@ -395,7 +402,7 @@ public class EcranComenzi {
         btnPtt.setVisibility(View.GONE);
         llCAT.addView(btnPtt);
 
-        // --- PANOU SETARI PTT (long-press 5s pe PTT il arata, se ascunde singur dupa 3s) ---
+        // --- PANOU SETARI PTT (long-press 3s pe PTT il arata, ca la celelalte butoane subliniate, se ascunde singur dupa 3s) ---
         llPttSettings = new LinearLayout(context);
         llPttSettings.setOrientation(LinearLayout.HORIZONTAL);
         llPttSettings.setGravity(Gravity.CENTER_VERTICAL);
@@ -462,7 +469,7 @@ public class EcranComenzi {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
                     pttSettingsAfisatePrinHold = false;
-                    handlerPttSettings2.postDelayed(runnableAratareSetariPtt, 5000);
+                    handlerPttSettings2.postDelayed(runnableAratareSetariPtt, 3000);
                     if (!pttToggleMode) setPttActive(true);
                     return true;
                 case MotionEvent.ACTION_UP:
