@@ -84,33 +84,20 @@ public class EcranRttyDroid {
 
     // Stari receptie
     private boolean decodareRttyActiva = false;
-    private boolean regimReverseSoftware = false;
     private short[] miniBufferFft = new short[512];
 
-    // Coeficienti
-    private double frecventaTunedBaza = 2125.0;
-    private double qMarkA, qSpaceA;
-    private double afcRotRe = 1.0, afcRotIm = 0.0; // increment de rotatie per esantion: cos(w), sin(w)
-    private double sampleRateFiltre = 48000.0;
-    private double rCheb = 0.992;
-    private volatile double pragSensibilitate = 0.05;
-    private int modUrmarireFrecventa = 0;
+    // REFACTORIZARE: tot lantul DSP de receptie (filtre, AFC, clock recovery, framing) si
+    // configurarea lui sunt in RttyDemodulator (fara dependente Android, testabil cu semnal
+    // sintetic). Ecranul pastreaza doar captura audio, waterfall-ul si afisarea.
+    private final RttyDemodulator demod = new RttyDemodulator();
 
-    // FUNCTIONALITATE NOUA: Noise Blanker (NB) - suprima pulsurile scurte de zgomot
-    // impulsiv (QRN) direct in eșantioanele audio brute, INAINTE de AFC/Chebyshev/
-    // matched filter, ca tot lantul de decodare sa beneficieze de intrare mai curata.
-    private volatile boolean folosesteNoiseBlanker = false;
-    private volatile double nbFactorPrag = 5.0; // cat de mult peste media recenta declanseaza blanking-ul
+    // Noise Blanker (NB) - vezi RttyDemodulator
     private Button btnNoiseBlanker;
     private LinearLayout rAndSliderNoiseBlanker;
     private SeekBar sbNoiseBlanker;
     private TextView tvNoiseBlankerValoare;
 
-    // DNR (Digital Noise Reduction) - filtru bandpass biquad
-    private volatile boolean folosesteDnr = false;
-    private volatile double latimeDnrHz = 600.0;
-    private double dnrB0 = 1.0, dnrB1 = 0.0, dnrB2 = 0.0;
-    private double dnrA1 = 0.0, dnrA2 = 0.0;
+    // DNR (Digital Noise Reduction) - filtru bandpass biquad, vezi RttyDemodulator
     private Button btnDnr;
     private LinearLayout rAndSliderDnr;
     private SeekBar sbDnrLatime;
@@ -129,9 +116,7 @@ public class EcranRttyDroid {
     // timp decodorul Matched Filter e activ.
     private static final double DNR_LATIME_MIN_HZ_MATCHED_FILTER = 400.0;
 
-    // SNR Gating - îngheață decizia de bit la energie insuficientă
-    private volatile boolean folosesteSnrGating = false;
-    private volatile double snrGatingK = 1.5;
+    // SNR Gating - îngheață decizia de bit la energie insuficientă, vezi RttyDemodulator
     private Button btnSnrGate;
     private LinearLayout rAndSliderSnrGate;
     private SeekBar sbSnrGateK;
@@ -140,38 +125,13 @@ public class EcranRttyDroid {
     // OPTIMIZARE: constanta de clasa (nu doar variabila locala in threadul de decodare),
     // ca sa poata fi folosita si de slider-ul "Latime Filtru" pentru a lega podeaua
     // minima de banda de rata reala de simbol (evitarea ISI la benzi prea inguste).
-    private static final double BAUD_RTTY = 45.45;
+    private static final double BAUD_RTTY = RttyDemodulator.BAUD_RTTY;
     private static final long BIT_DURATION_NANOS = (long) ((1.0 / BAUD_RTTY) * 1_000_000_000L); // ~22.002.200 ns
     private static final double RCHEB_MIN = 0.985; // capatul larg al slider-ului (~115 Hz)
 
-    // Matched Filter & SNR
-    // OPTIMIZARE: nu mai pastram sabloanele sin/cos pe toata fereastra (O(N) per esantion),
-    // ci doar constantele de rotatie pentru o corelatie glisanta recursiva O(1) per esantion
-    // (echivalent matematic cu corelatia completa pe fereastra, actualizat incremental).
-    private volatile boolean folosesteMatchedFilter = false;
-    // CIZELARE: punctul de esantionare al bitului pentru Matched Filter (fractie din
-    // durata unui bit, la care se face citirea) - vezi explicatia detaliata din
-    // bucla de decodare RTTY, langa PRAG_CONFIRMARE_START. Camp de clasa (nu constanta
-    // locala in thread-ul audio) tocmai ca sa poata fi ajustat live din UI (slider-ul
-    // "Latime Filtru", repurpozat pentru modul MF - vezi actualizeazaStareSliderLatime()).
-    private double[] mfBuffer; // buffer circular cu ultimele mfSamplesPerBit esantioane (pt. x_iesit)
-    private int mfBufferPos = 0;
-    private int mfSamplesPerBit = 1056;
-
-    // psi = e^{-j*w} (rotatia aplicata la fiecare pas nou)
-    private double mfMarkRotRe, mfMarkRotIm;
-    private double mfSpaceRotRe, mfSpaceRotIm;
-    // PsiN = e^{+j*w*N} (constanta legata de lungimea ferestrei N = mfSamplesPerBit)
-    private double mfMarkPowNRe, mfMarkPowNIm;
-    private double mfSpacePowNRe, mfSpacePowNIm;
-    // Acumulatorul complex curent al corelatiei glisante (echivalentul sumei S(n))
-    private double mfMarkAccRe, mfMarkAccIm;
-    private double mfSpaceAccRe, mfSpaceAccIm;
-    private String snrTextLive = "--.- dB";
-    private double noiseFloor = 1e-9;
+    private volatile String snrTextLive = "--.- dB";
 
     private final short[] vectorIstoricPeak = new short[512];
-    private volatile boolean solicitaResetFiltre = false;
 
     // Chei SharedPreferences pentru RTTY
     private static final String PREF_RTTY_DNR_ON = "rtty_dnr_on";
@@ -236,26 +196,6 @@ public class EcranRttyDroid {
         incarcaSetariRtty();
     }
 
-    private void initMatchedFilterTemplates(int sampleRate, double baud) {
-        mfSamplesPerBit = (int) Math.round(sampleRate / baud);
-        mfBuffer = new double[mfSamplesPerBit];
-        mfBufferPos = 0;
-        mfMarkAccRe = mfMarkAccIm = 0;
-        mfSpaceAccRe = mfSpaceAccIm = 0;
-
-        double fMark = frecventaTunedBaza;
-        double fSpace = frecventaTunedBaza + (regimReverseSoftware ? -170.0 : 170.0);
-        setareaConstantelorMF(fMark, fSpace, sampleRate);
-    }
-
-    /**
-     * OPTIMIZARE: in loc sa recalculam N valori sin/cos (O(N)) de fiecare data cand se
-     * schimba frecventa (ex: din AFC, la fiecare fractiune de secunda), recalculam doar
-     * cateva constante de rotatie (O(1)). Acumulatorul corelatiei glisante (mfMarkAccRe/Im,
-     * mfSpaceAccRe/Im) NU se reseteaza aici - continua sa evolueze lin sub noua rotatie,
-     * la fel cum bufferul audio (mfBuffer) nu e resetat la o simpla derivare de frecventa
-     * din AFC (se reseteaza doar explicit, la solicitaResetFiltre).
-     */
     /**
      * OPTIMIZARE 1 (Varianta A): slider-ul "Latime Filtru" controleaza rCheb, folosit
      * doar de rezonatorul Chebyshev. In modul Matched Filter, rCheb nu are niciun efect
@@ -271,60 +211,15 @@ public class EcranRttyDroid {
      */
     private void actualizeazaStareSliderLatime() {
         if (sbLatimeFiltru == null || tvFiltruValoare == null) return;
-        boolean activ = !folosesteMatchedFilter;
+        boolean activ = !demod.folosesteMatchedFilter;
         sbLatimeFiltru.setEnabled(activ);
         sbLatimeFiltru.setAlpha(activ ? 1.0f : 0.4f);
         if (activ) {
-            int bwHz = (int) Math.round((1.0 - rCheb) * sampleRateFiltre / (2 * Math.PI));
+            int bwHz = (int) Math.round((1.0 - demod.rCheb) * demod.sampleRateFiltre / (2 * Math.PI));
             tvFiltruValoare.setText("~" + bwHz + " Hz");
         } else {
             tvFiltruValoare.setText("N/A (Matched Filter)");
         }
-    }
-
-    private void recalculeazaShabloaneMF() {
-        if (mfBuffer != null) {
-            double fMark = frecventaTunedBaza;
-            double fSpace = frecventaTunedBaza + (regimReverseSoftware ? -170.0 : 170.0);
-            setareaConstantelorMF(fMark, fSpace, sampleRateFiltre);
-        }
-    }
-
-    private void setareaConstantelorMF(double fMark, double fSpace, double sampleRate) {
-        double wMark = 2.0 * Math.PI * fMark / sampleRate;
-        double wSpace = 2.0 * Math.PI * fSpace / sampleRate;
-
-        // psi = e^{-j*w}  (rotatia per esantion)
-        mfMarkRotRe = Math.cos(-wMark);
-        mfMarkRotIm = Math.sin(-wMark);
-        mfSpaceRotRe = Math.cos(-wSpace);
-        mfSpaceRotIm = Math.sin(-wSpace);
-
-        // PsiN = e^{+j*w*N}  (corectia legata de esantionul care iese din fereastra)
-        double wMarkN = wMark * mfSamplesPerBit;
-        double wSpaceN = wSpace * mfSamplesPerBit;
-        mfMarkPowNRe = Math.cos(wMarkN);
-        mfMarkPowNIm = Math.sin(wMarkN);
-        mfSpacePowNRe = Math.cos(wSpaceN);
-        mfSpacePowNIm = Math.sin(wSpaceN);
-    }
-
-    /**
-     * Calculează coeficienții pentru filtrul bandpass biquad DNR (RBJ cookbook).
-     */
-    private void calculeazaCoeficientiDnr(double sampleRate) {
-        double shift = regimReverseSoftware ? -170.0 : 170.0;
-        double f0 = frecventaTunedBaza + shift / 2.0; // centrat între Mark și Space
-        double q = f0 / Math.max(latimeDnrHz, 1.0);
-        double w0 = 2.0 * Math.PI * f0 / sampleRate;
-        double alpha = Math.sin(w0) / (2.0 * q);
-        double cosW0 = Math.cos(w0);
-
-        double b0 = alpha, b1 = 0.0, b2 = -alpha;
-        double a0 = 1.0 + alpha, a1 = -2.0 * cosW0, a2 = 1.0 - alpha;
-
-        dnrB0 = b0 / a0; dnrB1 = b1 / a0; dnrB2 = b2 / a0;
-        dnrA1 = a1 / a0; dnrA2 = a2 / a0;
     }
 
     /**
@@ -355,45 +250,37 @@ public class EcranRttyDroid {
      * sub prag DUPA ce Matched Filter e deja activ - cele doua se completeaza.
      */
     private void aplicaClampDnrPentruMatchedFilter() {
-        if (!folosesteMatchedFilter || latimeDnrHz >= DNR_LATIME_MIN_HZ_MATCHED_FILTER) return;
+        if (!demod.folosesteMatchedFilter || demod.latimeDnrHz >= DNR_LATIME_MIN_HZ_MATCHED_FILTER) return;
 
         int progresMinim = progresMinimDnrPentruMF();
-        latimeDnrHz = 250.0 + progresMinim * (1250.0 / 20.0);
-        calculeazaCoeficientiDnr(sampleRateFiltre);
+        demod.latimeDnrHz = 250.0 + progresMinim * (1250.0 / 20.0);
+        demod.calculeazaCoeficientiDnr(demod.sampleRateFiltre);
 
         if (sbDnrLatime != null && tvDnrValoare != null) {
             sbDnrLatime.setProgress(progresMinim);
-            tvDnrValoare.setText("~" + Math.round(latimeDnrHz) + " Hz");
+            tvDnrValoare.setText("~" + Math.round(demod.latimeDnrHz) + " Hz");
             salveazaSetareRtty(PREF_RTTY_DNR_BW, progresMinim);
         }
     }
 
     private void sincronizeazaSetariReceptie() {
-        double wAfc = 2.0 * Math.PI * frecventaTunedBaza / sampleRateFiltre;
-        afcRotRe = Math.cos(wAfc);
-        afcRotIm = Math.sin(wAfc);
+        demod.sincronizeazaCoeficienti();
+        actualizeazaUiReceptie();
+    }
 
-        calculeazaCoeficientiDnr(sampleRateFiltre);
-
-        qMarkA = 2.0 * Math.cos(2.0 * Math.PI * frecventaTunedBaza / sampleRateFiltre);
-        double fSpace = frecventaTunedBaza + (regimReverseSoftware ? -170.0 : 170.0);
-        qSpaceA = 2.0 * Math.cos(2.0 * Math.PI * fSpace / sampleRateFiltre);
-
-        recalculeazaShabloaneMF();
-
+    private void actualizeazaUiReceptie() {
         if (waterfall != null) {
-            waterfall.setTunedFrequency((int) frecventaTunedBaza);
-            waterfall.setShiftHz(regimReverseSoftware ? -170 : 170);
+            waterfall.setTunedFrequency((int) demod.frecventaTunedBaza);
+            waterfall.setShiftHz(demod.regimReverseSoftware ? -170 : 170);
         }
         if (btnRttyReverseToggle != null) {
-            btnRttyReverseToggle.setText(regimReverseSoftware ? "REV" : "NORM");
-            btnRttyReverseToggle.setBackgroundColor(Color.parseColor(regimReverseSoftware ? "#B71C1C" : "#757575"));
+            btnRttyReverseToggle.setText(demod.regimReverseSoftware ? "REV" : "NORM");
+            btnRttyReverseToggle.setBackgroundColor(Color.parseColor(demod.regimReverseSoftware ? "#B71C1C" : "#757575"));
         }
         if (tvFrecventaCurenta != null) {
             tvFrecventaCurenta.setText(String.format("MARK: %d Hz | Shift: 170 Hz | SNR: %s",
-                    (int) frecventaTunedBaza, snrTextLive));
+                    (int) demod.frecventaTunedBaza, snrTextLive));
         }
-        solicitaResetFiltre = true;
     }
 
     public View getView() {
@@ -493,7 +380,7 @@ public class EcranRttyDroid {
         // HEADER
         tvFrecventaCurenta = new TextView(context);
         tvFrecventaCurenta.setText(String.format("MARK: %d Hz | Shift: 170 Hz | SNR: %s",
-                (int) frecventaTunedBaza, snrTextLive));
+                (int) demod.frecventaTunedBaza, snrTextLive));
         tvFrecventaCurenta.setTextColor(Color.parseColor("#00E5FF"));
         tvFrecventaCurenta.setTextSize(11);
         tvFrecventaCurenta.setTypeface(null, Typeface.BOLD);
@@ -507,10 +394,10 @@ public class EcranRttyDroid {
                 LinearLayout.LayoutParams.MATCH_PARENT, 260);
         pWater.setMargins(0, 5, 0, 10);
         waterfall.setLayoutParams(pWater);
-        waterfall.setTunedFrequency((int) frecventaTunedBaza);
+        waterfall.setTunedFrequency((int) demod.frecventaTunedBaza);
         waterfall.setShiftHz(170);
         waterfall.setOnFrequencyTappedListener(frequencyHz -> {
-            frecventaTunedBaza = frequencyHz;
+            demod.frecventaTunedBaza = frequencyHz;
             sincronizeazaSetariReceptie();
         });
         llTopContent.addView(waterfall);
@@ -582,9 +469,9 @@ public class EcranRttyDroid {
         btnRttyReverseToggle.setTextColor(Color.WHITE);
         btnRttyReverseToggle.setLayoutParams(pBtn);
         btnRttyReverseToggle.setOnClickListener(v -> {
-            if (regimReverseSoftware) frecventaTunedBaza -= 170;
-            else frecventaTunedBaza += 170;
-            regimReverseSoftware = !regimReverseSoftware;
+            if (demod.regimReverseSoftware) demod.frecventaTunedBaza -= 170;
+            else demod.frecventaTunedBaza += 170;
+            demod.regimReverseSoftware = !demod.regimReverseSoftware;
             sincronizeazaSetariReceptie();
         });
         rAndControaleRtty.addView(btnRttyReverseToggle);
@@ -607,8 +494,8 @@ public class EcranRttyDroid {
         rAndDecoderToggle.setLayoutParams(pRandDecoder);
 
         btnDecoderToggle = new Button(context);
-        btnDecoderToggle.setText(folosesteMatchedFilter ? "DECODER: MATCHED FILTER" : "DECODER: CHEBYSHEV");
-        btnDecoderToggle.setBackgroundColor(Color.parseColor(folosesteMatchedFilter ? "#6A1B9A" : "#00695C"));
+        btnDecoderToggle.setText(demod.folosesteMatchedFilter ? "DECODER: MATCHED FILTER" : "DECODER: CHEBYSHEV");
+        btnDecoderToggle.setBackgroundColor(Color.parseColor(demod.folosesteMatchedFilter ? "#6A1B9A" : "#00695C"));
         btnDecoderToggle.setTextColor(Color.WHITE);
         btnDecoderToggle.setTypeface(null, Typeface.BOLD);
         btnDecoderToggle.setTextSize(10);
@@ -616,17 +503,17 @@ public class EcranRttyDroid {
         pBtnDecoder.setMargins(5, 0, 5, 0);
         btnDecoderToggle.setLayoutParams(pBtnDecoder);
         btnDecoderToggle.setOnClickListener(v -> {
-            folosesteMatchedFilter = !folosesteMatchedFilter;
-            btnDecoderToggle.setText(folosesteMatchedFilter ? "DECODER: MATCHED FILTER" : "DECODER: CHEBYSHEV");
-            btnDecoderToggle.setBackgroundColor(Color.parseColor(folosesteMatchedFilter ? "#6A1B9A" : "#00695C"));
-            if (folosesteMatchedFilter && mfBuffer == null) {
-                initMatchedFilterTemplates(48000, BAUD_RTTY);
+            demod.folosesteMatchedFilter = !demod.folosesteMatchedFilter;
+            btnDecoderToggle.setText(demod.folosesteMatchedFilter ? "DECODER: MATCHED FILTER" : "DECODER: CHEBYSHEV");
+            btnDecoderToggle.setBackgroundColor(Color.parseColor(demod.folosesteMatchedFilter ? "#6A1B9A" : "#00695C"));
+            if (demod.folosesteMatchedFilter && demod.mfBuffer == null) {
+                demod.initMatchedFilterTemplates(48000, BAUD_RTTY);
             }
-            recalculeazaShabloaneMF();
+            demod.recalculeazaShabloaneMF();
             aplicaClampDnrPentruMatchedFilter();
-            solicitaResetFiltre = true;
+            demod.solicitaResetFiltre = true;
             actualizeazaStareSliderLatime();
-            Toast.makeText(context, "Decoder: " + (folosesteMatchedFilter ? "Matched Filter" : "Chebyshev"),
+            Toast.makeText(context, "Decoder: " + (demod.folosesteMatchedFilter ? "Matched Filter" : "Chebyshev"),
                     Toast.LENGTH_SHORT).show();
         });
         rAndDecoderToggle.addView(btnDecoderToggle);
@@ -648,11 +535,11 @@ public class EcranRttyDroid {
         pBtnTrack.setMargins(5, 0, 2, 0);
         btnTrackToggle.setLayoutParams(pBtnTrack);
         btnTrackToggle.setOnClickListener(v -> {
-            modUrmarireFrecventa = (modUrmarireFrecventa + 1) % 3;
-            if (modUrmarireFrecventa == 0) {
+            demod.modUrmarireFrecventa = (demod.modUrmarireFrecventa + 1) % 3;
+            if (demod.modUrmarireFrecventa == 0) {
                 btnTrackToggle.setText("OFF");
                 btnTrackToggle.setBackgroundColor(Color.parseColor("#757575"));
-            } else if (modUrmarireFrecventa == 1) {
+            } else if (demod.modUrmarireFrecventa == 1) {
                 btnTrackToggle.setText("AFC");
                 btnTrackToggle.setBackgroundColor(Color.parseColor("#007ACC"));
             } else {
@@ -698,8 +585,8 @@ public class EcranRttyDroid {
                 case MotionEvent.ACTION_UP:
                     handlerNbLongPress.removeCallbacks(actiuneHoldNb);
                     if (!sliderAfisatPrinHold[0]) {
-                        folosesteNoiseBlanker = !folosesteNoiseBlanker;
-                        btnNoiseBlanker.setBackgroundColor(Color.parseColor(folosesteNoiseBlanker ? "#007ACC" : "#757575"));
+                        demod.folosesteNoiseBlanker = !demod.folosesteNoiseBlanker;
+                        btnNoiseBlanker.setBackgroundColor(Color.parseColor(demod.folosesteNoiseBlanker ? "#007ACC" : "#757575"));
                     }
                     v.performClick();
                     return true;
@@ -750,9 +637,9 @@ public class EcranRttyDroid {
                 case MotionEvent.ACTION_UP:
                     handlerDnrLongPress.removeCallbacks(actiuneHoldDnr);
                     if (!sliderDnrAfisat[0]) {
-                        folosesteDnr = !folosesteDnr;
-                        btnDnr.setBackgroundColor(Color.parseColor(folosesteDnr ? "#00897B" : "#757575"));
-                        if (!isInitialLoading) salveazaSetareRtty(PREF_RTTY_DNR_ON, folosesteDnr);
+                        demod.folosesteDnr = !demod.folosesteDnr;
+                        btnDnr.setBackgroundColor(Color.parseColor(demod.folosesteDnr ? "#00897B" : "#757575"));
+                        if (!isInitialLoading) salveazaSetareRtty(PREF_RTTY_DNR_ON, demod.folosesteDnr);
                     }
                     v.performClick();
                     return true;
@@ -799,9 +686,9 @@ public class EcranRttyDroid {
                 case MotionEvent.ACTION_UP:
                     handlerSnrGLongPress.removeCallbacks(actiuneHoldSnrG);
                     if (!sliderSnrGAfisat[0]) {
-                        folosesteSnrGating = !folosesteSnrGating;
-                        btnSnrGate.setBackgroundColor(Color.parseColor(folosesteSnrGating ? "#00897B" : "#757575"));
-                        if (!isInitialLoading) salveazaSetareRtty(PREF_RTTY_SNRG_ON, folosesteSnrGating);
+                        demod.folosesteSnrGating = !demod.folosesteSnrGating;
+                        btnSnrGate.setBackgroundColor(Color.parseColor(demod.folosesteSnrGating ? "#00897B" : "#757575"));
+                        if (!isInitialLoading) salveazaSetareRtty(PREF_RTTY_SNRG_ON, demod.folosesteSnrGating);
                     }
                     v.performClick();
                     return true;
@@ -843,8 +730,8 @@ public class EcranRttyDroid {
         tvNoiseBlankerValoare.setTypeface(Typeface.MONOSPACE);
         sbNoiseBlanker.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                nbFactorPrag = 2.0 + (progress * (10.0 / 20.0));
-                tvNoiseBlankerValoare.setText(String.format("x%.1f", nbFactorPrag));
+                demod.nbFactorPrag = 2.0 + (progress * (10.0 / 20.0));
+                tvNoiseBlankerValoare.setText(String.format("x%.1f", demod.nbFactorPrag));
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) { handlerNbLongPress.removeCallbacks(ascundeSliderNbAutomat); }
             @Override public void onStopTrackingTouch(SeekBar seekBar) { handlerNbLongPress.postDelayed(ascundeSliderNbAutomat, 5000); }
@@ -885,7 +772,7 @@ public class EcranRttyDroid {
                 // (aplicaClampDnrPentruMatchedFilter) poate fi ocolit oricand de o simpla
                 // miscare a slider-ului dupa aceea.
                 int progresEfectiv = progress;
-                if (folosesteMatchedFilter) {
+                if (demod.folosesteMatchedFilter) {
                     int progresMinim = progresMinimDnrPentruMF();
                     if (progresEfectiv < progresMinim) {
                         progresEfectiv = progresMinim;
@@ -895,9 +782,9 @@ public class EcranRttyDroid {
                     }
                 }
 
-                latimeDnrHz = 250.0 + progresEfectiv * (1250.0 / 20.0);
-                tvDnrValoare.setText("~" + Math.round(latimeDnrHz) + " Hz");
-                calculeazaCoeficientiDnr(sampleRateFiltre);
+                demod.latimeDnrHz = 250.0 + progresEfectiv * (1250.0 / 20.0);
+                tvDnrValoare.setText("~" + Math.round(demod.latimeDnrHz) + " Hz");
+                demod.calculeazaCoeficientiDnr(demod.sampleRateFiltre);
                 if (fromUser) salveazaSetareRtty(PREF_RTTY_DNR_BW, progresEfectiv);
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) { handlerDnrLongPress.removeCallbacks(ascundeSliderDnr); }
@@ -928,8 +815,8 @@ public class EcranRttyDroid {
         tvSnrGateValoare.setTypeface(Typeface.MONOSPACE);
         sbSnrGateK.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                snrGatingK = 1.0 + progress * (2.0 / 20.0);
-                tvSnrGateValoare.setText(String.format("x%.1f", snrGatingK));
+                demod.snrGatingK = 1.0 + progress * (2.0 / 20.0);
+                tvSnrGateValoare.setText(String.format("x%.1f", demod.snrGatingK));
                 if (fromUser) salveazaSetareRtty(PREF_RTTY_SNRG_K, progress);
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) { handlerSnrGLongPress.removeCallbacks(ascundeSliderSnrG); }
@@ -954,17 +841,17 @@ public class EcranRttyDroid {
         rAndSensibilitate.addView(tvSensLabel);
         sbSensibilitate = new SeekBar(context);
         sbSensibilitate.setMax(20);
-        sbSensibilitate.setProgress((int) Math.round(pragSensibilitate * 100));
+        sbSensibilitate.setProgress((int) Math.round(demod.pragSensibilitate * 100));
         sbSensibilitate.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         tvSensibilitateValoare = new TextView(context);
-        tvSensibilitateValoare.setText(String.format("%d%%", (int) Math.round(pragSensibilitate * 100)));
+        tvSensibilitateValoare.setText(String.format("%d%%", (int) Math.round(demod.pragSensibilitate * 100)));
         tvSensibilitateValoare.setTextColor(Color.parseColor("#00E5FF"));
         tvSensibilitateValoare.setTextSize(13);
         rAndSensibilitate.addView(sbSensibilitate);
         rAndSensibilitate.addView(tvSensibilitateValoare);
         sbSensibilitate.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                pragSensibilitate = progress / 100.0;
+                demod.pragSensibilitate = progress / 100.0;
                 tvSensibilitateValoare.setText(String.format("%d%%", progress));
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) { }
@@ -995,13 +882,13 @@ public class EcranRttyDroid {
         sbLatimeFiltru.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 double bwMinHz = Math.max(20.0, BAUD_RTTY * 1.2);
-                double rChebMax = 1.0 - (bwMinHz * 2.0 * Math.PI / sampleRateFiltre);
-                rCheb = RCHEB_MIN + progress * ((rChebMax - RCHEB_MIN) / 20.0);
-                int bwHz = (int) Math.round((1.0 - rCheb) * sampleRateFiltre / (2 * Math.PI));
+                double rChebMax = 1.0 - (bwMinHz * 2.0 * Math.PI / demod.sampleRateFiltre);
+                demod.rCheb = RCHEB_MIN + progress * ((rChebMax - RCHEB_MIN) / 20.0);
+                int bwHz = (int) Math.round((1.0 - demod.rCheb) * demod.sampleRateFiltre / (2 * Math.PI));
                 tvFiltruValoare.setText("~" + bwHz + " Hz");
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) { }
-            @Override public void onStopTrackingTouch(SeekBar seekBar) { solicitaResetFiltre = true; }
+            @Override public void onStopTrackingTouch(SeekBar seekBar) { demod.solicitaResetFiltre = true; }
         });
         llTopContent.addView(rAndFiltru);
         actualizeazaStareSliderLatime();
@@ -1258,8 +1145,6 @@ public class EcranRttyDroid {
         threadDecodareRtty = new Thread(() -> {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
             int sampleRate = 48000;
-            double baudRTTY = BAUD_RTTY;
-            double samplesPerBit = (double) sampleRate / baudRTTY;
             int bufferSize = AudioRecord.getMinBufferSize(sampleRate,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
             if (bufferSize <= 0) bufferSize = 4096;
@@ -1270,168 +1155,39 @@ public class EcranRttyDroid {
             recorder.startRecording();
 
             short[] audioBuffer = new short[bufferSize];
-            double mx1 = 0, mx2 = 0, sx1 = 0, sx2 = 0;
-            double dcBlockerInVech = 0, dcBlockerOutVech = 0;
-            double integratVech = 0;
-            double alfaIntegrator = 0.08;
-            double nivelZgomotMediu = 0.05;
-            boolean inFrame = false;
-            double fazaCeasAcumulator = 0;
-            double fazaVectRe = 1.0, fazaVectIm = 0.0; // Vector de faza complex (inlocuieste fazaAFC)
-            int bitCounter = 0;
-            int currentByte = 0;
+            Activity activity = (Activity) context;
 
-            // OPTIMIZARE: debounce la declansarea cadrului (start-bit). Inainte, un SINGUR
-            // esantion decis "space" (posibil doar zgomot, pe semnal slab) declansa imediat
-            // un cadru nou, la o faza arbitrara fata de bitstream-ul real - sursa principala
-            // a simptomului "litere corecte izolate, text neinteligibil per total" (cadre
-            // false + cadre reale defazate, ambele esuand testul stop-bitului de la final).
-            // Acum cerem ca starea "space" sa persiste un numar minim de esantioane inainte
-            // sa ne angajam pe un cadru nou.
-            int contorConfirmareStart = 0;
-            // Prag confirmat de utilizator pe semnal real cu QRN/QRM (0.7 a mers mai bine
-            // decat 0.6 la respingerea puseurilor scurte de zgomot).
-            final int PRAG_CONFIRMARE_START = (int) Math.round(samplesPerBit * 0.7);
+            demod.setListener(new RttyDemodulator.Listener() {
+                @Override
+                public void onCodBaudot(int cod) {
+                    proceseazaCodBaudot(cod);
+                }
 
-            // ISTORIC: am experimentat cu eșantionarea aproape de finalul bitului pentru
-            // Matched Filter (teoria: fereastra corelatorului, care are exact lungimea unui
-            // simbol, ar da o citire mai "pura" langa tranzitie decat la mijloc). Testat pe
-            // hardware real, ideea a stricat decodarea: marja de timp fata de jitter/drift
-            // (acumulat pe cei 7.5 biti ai unui caracter, plus intarzierea de grup a
-            // filtrelor DNR/NB) conteaza mult mai mult decat "puritatea" teoretica a
-            // ferestrei. Revenit definitiv la esantionare la mijlocul bitului (0.5) pentru
-            // AMBII decodori - ofera marja maxima si simetrica fata de orice eroare de timing.
-            final double PCT_ESANTIONARE = 0.5;
-
-
-            int contorEroriFramingConsecutive = 0;
-            // Numar de cadre invalide consecutive (stop-bit gresit) care declanseaza
-            // un reset complet al starii de decodare - semn de QRM/zgomot sustinut sau
-            // desincronizare majora, nu doar un cadru izolat corupt.
-            final int PRAG_ERORI_FRAMING_RESYNC = 5;
-
-            // FUNCTIONALITATE NOUA: Noise Blanker - stare locala pe threadul de decodare.
-            // nbNivelMediu urmareste amplitudinea "normala" recenta a semnalului audio brut
-            // (medie EMA a |sample|), actualizata DOAR din esantioane NEsuprimate (ca sa nu
-            // se auto-contamineze cu propriile pulsuri de zgomot pe care le respinge).
-            double nbNivelMediu = 0.05;
-            double nbUltimulEsantionValid = 0;
-            final double NB_EMA_ALPHA = 0.0008;
-            // CIZELARE: supapa de siguranta - daca blanking-ul dureaza prea mult consecutiv,
-            // nu mai poate fi vorba de un puls real de zgomot impulsiv (QRN/ignition noise
-            // dureaza de regula sub 1-2ms) - e mai probabil un salt real de amplitudine
-            // (AGC-ul statiei reactionand, schimbare de RF/AF gain, retunare pe semnal mai
-            // puternic) pe care NB l-a interpretat gresit ca zgomot. Fortam acceptarea
-            // esantionului dupa acest prag, ca nbNivelMediu sa poata invata noul nivel si
-            // sa iasa din blocare, in loc sa ramana inghetat la nesfarsit.
-            int nbContorBlankConsecutiv = 0;
-            final int NB_MAX_BLANK_CONSECUTIV = 150; // ~3ms la 48kHz
-
-            double dnrX1 = 0, dnrX2 = 0, dnrY1 = 0, dnrY2 = 0; // stare filtru bandpass DNR
-
-            double I_acc = 0, Q_acc = 0;
-            double last_phase = 0;
-            int samplesSinceLastAFC = 0;
-            // OPTIMIZARE/CORECTIE: fereastra de acumulare AFC trebuie sa fie un multiplu
-            // intreg al perioadei unui simbol (samplesPerBit), altfel punctul de esantionare
-            // a fazei "aluneca" fata de granitele reale ale bitilor RTTY, ceea ce introduce
-            // eroare suplimentara in estimarea de frecventa (mai ales pe semnal slab).
-            // Vechea valoare fixa (960 esantioane = 20ms) nu se alinia cu perioada reala
-            // de simbol (~1056 esantioane = 22ms la 45.45 baud).
-            // OPTIMIZARE: am marit de la 1 la 2 perioade de simbol intre corectii - mai
-            // putina reactivitate, dar discriminatorul de frecventa mediaza zgomotul pe o
-            // fereastra mai mare, deci variaza mult mai putin pe semnal slab/QRM.
-            final int ferestreAFC = 2; // cate perioade de simbol acumulam intre 2 corectii AFC
-            final int fereastraAFCSamples = Math.max(1, (int) Math.round(samplesPerBit)) * ferestreAFC;
-
-            // OPTIMIZARE: bucla AFC veche era proportionala pura (fara filtru de bucla) -
-            // orice zgomot din masuratoarea de eroare de frecventa se transmitea direct si
-            // integral in frecventaTunedBaza. Adaugam:
-            //  - freqErrorFiltrat: o medie exponentiala (EMA) care neteze masuratorile brute
-            //    intre ferestre succesive, in loc sa lase fiecare masuratoare bruta sa miste
-            //    direct frecventa urmarita (echivalent unui filtru de bucla simplu);
-            //  - AFC_MAX_CORECTIE_HZ: plafon pe marimea corectiei aplicate per fereastra -
-            //    un semnal RTTY normal nu deriva brusc cu zeci de Hz intre doua ferestre
-            //    consecutive (~44ms), deci limitam corectia la o valoare fizic plauzibila;
-            //  - AFC_PRAG_OUTLIER_HZ: daca masuratoarea bruta e nefiziologic de mare (fereastra
-            //    "murdara" - de ex. o tranzitie mark/space cade in mijlocul ei - sau zgomot),
-            //    o ignoram complet in loc s-o aplicam (fie si trunchiata).
-            double freqErrorFiltrat = 0;
-            final double AFC_EMA_ALPHA = 0.25;
-            final double AFC_MAX_CORECTIE_HZ = 5.0;
-            final double AFC_PRAG_OUTLIER_HZ = 20.0;
-
-            // CIZELARE: cand SNR Gating ingheata decizia (energie insuficienta), nu mai
-            // pastram pur si simplu semnul vechi al integratorului - daca fade-ul incepe
-            // chiar in mijlocul unei tranzitii Space->Mark, am ramane "blocati" fals pe
-            // Space pe toata durata fade-ului, ceea ce produce framing de gunoi quando
-            // semnalul revine (RTTY asteapta Mark = idle intre caractere). In loc sa
-            // "inghetam" valoarea, o derivam lin catre o tinta pozitiva (Mark) - suficient
-            // de departe de zero ca sa fie robusta indiferent de ramura din decizia de bit
-            // de mai jos - pe durata aproximativa a unui simbol RTTY (~22ms), evitand atat
-            // framing-ul de gunoi cat si o discontinuitate brusca in integrator.
-            final double SNR_GATING_MARK_BIAS_ALPHA = 0.001; // ~1000 esantioane (~20ms) pana converge
-
-            // CORECTIE: ținta era inainte "nivelZgomotMediu * pragSensibilitate * 2.0" -
-            // dar pragSensibilitate e sliderul de "Sensibilitate" din UI, ajustabil de
-            // utilizator intre 0% si 100%. Daca utilizatorul il seta la 0%, tinta devenea
-            // EXACT 0, integratorul deriva spre zero (nu spre Mark), iar decizia finala
-            // (Math.abs(integratCurent) < prag=0 -> fals; apoi integratCurent>0 -> 0>0 = fals)
-            // cadea pe SPACE - exact opusul bias-ului intentionat, la o setare complet
-            // valida de UI. Decuplam tinta de pragSensibilitate si folosim o marja FIXA,
-            // independenta de orice slider al utilizatorului, ca sa garanteze intotdeauna
-            // o valoare strict pozitiva.
-            final double SNR_GATING_MARK_BIAS_MARGINE = 0.1;
-
-            noiseFloor = 1e-9;
-
-            if (folosesteMatchedFilter) {
-                initMatchedFilterTemplates(sampleRate, baudRTTY);
-            }
-
-            sampleRateFiltre = sampleRate;
-            rCheb = 0.992;
-            sincronizeazaSetariReceptie();
+                @Override
+                public void onStare(String snrText, int frecventaMarkHz) {
+                    snrTextLive = snrText;
+                    if (activity.isFinishing() || activity.isDestroyed()) return;
+                    activity.runOnUiThread(() -> {
+                        if (activity.isFinishing() || activity.isDestroyed()) return;
+                        if (tvFrecventaCurenta != null) {
+                            tvFrecventaCurenta.setText(String.format("MARK: %d Hz | Shift: 170 Hz | SNR: %s",
+                                    frecventaMarkHz, snrText));
+                        }
+                        if (waterfall != null && demod.modUrmarireFrecventa > 0) {
+                            waterfall.setTunedFrequency(frecventaMarkHz);
+                        }
+                    });
+                }
+            });
+            demod.porneste(sampleRate);
+            activity.runOnUiThread(this::actualizeazaUiReceptie);
 
             while (decodareRttyActiva) {
+                if (activity.isFinishing() || activity.isDestroyed()) break;
                 int read = recorder.read(audioBuffer, 0, audioBuffer.length);
                 if (read <= 0) {
                     try { Thread.sleep(10); } catch (Exception e) {}
                     continue;
-                }
-
-                if (solicitaResetFiltre) {
-                    mx1 = 0; mx2 = 0; sx1 = 0; sx2 = 0;
-                    integratVech = 0;
-                    inFrame = false;
-                    fazaCeasAcumulator = 0;
-                    fazaVectRe = 1.0; fazaVectIm = 0.0;
-                    bitCounter = 0;
-                    currentByte = 0;
-                    contorConfirmareStart = 0;
-                    contorEroriFramingConsecutive = 0;
-                    // CORECTIE: nbNivelMediu/nbUltimulEsantionValid NU se mai reseteaza aici.
-                    // Erau resetate la orice schimbare de setare neinrudita (latime DNR, latime
-                    // filtru Chebyshev etc.), aducandu-le la valoarea minuscula implicita 0.05 -
-                    // daca semnalul receptionat avea deja amplitudine normala peste
-                    // 0.05*nbFactorPrag (foarte probabil pe un semnal decent), PRIMUL esantion
-                    // de dupa reset era deja blocat de NB, iar nbNivelMediu ramanea inghetat la
-                    // 0.05 la nesfarsit (se actualizeaza DOAR din esantioane acceptate - daca
-                    // niciunul nu mai e acceptat, nu mai are din ce sa invete) - o blocare
-                    // completa si permanenta a decodarii pana la un restart de aplicatie. Nivelul
-                    // de amplitudine invatat de NB nu depinde de filtre/clock recovery, deci nu
-                    // are niciun motiv sa fie resetat aici (acelasi principiu ca la
-                    // nivelZgomotMediu, care nici el nu se reseteaza la solicitaResetFiltre).
-                    nbContorBlankConsecutiv = 0;
-                    noiseFloor = 1e-9; // Resetăm și podeaua de zgomot pentru a recalibra SNR-G
-                    dnrX1 = 0; dnrX2 = 0; dnrY1 = 0; dnrY2 = 0;
-                    if (folosesteMatchedFilter && mfBuffer != null) {
-                        for (int k = 0; k < mfBuffer.length; k++) mfBuffer[k] = 0;
-                        mfBufferPos = 0;
-                        mfMarkAccRe = mfMarkAccIm = 0;
-                        mfSpaceAccRe = mfSpaceAccIm = 0;
-                    }
-                    solicitaResetFiltre = false;
                 }
 
                 if (waterfall != null && read >= 3072) {
@@ -1447,262 +1203,7 @@ public class EcranRttyDroid {
                     waterfall.pushSamples(fftSlice);
                 }
 
-                for (int i = 0; i < read; i++) {
-                    double rawSample = audioBuffer[i] / 32768.0;
-                    double sample = rawSample - dcBlockerInVech + 0.995 * dcBlockerOutVech;
-                    dcBlockerInVech = rawSample;
-                    dcBlockerOutVech = sample;
-
-                    // FUNCTIONALITATE NOUA: Noise Blanker - suprima pulsurile scurte de
-                    // zgomot impulsiv (QRN) INAINTE ca esantionul sa alimenteze AFC/
-                    // Chebyshev/matched filter, ca tot lantul de decodare sa beneficieze.
-                    // CORECTIE (gaina si oul): nbNivelMediu se actualiza DOAR cat timp NB era
-                    // activ. Daca userul decoda o vreme cu NB OPRIT (implicit la pornire),
-                    // nbNivelMediu ramanea inghetat la valoarea minuscula initiala (0.05) -
-                    // la PRIMA activare a NB, pragul (0.05*nbFactorPrag) era aproape sigur sub
-                    // nivelul real al semnalului, blocand imediat primele esantioane, iar media
-                    // nu mai avea din ce sa invete nivelul real (se actualizeaza doar din
-                    // esantioane acceptate) - blocare completa, deterministica, la fiecare
-                    // prima activare a NB. Acum calibram nbNivelMediu mereu, din semnalul brut,
-                    // INDIFERENT daca gating-ul NB e activ - la activare, pragul e deja realist,
-                    // fara nicio fereastra de "orbire". Supapa de siguranta (NB_MAX_BLANK_
-                    // CONSECUTIV) ramane ca ultima plasa, pentru salturi bruste in timpul
-                    // receptiei (AGC statie, retunare), nu ca mecanism principal de calibrare.
-                    double sampleAbsNb = Math.abs(sample);
-                    if (folosesteNoiseBlanker) {
-                        double pragNb = nbNivelMediu * nbFactorPrag;
-                        if (sampleAbsNb > pragNb && nbContorBlankConsecutiv < NB_MAX_BLANK_CONSECUTIV) {
-                            // Puls detectat: "hold" - repetam ultimul esantion valid, mai
-                            // lin decat sa punem pe zero (evita un "click" spectral brusc).
-                            sample = nbUltimulEsantionValid;
-                            nbContorBlankConsecutiv++;
-                        } else {
-                            nbUltimulEsantionValid = sample;
-                            nbNivelMediu = (NB_EMA_ALPHA * sampleAbsNb) + ((1.0 - NB_EMA_ALPHA) * nbNivelMediu);
-                            nbContorBlankConsecutiv = 0;
-                        }
-                    } else {
-                        nbNivelMediu = (NB_EMA_ALPHA * sampleAbsNb) + ((1.0 - NB_EMA_ALPHA) * nbNivelMediu);
-                        nbUltimulEsantionValid = sample;
-                        nbContorBlankConsecutiv = 0;
-                    }
-
-                    // DNR: filtru bandpass biquad centrat Mark/Space - reduce zgomotul de banda larga
-                    if (folosesteDnr) {
-                        double dnrOut = dnrB0 * sample + dnrB1 * dnrX1 + dnrB2 * dnrX2
-                                - dnrA1 * dnrY1 - dnrA2 * dnrY2;
-                        dnrX2 = dnrX1; dnrX1 = sample;
-                        dnrY2 = dnrY1; dnrY1 = dnrOut;
-                        sample = dnrOut;
-                    }
-
-                    double magMark = 0, magSpace = 0;
-                    double diferentaBruta = 0.0;
-
-                    if (folosesteMatchedFilter) {
-                        // OPTIMIZARE (era O(N) per esantion, ~1056 x4 inmultiri -> acum O(1)):
-                        // corelatie glisanta recursiva, matematic echivalenta cu suma completa
-                        // pe fereastra de mfSamplesPerBit esantioane, actualizata incremental:
-                        //   S(n+1) = psi * ( S(n) - x_iesit + x_nou * PsiN )
-                        double xIesit = mfBuffer[mfBufferPos];
-                        mfBuffer[mfBufferPos] = sample;
-                        mfBufferPos = (mfBufferPos + 1) % mfSamplesPerBit;
-
-                        double markInRe = mfMarkAccRe - xIesit + sample * mfMarkPowNRe;
-                        double markInIm = mfMarkAccIm + sample * mfMarkPowNIm;
-                        mfMarkAccRe = mfMarkRotRe * markInRe - mfMarkRotIm * markInIm;
-                        mfMarkAccIm = mfMarkRotRe * markInIm + mfMarkRotIm * markInRe;
-
-                        double spaceInRe = mfSpaceAccRe - xIesit + sample * mfSpacePowNRe;
-                        double spaceInIm = mfSpaceAccIm + sample * mfSpacePowNIm;
-                        mfSpaceAccRe = mfSpaceRotRe * spaceInRe - mfSpaceRotIm * spaceInIm;
-                        mfSpaceAccIm = mfSpaceRotRe * spaceInIm + mfSpaceRotIm * spaceInRe;
-
-                        double scalareMF = 2.0 / mfSamplesPerBit;
-                        magMark = Math.sqrt(mfMarkAccRe * mfMarkAccRe + mfMarkAccIm * mfMarkAccIm) * scalareMF;
-                        magSpace = Math.sqrt(mfSpaceAccRe * mfSpaceAccRe + mfSpaceAccIm * mfSpaceAccIm) * scalareMF;
-                        diferentaBruta = magMark - magSpace;
-                    } else {
-                        double m0 = sample - rCheb * rCheb * mx2 + qMarkA * rCheb * mx1;
-                        mx2 = mx1; mx1 = m0;
-                        magMark = Math.abs(m0);
-
-                        double s0 = sample - rCheb * rCheb * sx2 + qSpaceA * rCheb * sx1;
-                        sx2 = sx1; sx1 = s0;
-                        magSpace = Math.abs(s0);
-                        diferentaBruta = magMark - magSpace;
-                    }
-
-                    // AFC/PLL
-                    double newPhaseRe = fazaVectRe * afcRotRe - fazaVectIm * afcRotIm;
-                    double newPhaseIm = fazaVectRe * afcRotIm + fazaVectIm * afcRotRe;
-                    fazaVectRe = newPhaseRe;
-                    fazaVectIm = newPhaseIm;
-
-                    I_acc += sample * fazaVectRe;
-                    Q_acc += sample * fazaVectIm;
-                    samplesSinceLastAFC++;
-
-                    if (samplesSinceLastAFC >= fereastraAFCSamples) {
-                        double current_phase = Math.atan2(Q_acc, I_acc);
-                        double delta_phase = current_phase - last_phase;
-
-                        while (delta_phase > Math.PI) delta_phase -= 2.0 * Math.PI;
-                        while (delta_phase < -Math.PI) delta_phase += 2.0 * Math.PI;
-
-                        double freq_error = (delta_phase * sampleRate) / (2.0 * Math.PI * samplesSinceLastAFC);
-
-                        if (magMark > magSpace * 1.2 && magMark > nivelZgomotMediu * 2.0) {
-                            // OPTIMIZARE 3: respingere outlieri - o masuratoare nefiziologic
-                            // de mare e ignorata complet (nu doar trunchiata), tratata ca
-                            // fereastra "murdara"/zgomot, nu ca informatie partiala valida.
-                            if (Math.abs(freq_error) <= AFC_PRAG_OUTLIER_HZ) {
-
-                                // OPTIMIZARE 1: filtru de bucla (EMA) - amortizeaza zgomotul
-                                // dintre ferestre succesive inainte de a aplica corectia.
-                                freqErrorFiltrat = freqErrorFiltrat * (1.0 - AFC_EMA_ALPHA) + freq_error * AFC_EMA_ALPHA;
-
-                                // OPTIMIZARE 2: plafon pe marimea corectiei aplicate per fereastra.
-                                double freqErrorLimitat = Math.max(-AFC_MAX_CORECTIE_HZ,
-                                        Math.min(AFC_MAX_CORECTIE_HZ, freqErrorFiltrat));
-
-                                if (modUrmarireFrecventa == 1) {
-                                    frecventaTunedBaza += freqErrorLimitat * 0.05;
-                                } else if (modUrmarireFrecventa == 2) {
-                                    frecventaTunedBaza += freqErrorLimitat * 0.25;
-                                }
-
-                                if (modUrmarireFrecventa > 0) {
-                                    double wAfc = 2.0 * Math.PI * frecventaTunedBaza / sampleRate;
-                                    afcRotRe = Math.cos(wAfc);
-                                    afcRotIm = Math.sin(wAfc);
-
-                                    calculeazaCoeficientiDnr(sampleRate);
-
-                                    qMarkA = 2.0 * Math.cos(2.0 * Math.PI * frecventaTunedBaza / sampleRate);
-                                    double fSpace = frecventaTunedBaza + (regimReverseSoftware ? -170.0 : 170.0);
-                                    qSpaceA = 2.0 * Math.cos(2.0 * Math.PI * fSpace / sampleRate);
-
-                                    if (folosesteMatchedFilter && Math.abs(freq_error) > 0.5) {
-                                        recalculeazaShabloaneMF();
-                                    }
-                                }
-                            }
-                        }
-                        I_acc = 0; Q_acc = 0;
-                        last_phase = current_phase;
-                        samplesSinceLastAFC = 0;
-
-                        // Renormalizare anti-drift a vectorului de faza
-                        double normAfc = Math.sqrt(fazaVectRe * fazaVectRe + fazaVectIm * fazaVectIm);
-                        if (normAfc > 1e-9) {
-                            fazaVectRe /= normAfc;
-                            fazaVectIm /= normAfc;
-                        }
-                    }
-
-                    double magTotala = magMark + magSpace;
-
-                    if (magTotala < noiseFloor) {
-                        noiseFloor = magTotala;
-                    } else {
-                        noiseFloor = 0.999 * noiseFloor + 0.001 * magTotala;
-                    }
-
-                    nivelZgomotMediu = (0.0005 * magTotala) + (0.9995 * nivelZgomotMediu);
-
-                    // SNR Gating: energie insuficienta -> derivam lin spre Mark (idle RTTY),
-                    // in loc sa inghetam pe orice semn avea integratorul chiar inainte de
-                    // fade (vezi comentariul de la SNR_GATING_MARK_BIAS_ALPHA mai sus).
-                    double integratCurent;
-                    if (folosesteSnrGating && magTotala < noiseFloor * snrGatingK) {
-                        double tintaMark = Math.max(nivelZgomotMediu, 1e-9) * SNR_GATING_MARK_BIAS_MARGINE;
-                        integratCurent = integratVech + (tintaMark - integratVech) * SNR_GATING_MARK_BIAS_ALPHA;
-                    } else {
-                        integratCurent = (alfaIntegrator * diferentaBruta) + ((1.0 - alfaIntegrator) * integratVech);
-                    }
-                    integratVech = integratCurent;
-
-                    // SNR LIVE
-                    if (i % 4800 == 0) {
-                        double signalPeak = Math.max(magMark, magSpace);
-                        double snrLinear = signalPeak / Math.max(noiseFloor, 1e-9);
-                        double snrDb = 20 * Math.log10(snrLinear);
-                        double snrNetezit = Math.max(0, snrDb);
-                        snrTextLive = String.format("%.1f dB", snrNetezit);
-
-                        final String snrFinal = snrTextLive;
-                        final int freqFinal = (int) frecventaTunedBaza;
-                        Activity activity = (Activity) context;
-                        if (activity.isFinishing() || activity.isDestroyed()) return;
-                        activity.runOnUiThread(() -> {
-                            if (activity.isFinishing() || activity.isDestroyed()) return;
-                            if (tvFrecventaCurenta != null) {
-                                tvFrecventaCurenta.setText(String.format("MARK: %d Hz | Shift: 170 Hz | SNR: %s",
-                                        freqFinal, snrFinal));
-                            }
-                            if (waterfall != null && modUrmarireFrecventa > 0) {
-                                waterfall.setTunedFrequency(freqFinal);
-                            }
-                        });
-                    }
-
-                    boolean isMark;
-                    if (Math.abs(integratCurent) < (nivelZgomotMediu * pragSensibilitate)) {
-                        isMark = true;
-                    } else {
-                        isMark = integratCurent > 0;
-                    }
-                    int bitCurent = isMark ? 1 : 0;
-
-                    // Clock Recovery
-                    if (!inFrame) {
-                        if (bitCurent == 0) {
-                            contorConfirmareStart++;
-                            if (contorConfirmareStart >= PRAG_CONFIRMARE_START) {
-                                inFrame = true;
-                                // CORECTIE: nu pornim faza de la 0, ci de la cate esantioane
-                                // au trecut deja de la INCEPUTUL real al starii "space" (cat
-                                // am asteptat sa confirmam) - altfel am introduce o intarziere
-                                // sistematica noua la fiecare bit, in loc sa reparam sincronizarea.
-                                fazaCeasAcumulator = contorConfirmareStart;
-                                bitCounter = 0;
-                                currentByte = 0;
-                                contorConfirmareStart = 0;
-                            }
-                        } else {
-                            contorConfirmareStart = 0; // revenire la mark inainte de prag = fals pozitiv
-                        }
-                    } else {
-                        fazaCeasAcumulator += 1.0;
-                        double punctEstantionareTinta = (bitCounter == 0)
-                                ? (samplesPerBit * (1.0 + PCT_ESANTIONARE))
-                                : samplesPerBit;
-
-                        if (fazaCeasAcumulator >= punctEstantionareTinta) {
-                            fazaCeasAcumulator -= punctEstantionareTinta;
-                            if (bitCounter < 5) {
-                                if (bitCurent == 1) currentByte |= (1 << bitCounter);
-                                bitCounter++;
-                            } else {
-                                // Am ajuns la stop-bit (bitCounter == 5)
-                                if (bitCurent == 1) {
-                                    // Stop bit valid
-                                    proceseazaCodBaudot(currentByte & 0x1F);
-                                    contorEroriFramingConsecutive = 0;
-                                } else {
-                                    // Stop bit invalid (framing error)
-                                    contorEroriFramingConsecutive++;
-                                    if (contorEroriFramingConsecutive >= PRAG_ERORI_FRAMING_RESYNC) {
-                                        solicitaResetFiltre = true;
-                                        contorEroriFramingConsecutive = 0;
-                                    }
-                                }
-                                inFrame = false;
-                            }
-                        }
-                    }
-                }
+                demod.proceseazaBloc(audioBuffer, read);
             }
             try {
                 if (recorder.getState() == AudioRecord.STATE_INITIALIZED) {
@@ -1775,13 +1276,13 @@ public class EcranRttyDroid {
             if (lowerBin != -1 && maxPairScore > 0.002) {
                 double freqBinDeJos = lowerBin * (8000.0 / 512.0);
                 double freqBinDeSus = (lowerBin + shiftBins) * (8000.0 / 512.0);
-                frecventaTunedBaza = regimReverseSoftware ? freqBinDeSus : freqBinDeJos;
+                demod.frecventaTunedBaza = demod.regimReverseSoftware ? freqBinDeSus : freqBinDeJos;
 
                 if (activity.isFinishing() || activity.isDestroyed()) return;
                 activity.runOnUiThread(() -> {
                     if (activity.isFinishing() || activity.isDestroyed()) return;
                     sincronizeazaSetariReceptie();
-                    Toast.makeText(context, "Auto-Tune: " + (int) frecventaTunedBaza + " Hz",
+                    Toast.makeText(context, "Auto-Tune: " + (int) demod.frecventaTunedBaza + " Hz",
                             Toast.LENGTH_SHORT).show();
                 });
             } else {
@@ -1995,7 +1496,7 @@ public class EcranRttyDroid {
                         if (!folosesteDiddle) {
                             // Dacă Diddle e oprit, stăm în Mark (Idle) fără bit-banging activ
                             setHardwarePtt(true);
-                            setHardwareFsk(!regimReverseSoftware); // Mark tone (Idle)
+                            setHardwareFsk(!demod.regimReverseSoftware); // Mark tone (Idle)
                             Thread.sleep(50); // Mică pauză de relaxare CPU
                             anchorTimeNanos = System.nanoTime(); // Resetăm ancora după pauză
                             continue;
@@ -2069,7 +1570,7 @@ public class EcranRttyDroid {
      * @return Momentul de timp (nanos) la care s-a încheiat bitul de stop.
      */
     private long trimiteCodBaudotMetronom(int codBaudot, long startAnchorNanos) {
-        boolean reverse = regimReverseSoftware;
+        boolean reverse = demod.regimReverseSoftware;
         long timeNext = startAnchorNanos;
 
         // 1. START BIT (Space)
@@ -2167,35 +1668,35 @@ public class EcranRttyDroid {
         isInitialLoading = true;
         SharedPreferences prefs = context.getSharedPreferences(EcranSetariProprii.PREFS_NAME, Context.MODE_PRIVATE);
 
-        folosesteDnr = prefs.getBoolean(PREF_RTTY_DNR_ON, false);
+        demod.folosesteDnr = prefs.getBoolean(PREF_RTTY_DNR_ON, false);
         int dnrBwProgress = prefs.getInt(PREF_RTTY_DNR_BW, 9); // ~600 Hz
-        latimeDnrHz = 250.0 + dnrBwProgress * (1250.0 / 20.0);
+        demod.latimeDnrHz = 250.0 + dnrBwProgress * (1250.0 / 20.0);
 
-        folosesteSnrGating = prefs.getBoolean(PREF_RTTY_SNRG_ON, false);
+        demod.folosesteSnrGating = prefs.getBoolean(PREF_RTTY_SNRG_ON, false);
         int snrGKProgress = prefs.getInt(PREF_RTTY_SNRG_K, 3); // ~x1.3
-        snrGatingK = 1.0 + snrGKProgress * (2.0 / 20.0);
+        demod.snrGatingK = 1.0 + snrGKProgress * (2.0 / 20.0);
 
         folosesteRtsPtPtt = prefs.getBoolean(PREF_RTTY_USE_RTS_PTT, false);
 
         // Actualizăm UI
         if (btnDnr != null) {
-            btnDnr.setBackgroundColor(Color.parseColor(folosesteDnr ? "#00897B" : "#757575"));
+            btnDnr.setBackgroundColor(Color.parseColor(demod.folosesteDnr ? "#00897B" : "#757575"));
         }
         if (sbDnrLatime != null) {
             sbDnrLatime.setProgress(dnrBwProgress);
-            tvDnrValoare.setText("~" + Math.round(latimeDnrHz) + " Hz");
+            tvDnrValoare.setText("~" + Math.round(demod.latimeDnrHz) + " Hz");
         }
         if (btnSnrGate != null) {
-            btnSnrGate.setBackgroundColor(Color.parseColor(folosesteSnrGating ? "#00897B" : "#757575"));
+            btnSnrGate.setBackgroundColor(Color.parseColor(demod.folosesteSnrGating ? "#00897B" : "#757575"));
         }
         if (sbSnrGateK != null) {
             sbSnrGateK.setProgress(snrGKProgress);
-            tvSnrGateValoare.setText(String.format("x%.1f", snrGatingK));
+            tvSnrGateValoare.setText(String.format("x%.1f", demod.snrGatingK));
         }
         if (btnToggleLine != null) {
             btnToggleLine.setText(folosesteRtsPtPtt ? "USE: RTS" : "USE: DTR");
         }
-        calculeazaCoeficientiDnr(sampleRateFiltre);
+        demod.calculeazaCoeficientiDnr(demod.sampleRateFiltre);
         isInitialLoading = false;
     }
 

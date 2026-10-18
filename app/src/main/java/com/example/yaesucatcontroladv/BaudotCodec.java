@@ -74,8 +74,10 @@ public class BaudotCodec {
      */
     public int[] encode(char c) {
         if (c == '\n' || c == '\r') {
-            // Standard RTTY: Carriage Return (2) + Line Feed (8)
-            shift = 'L';
+            // Standard RTTY: Carriage Return (2) + Line Feed (8). Starea de shift NU se
+            // schimba: receptoarele revin pe LTRS doar la spatiu (USOS), nu la CR/LF, deci
+            // dupa un rand terminat in FIGS urmatoarea litera trebuie sa trimita explicit
+            // LTRS - altfel "1234\nUR" ajunge la corespondent ca "1234\n74".
             return new int[]{2, 8};
         }
 
