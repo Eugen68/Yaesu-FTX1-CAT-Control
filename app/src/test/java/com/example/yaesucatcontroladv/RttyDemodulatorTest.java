@@ -23,6 +23,10 @@ public class RttyDemodulatorTest {
     private static final int FS = 48000;
     private static final double MARK_HZ = 2125.0;
     private static final double BAUD = RttyDemodulator.BAUD_RTTY;
+    /** Pauze aleatoare intre caractere, ca la tastare manuala (RTTY necontinuu). */
+    static boolean pauzeTastare = false;
+    /** Rafale de 15-30 de caractere lipite separate de pauze (buffer type-ahead fara diddle). */
+    static boolean pauzeRafale = false;
     private static final String TEXT =
             "CQ CQ CQ DE YO9VA YO9VA YO9VA PSE K\n"
                     + "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 1234567890\n"
@@ -99,6 +103,41 @@ public class RttyDemodulatorTest {
             cer += cer(TEXT + TEXT + TEXT, decodeaza(a, false, d -> d.folosesteAtc = true)) / 3;
         }
         assertTrue("CER fading 1 Hz cu ATC = " + cer, cer < 0.10);
+    }
+
+    /** Volantul de caracter pe flux continuu slab: trebuie sa bata clar detectia libera. */
+    @Test
+    public void volantFluxContinuuSlab() {
+        String text = TEXT + TEXT;
+        double fara = 0, cu = 0;
+        for (int seed = 1; seed <= 3; seed++) {
+            short[] a = genereaza(text, -6.0, seed, 0, BAUD, 0);
+            fara += cer(text, decodeaza(a, false, d -> d.folosesteVolant = false)) / 3;
+            cu += cer(text, decodeaza(a, false, d -> { })) / 3;
+        }
+        assertTrue("volant (" + cu + ") fata de detectia libera (" + fara + ")", cu < 0.7 * fara);
+    }
+
+    /**
+     * Pauzele (tastare manuala, rafale de type-ahead) nu au voie sa strice nimic: o varianta
+     * de volant care sarea peste startul lipsa pierdea caracterul de dupa fiecare pauza.
+     */
+    @Test
+    public void volantNuStricaPauzele() {
+        String text = TEXT + TEXT;
+        try {
+            for (int mod = 0; mod < 2; mod++) {
+                pauzeTastare = mod == 0;
+                pauzeRafale = mod == 1;
+                for (int seed = 1; seed <= 3; seed++) {
+                    double cer = cer(text, decodeaza(genereaza(text, 10.0, seed, 0, BAUD), false, d -> { }));
+                    assertTrue((mod == 0 ? "tastare" : "rafale") + " seed " + seed + " CER = " + cer, cer < 0.005);
+                }
+            }
+        } finally {
+            pauzeTastare = false;
+            pauzeRafale = false;
+        }
     }
 
     /** Baleiaj de SNR: afiseaza CER-ul (medie pe 3 seed-uri) pentru ambii detectori. */
@@ -188,8 +227,22 @@ public class RttyDemodulatorTest {
         for (int i = 0; i < 46; i++) biti.append("11"); // ~0.5 s idle Mark
         int[] preambul = {0x1F, 0x1F, 0x1F};
         for (int c : preambul) adaugaCaracter(biti, c);
+        Random rndPauze = new Random(seed * 131 + 3);
+        int panaLaPauza = 15 + rndPauze.nextInt(16);
         for (char ch : text.toCharArray()) {
             for (int c : tx.encode(ch)) adaugaCaracter(biti, c);
+            if (pauzeRafale && --panaLaPauza <= 0) {
+                // buffer type-ahead: 15-30 caractere lipite, apoi pauza de 0.1-2 s
+                int jumatati = 9 + rndPauze.nextInt(170);
+                for (int k = 0; k < jumatati; k++) biti.append('1');
+                panaLaPauza = 15 + rndPauze.nextInt(16);
+            }
+            if (pauzeTastare) {
+                // tastare manuala: des pauze scurte (0.5-4 biti), rar pauze lungi (0.4-1.6 s)
+                double r = rndPauze.nextDouble();
+                int jumatati = r < 0.05 ? 40 + rndPauze.nextInt(110) : r < 0.55 ? 1 + rndPauze.nextInt(8) : 0;
+                for (int k = 0; k < jumatati; k++) biti.append('1');
+            }
         }
         for (int i = 0; i < 46; i++) biti.append("11");
 

@@ -84,6 +84,40 @@ public class RttyDemodulator {
      * 157 -> 104 caractere gresite, 72 -> 73 randuri perfecte. Actioneaza doar pe Chebyshev.
      */
     volatile boolean folosesteAtc = false;
+    /**
+     * Volant de caracter: la RTTY continuu (caractere lipite, cum trimit MMTTY/fldigi), dupa
+     * cateva caractere valide decodorul prezice unde incepe urmatorul si nu mai cauta startul
+     * oriunde - o descarcare sau o stingere nu mai poate muta sincronizarea.
+     *
+     * Masurat (Chebyshev, CER): zgomot -6 dB 19.7% -> 8.6%; fading 0.2 Hz + ATC la 0 dB
+     * 15% -> 7.7%; inregistrarea reala cu QSB (W6IWI 14086 kHz) 157 -> 87 caractere gresite
+     * (cu ATC 62). Tastare manuala si rafale cu pauze: identic cu detectia libera.
+     *
+     * Un mark la startul prezis inseamna pauza -> deblocare imediata. Varianta care sarea
+     * peste startul lipsa (presupunand zgomot) castiga mai mult pe flux continuu, dar pierdea
+     * caracterul de dupa fiecare pauza (~24% CER pe tastare), iar cu un prag de "incredere"
+     * (doar dupa >=10 caractere lipite) strica tot rafalele de type-ahead (1-4% la 20 dB).
+     * In schimb, grila veche ramane "fantoma" si reblocheaza imediat daca fluxul a continuat.
+     */
+    volatile boolean folosesteVolant = true;
+    /** Caractere valide consecutive, la perioada constanta, pana se blocheaza volantul. */
+    private static final int VOLANT_PRAG_BLOCARE = 3;
+    /** Biti de stop invalizi consecutivi (cu volantul blocat) pana la deblocare. */
+    private static final int VOLANT_MAX_RATARI = 3;
+    /** Cat din abaterea frontului real fata de prezicere se aplica (0.25 / 1.0 au iesit mai slab). */
+    private static final double VOLANT_CORECTIE = 0.5;
+    /** Cat asteptam (in biti de la startul prezis) un space, inainte sa declaram pauza. */
+    private static final double VOLANT_FEREASTRA_BITI = 1.0;
+    /** Abaterea admisa a perioadei fata de 7 / 7.5 / 8 biti si fata de perioada invatata. */
+    private static final double VOLANT_TOLERANTA_BITI = 0.2;
+    private boolean fantomaActiva;
+    private double fantomaGrila, fantomaPerioada;
+    private boolean volantBlocat;
+    private int volantPotriviri, ratariVolant;
+    private boolean areStartAnterior;
+    private double startCadru, startAnterior, startPrezis, perioadaCaracter;
+    private long esantionAbs;
+
     private double atcMarkEnv, atcSpaceEnv, atcMarkZgomot, atcSpaceZgomot;
 
     // ---- Coeficienti derivati din frecventa ----
@@ -343,6 +377,8 @@ public class RttyDemodulator {
             lpfSpace.configureazaTreceJos(lpfDecizieHz, sampleRate);
         }
         reseteazaAtc();
+        deblocheazaVolant();
+        esantionAbs = 0;
 
         if (folosesteMatchedFilter) {
             initMatchedFilterTemplates(sampleRate, BAUD_RTTY);
@@ -375,6 +411,7 @@ public class RttyDemodulator {
             lpfMark.reseteaza();
             lpfSpace.reseteaza();
             reseteazaAtc();
+            deblocheazaVolant();
             if (folosesteMatchedFilter && mfBuffer != null) {
                 for (int k = 0; k < mfBuffer.length; k++) mfBuffer[k] = 0;
                 mfBufferPos = 0;
@@ -563,23 +600,53 @@ public class RttyDemodulator {
             }
             int bitCurent = isMark ? 1 : 0;
 
+            esantionAbs++;
+
             // Clock Recovery
             if (!inFrame) {
+                // Detectia libera a frontului de start ruleaza si cu volantul blocat - acolo
+                // doar masoara unde a fost frontul real, ca sa corecteze prezicerea.
                 if (bitCurent == 0) {
                     contorConfirmareStart++;
-                    if (contorConfirmareStart >= pragConfirmareStart) {
-                        inFrame = true;
-                        // CORECTIE: nu pornim faza de la 0, ci de la cate esantioane
-                        // au trecut deja de la INCEPUTUL real al starii "space" (cat
-                        // am asteptat sa confirmam) - altfel am introduce o intarziere
-                        // sistematica noua la fiecare bit, in loc sa reparam sincronizarea.
-                        fazaCeasAcumulator = contorConfirmareStart;
-                        bitCounter = 0;
-                        currentByte = 0;
-                        contorConfirmareStart = 0;
-                    }
                 } else {
                     contorConfirmareStart = 0; // revenire la mark inainte de prag = fals pozitiv
+                }
+
+                if (folosesteVolant && volantBlocat) {
+                    long mijlocStart = Math.round(startPrezis + 0.5 * samplesPerBit);
+                    long sfarsitStart = Math.round(startPrezis + VOLANT_FEREASTRA_BITI * samplesPerBit);
+                    if (esantionAbs >= mijlocStart && (bitCurent == 0 || esantionAbs >= sfarsitStart)) {
+                        if (bitCurent == 0 && (esantionAbs == mijlocStart
+                                || contorConfirmareStart >= samplesPerBit * 0.3)) {
+                            double start = startPrezis;
+                            if (contorConfirmareStart >= samplesPerBit * 0.3) {
+                                double abatere = (esantionAbs - contorConfirmareStart) - startPrezis;
+                                double limita = 0.25 * samplesPerBit;
+                                start += VOLANT_CORECTIE * Math.max(-limita, Math.min(limita, abatere));
+                            }
+                            incepeCadru(start);
+                        } else if (esantionAbs >= sfarsitStart) {
+                            // Mark pe tot inceputul bitului de start prezis: de regula emitatorul
+                            // a facut o pauza (tastare manuala) si urmatorul caracter vine la o
+                            // faza oarecare - inapoi la cautarea libera, care si-a tinut contorul
+                            // la zi. (Sa sarim o perioada intreaga ar pierde caracterul de dupa o
+                            // pauza scurta.) Daca doar mijlocul startului a fost lovit de zgomot,
+                            // space-ul apare in fereastra si cadrul porneste pe grila.
+                            double grila = startPrezis, perioada = perioadaCaracter;
+                            deblocheazaVolant();
+                            // Grila veche ramane "fantoma" cateva caractere: daca startul a fost
+                            // doar mancat de zgomot (emitatorul a continuat), primul caracter
+                            // valid gasit liber cade pe ea si volantul se reblocheaza imediat.
+                            fantomaGrila = grila;
+                            fantomaPerioada = perioada;
+                            fantomaActiva = true;
+                        }
+                    }
+                } else if (bitCurent == 0 && contorConfirmareStart >= pragConfirmareStart) {
+                    // CORECTIE: faza nu porneste de la 0, ci de la cate esantioane au trecut
+                    // deja de la INCEPUTUL real al starii "space" (cat am asteptat sa
+                    // confirmam) - altfel am introduce o intarziere sistematica la fiecare bit.
+                    incepeCadru(esantionAbs - contorConfirmareStart);
                 }
             } else {
                 fazaCeasAcumulator += 1.0;
@@ -594,10 +661,12 @@ public class RttyDemodulator {
                         bitCounter++;
                     } else {
                         // Am ajuns la stop-bit (bitCounter == 5)
+                        boolean volantEraBlocat = folosesteVolant && volantBlocat;
+                        if (folosesteVolant) actualizeazaVolant(bitCurent == 1);
                         if (bitCurent == 1) {
                             if (listener != null) listener.onCodBaudot(currentByte & 0x1F);
                             contorEroriFramingConsecutive = 0;
-                        } else {
+                        } else if (!volantEraBlocat) {
                             // Stop bit invalid (framing error)
                             contorEroriFramingConsecutive++;
                             if (contorEroriFramingConsecutive >= PRAG_ERORI_FRAMING_RESYNC) {
@@ -610,6 +679,84 @@ public class RttyDemodulator {
                 }
             }
         }
+    }
+
+    private void incepeCadru(double start) {
+        inFrame = true;
+        startCadru = start;
+        fazaCeasAcumulator = esantionAbs - start;
+        bitCounter = 0;
+        currentByte = 0;
+        contorConfirmareStart = 0;
+    }
+
+    /**
+     * Apelat la fiecare bit de stop. Caractere valide consecutive, fiecare la 7-8 biti dupa
+     * precedentul (RTTY continuu, 1 / 1.5 / 2 biti de stop), blocheaza volantul si ii invata
+     * perioada; cu volantul blocat, rateurile (stop invalid sau start lipsa) doar se numara.
+     */
+    private void actualizeazaVolant(boolean stopValid) {
+        if (fantomaActiva && !volantBlocat) {
+            double k = Math.round((startCadru - fantomaGrila) / fantomaPerioada);
+            if (k < 0 || k > 4) {
+                fantomaActiva = false;
+            } else if (stopValid && Math.abs(startCadru - (fantomaGrila + k * fantomaPerioada)) <= VOLANT_TOLERANTA_BITI * samplesPerBit) {
+                fantomaActiva = false;
+                volantBlocat = true;
+                volantPotriviri = VOLANT_PRAG_BLOCARE;
+                perioadaCaracter = fantomaPerioada;
+                startAnterior = startCadru;
+                areStartAnterior = true;
+                ratariVolant = 0;
+                startPrezis = startCadru + perioadaCaracter;
+                return;
+            }
+        }
+        if (stopValid) {
+            if (areStartAnterior) {
+                double perioada = startCadru - startAnterior;
+                double biti = perioada / samplesPerBit;
+                // Caractere lipite: 7 / 7.5 / 8 biti (1 / 1.5 / 2 biti de stop), si aceeasi
+                // perioada ca pana acum. O pauza scurta de tastare (ex. 0.5 bit) da tot o
+                // valoare "plauzibila" (8.0) - fara conditia de consecventa, media ar amesteca
+                // 7.5 cu 8.0 si prezicerile ar iesi decalate.
+                double celMaiAproape = Math.round(biti * 2) / 2.0;
+                boolean plauzibila = celMaiAproape >= 7.0 && celMaiAproape <= 8.0
+                        && Math.abs(biti - celMaiAproape) <= VOLANT_TOLERANTA_BITI;
+                boolean consecventa = volantPotriviri == 0
+                        || Math.abs(perioada - perioadaCaracter) <= VOLANT_TOLERANTA_BITI * samplesPerBit;
+                if (plauzibila && consecventa) {
+                    perioadaCaracter = volantPotriviri == 0 ? perioada : 0.8 * perioadaCaracter + 0.2 * perioada;
+                    volantPotriviri++;
+                } else if (!volantBlocat) {
+                    volantPotriviri = plauzibila ? 1 : 0;
+                    if (plauzibila) perioadaCaracter = perioada;
+                }
+            }
+            startAnterior = startCadru;
+            areStartAnterior = true;
+            ratariVolant = 0;
+            if (volantPotriviri >= VOLANT_PRAG_BLOCARE) volantBlocat = true;
+        } else if (volantBlocat) {
+            ratariVolant++;
+            if (ratariVolant >= VOLANT_MAX_RATARI) {
+                deblocheazaVolant();
+                return;
+            }
+        } else {
+            volantPotriviri = 0;
+            areStartAnterior = false;
+        }
+        if (volantBlocat) startPrezis = startCadru + perioadaCaracter;
+    }
+
+    private void deblocheazaVolant() {
+        fantomaActiva = false;
+        volantBlocat = false;
+        volantPotriviri = 0;
+        ratariVolant = 0;
+        areStartAnterior = false;
+        perioadaCaracter = 7.5 * samplesPerBit;
     }
 
     private void reseteazaAtc() {
