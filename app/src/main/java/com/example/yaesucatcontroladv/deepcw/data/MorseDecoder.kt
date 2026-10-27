@@ -60,7 +60,22 @@ class MorseDecoder(context: Context, val modelFile: String, val lang: String = "
         }
     }
 
-    /** Decodare cu modelul narrow de 5 bin-uri (pileup). */
+    /**
+     * Ca `decodeNarrow`, dar intoarce caracterele cu pozitia lor (esantion relativ la inceputul
+     * lui `audio`) si increderea - pentru imbinarea ferestrelor succesive ale unei statii.
+     */
+    fun decodeNarrowTokens(audio: FloatArray, targetFreq: Float): List<CtcToken>? {
+        if (!isAvailable) return null
+
+        val spectrogram = spectrogramGenerator.generateNarrowSpectrogram(audio, targetFreq)
+            ?: return null
+        val result = inferenceWrapper.runInference(spectrogram.data, spectrogram.dims) ?: return null
+        return CtcTokens.greedy(result.first, result.second, MorseVocabularies.ENGLISH_BLANK_INDEX).map {
+            CtcToken(Math.round(Constants.outputFrameCenterSample(it.frame)).toLong(), it.index, it.score)
+        }
+    }
+
+    /** Decodare cu modelul narrow de 3 bin-uri (pileup). */
     fun decodeNarrow(audio: FloatArray, targetFreq: Float): String? {
         if (!isAvailable) return null
 

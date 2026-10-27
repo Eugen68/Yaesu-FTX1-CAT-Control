@@ -141,6 +141,12 @@ public class MainActivity extends AppCompatActivity {
                             } catch (Exception ignored) {}
                         } else if (prefix.equals("MD")) {
                             StareRadio.setModText(cmd.substring(2));
+                        } else if (prefix.equals("KP")) {
+                            // KEY PITCH: KPxx, xx = 00..75 -> 300..1050 Hz in pasi de 10 Hz
+                            try {
+                                String cifre = cmd.substring(2).replaceAll("[^0-9]", "");
+                                if (!cifre.isEmpty()) StareRadio.setCwPitchHz(300 + 10 * Integer.parseInt(cifre));
+                            } catch (Exception ignored) {}
                         }
                         if (managerEcranComenzi != null) {
                             managerEcranComenzi.proceseazaDateCATInEcran(prefix, cmd);

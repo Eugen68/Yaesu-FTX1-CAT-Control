@@ -50,6 +50,17 @@ public class EcranCwDeepDecoder {
     /** id statie (track) -> frecventa ei in Hz, pentru modul PILEUP (actualizat pe thread-ul UI). */
     private Map<Integer, Integer> frecventaPeStatie = new java.util.HashMap<>();
 
+    /** Statia din PILEUP pe care s-a facut zero-beat (track id), null = niciuna. */
+    private Integer statieSelectataId = null;
+    /**
+     * Dupa reacordare toate statiile se muta in banda audio si sunt regasite de la zero; statia
+     * selectata trebuie sa apara pe pitch-ul CW - pe ea o cautam la primele statii noi.
+     */
+    private Integer tintaSelectieHz = null;
+
+    /** Cat de departe de o linie verde (Hz) mai conteaza tap-ul ca fiind pe ea. */
+    private static final int TOLERANTA_TAP_STATIE_HZ = 40;
+
     // Ultimul Hz pe care "Detecteaza tonul" a retunat - apasat din nou fara alta actiune
     // intre timp, trece la urmatorul candidat gasit (dupa putere), nu re-gaseste mereu pe
     // acelasi. -1 = inca nicio detectie in aceasta sesiune. Vezi detecteazaTonul().
@@ -135,10 +146,14 @@ public class EcranCwDeepDecoder {
                 LinearLayout.LayoutParams.MATCH_PARENT, 300);
         pWater.setMargins(0, 0, 0, 10);
         waterfall.setLayoutParams(pWater);
+        // Tap pe un semnal: statia se muta pe el (zero-beat), ca emisia ta sa cada pe frecventa
+        // corespondentului; in PILEUP tap-ul selecteaza statia de pe linia verde atinsa.
         waterfall.setOnFrequencyTappedListener(freq -> {
-            processor.setFilterFreq(freq);
-            tvFreqInfo.setText("Tune: " + freq + " Hz");
-            waterfall.setFilterBand(freq, processor.getFilterWidthHz());
+            if (processor.getMode() == DecoderMode.PILEUP) {
+                selecteazaStatiePileup(freq);
+            } else {
+                acordeazaPeSemnal(freq);
+            }
         });
         viewPrincipal.addView(waterfall);
 
@@ -411,6 +426,7 @@ public class EcranCwDeepDecoder {
                     // revenirea in NORMAL nu trebuie sa redeseneze statiile.
                     if (processor.getMode() != DecoderMode.PILEUP) return;
                     frecventaPeStatie = frecvente;
+                    actualizeazaSelectiePileup(tracks);
                     waterfall.setTrackFrequencies(freqs);
                 });
             }
@@ -484,6 +500,8 @@ public class EcranCwDeepDecoder {
             // Liniile si etichetele statiilor din PILEUP nu au sens in NORMAL.
             waterfall.clearOverlays();
             frecventaPeStatie = new java.util.HashMap<>();
+            statieSelectataId = null;
+            tintaSelectieHz = null;
         }
         // In PILEUP statiile se gasesc singure si textul vine pe statie, nu pe streaming -
         // butoanele care regleaza doar decodarea NORMAL nu au efect acolo.
@@ -561,10 +579,10 @@ public class EcranCwDeepDecoder {
         int freqHz = Math.round(ales.getFreqHz());
         ultimulTonDetectatHz = freqHz;
 
-        processor.setFilterFreq(freqHz);
-        tvFreqInfo.setText("Tune: " + freqHz + " Hz");
-        waterfall.setFilterBand(freqHz, processor.getFilterWidthHz());
         showTemporaryStatus("Tone detected at " + freqHz + " Hz");
+        // Ca la tap: cursorul pe ton si statia pe frecventa corespondentului (zero-beat). Dupa o
+        // mutare a statiei istoricul audio se goleste, deci o noua apasare porneste de la zero.
+        acordeazaPeSemnal(freqHz);
     }
 
     private void toggleStreamingMethod() {
@@ -662,6 +680,11 @@ public class EcranCwDeepDecoder {
 
     private void clearTerminal() {
         llMessagesContainer.removeAllViews();
+        if (processor != null && processor.getMode() == DecoderMode.PILEUP) {
+            // In PILEUP raman statiile (liniile verzi, selectia rosie) - se sterg doar textele.
+            processor.clearPileupTexts();
+            return;
+        }
         waterfall.clearOverlays();
         if (processor != null) {
             processor.clearData();
@@ -750,6 +773,109 @@ public class EcranCwDeepDecoder {
         svTerminal.post(() -> svTerminal.fullScroll(View.FOCUS_DOWN));
     }
 
+    /**
+     * NORMAL: zero-beat pe frecventa cursorului (tap sau DETECT TONE) - statia se muta pe
+     * semnalul de la tonHz, iar cursorul decodorului pe pitch; altfel doar cursorul pe tonHz.
+     */
+    private void acordeazaPeSemnal(int tonHz) {
+        Integer pitch = zeroBeat(tonHz);
+        int tinta = pitch != null ? pitch : tonHz;
+        processor.setFilterFreq(tinta);
+        tvFreqInfo.setText("Tune: " + tinta + " Hz");
+        waterfall.setFilterBand(tinta, processor.getFilterWidthHz());
+    }
+
+    /** PILEUP: tap pe o linie verde -> zero-beat pe statia ei, care devine selectata (rosu). */
+    private void selecteazaStatiePileup(int freqHz) {
+        Integer id = null;
+        int dist = TOLERANTA_TAP_STATIE_HZ + 1;
+        for (Map.Entry<Integer, Integer> e : frecventaPeStatie.entrySet()) {
+            int d = Math.abs(e.getValue() - freqHz);
+            if (d < dist) {
+                dist = d;
+                id = e.getKey();
+            }
+        }
+        if (id == null) {
+            Toast.makeText(context, "Tap a green station line to tune to it.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Integer pitch = zeroBeat(frecventaPeStatie.get(id));
+        if (pitch != null) {
+            // Statiile se muta in banda: le regasim de la zero, pe cea selectata langa pitch.
+            statieSelectataId = null;
+            tintaSelectieHz = pitch;
+            waterfall.clearOverlays();
+            frecventaPeStatie = new java.util.HashMap<>();
+            llMessagesContainer.removeAllViews();
+        } else {
+            statieSelectataId = id;
+            tintaSelectieHz = null;
+            waterfall.setSelectedTrackFrequency(frecventaPeStatie.get(id));
+        }
+    }
+
+    /** La fiecare lista noua de statii: regaseste statia selectata dupa reacordare / o pierde. */
+    private void actualizeazaSelectiePileup(List<PileupTrack> tracks) {
+        if (tintaSelectieHz != null) {
+            PileupTrack gasita = null;
+            for (PileupTrack t : tracks) {
+                if (Math.abs(t.getFrequency() - tintaSelectieHz) <= TOLERANTA_TAP_STATIE_HZ
+                        && (gasita == null || Math.abs(t.getFrequency() - tintaSelectieHz) < Math.abs(gasita.getFrequency() - tintaSelectieHz))) {
+                    gasita = t;
+                }
+            }
+            if (gasita != null) {
+                statieSelectataId = gasita.getId();
+                tintaSelectieHz = null;
+            }
+        } else if (statieSelectataId != null && !frecventaPeStatie.containsKey(statieSelectataId)) {
+            statieSelectataId = null; // statia a disparut din banda
+        }
+        Integer f = frecventaSelectata();
+        waterfall.setSelectedTrackFrequency(f != null ? f : -1);
+    }
+
+    private Integer frecventaSelectata() {
+        return statieSelectataId != null ? frecventaPeStatie.get(statieSelectataId) : null;
+    }
+
+    /**
+     * Zero-beat: muta VFO-A cu (ton - pitch) Hz - in CW-U in sus, in CW-L in jos - ca semnalul
+     * auzit pe tonHz sa ajunga pe pitch-ul CW al statiei, adica pe frecventa ta de emisie.
+     * Calculul e relativ, deci nu depinde de meniul CW FREQ DISPLAY (DIRECT / PITCH OFFSET).
+     *
+     * @return pitch-ul (noua frecventa audio a semnalului) daca statia a fost mutata sau era deja
+     *         pe el; null daca statia nu e in CW sau frecventa / modul / pitch-ul nu se cunosc inca.
+     */
+    private Integer zeroBeat(int tonHz) {
+        long frecventaHz = StareRadio.getFrecventaHz();
+        String mod = StareRadio.getModText().trim();
+        int pitch = StareRadio.getCwPitchHz();
+        char codMod = mod.isEmpty() ? ' ' : mod.charAt(mod.length() - 1);
+        boolean cwu = codMod == '3';
+        boolean cwl = codMod == '7';
+        if (frecventaHz <= 0 || pitch <= 0 || codMod == ' ') {
+            radioManager.trimiteComandaCAT("FA;");
+            radioManager.trimiteComandaCAT("MD0;");
+            radioManager.trimiteComandaCAT("KP;");
+            showTemporaryStatus("Radio frequency / pitch not known yet - decoder tuned only");
+            return null;
+        }
+        if (!cwu && !cwl) {
+            showTemporaryStatus("Radio is not in CW mode - decoder tuned only");
+            return null;
+        }
+        int abatere = tonHz - pitch;
+        if (Math.abs(abatere) < 5) return pitch; // deja pe frecventa corespondentului
+        long noua = frecventaHz + (cwu ? abatere : -abatere);
+        radioManager.trimiteComandaCAT(String.format(Locale.US, "FA%09d;", noua));
+        StareRadio.setFrecventaHz(noua);
+        processor.restartAfterRetune();
+        showTemporaryStatus(String.format(Locale.US, "Zero-beat: %+d Hz -> %.3f kHz", noua - frecventaHz, noua / 1000.0));
+        return pitch;
+    }
+
     /** Textele statiilor din pileup, indexate dupa frecventa (Hz), crescator. */
     private void updatePileupList(Map<Integer, String> texts) {
         if (processor.getMode() != DecoderMode.PILEUP) return;
@@ -763,6 +889,11 @@ public class EcranCwDeepDecoder {
 
             android.text.SpannableStringBuilder linie = new android.text.SpannableStringBuilder();
             linie.append(String.format(Locale.US, "[%d Hz]: ", entry.getKey()));
+            if (entry.getKey().equals(frecventaSelectata())) {
+                // statia pe care s-a facut zero-beat: doar "[712 Hz]:" cu rosu, ca linia ei
+                linie.setSpan(new android.text.style.ForegroundColorSpan(Color.RED), 0, linie.length() - 1,
+                        android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
             linie.append(callsignDetector.proceseazaTextComplet(
                     CallsignDetector.repareazaCuvinteLipite(entry.getValue())));
             tv.setText(linie);
@@ -825,6 +956,10 @@ public class EcranCwDeepDecoder {
         tvStatus.setText("CW AI DECODER - RUNNING");
         tvStatus.setTextColor(Color.GREEN);
         processor.start();
+        // Frecventa, modul si pitch-ul CW pentru zero-beat la tap pe waterfall.
+        radioManager.trimiteComandaCAT("FA;");
+        radioManager.trimiteComandaCAT("MD0;");
+        radioManager.trimiteComandaCAT("KP;");
     }
 
     private void stopDecoder() {

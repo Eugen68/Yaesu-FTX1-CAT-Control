@@ -22,7 +22,6 @@ import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_LOCK_SNR_THRES
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_MAX_FREQ_HZ
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_MIN_FREQ_HZ
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_RELEASE_SNR_THRESHOLD_DB
-import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_TEXT_HOLD_MS
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_WINDOW_S
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.SAMPLE_RATE
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.TOTAL_BINS
@@ -251,6 +250,15 @@ class MorseAudioProcessor(private val context: Context) {
         if (isRunning && mode == DecoderMode.NORMAL) restartModeLoops()
     }
 
+    /**
+     * Statia a fost reacordata (zero-beat): audio-ul deja strans e la vechile frecvente
+     * audio, deci se arunca - in NORMAL transcriptul in curs, in PILEUP si statiile urmarite.
+     */
+    fun restartAfterRetune() {
+        toneHistory.clear() // "Detecteaza tonul" ar gasi tonurile de la vechile frecvente
+        if (isRunning) restartModeLoops()
+    }
+
     fun setFilterWidth(widthHz: Int) {
         if (widthHz == filterWidthHz) return
         filterWidthHz = widthHz
@@ -320,6 +328,17 @@ class MorseAudioProcessor(private val context: Context) {
     /**
      * Curăță istoricul decodării și bufferele audio.
      */
+    /**
+     * CLEAR in PILEUP: sterge doar textele adunate pe statii. Statiile urmarite si audio-ul raman
+     * (fara asta detectia ar astepta din nou 2 s, iar pozitiile caracterelor ar reporni de la 0),
+     * iar pe randuri apare de acum doar ce se transmite dupa CLEAR.
+     */
+    fun clearPileupTexts() {
+        stergeTextePileup.set(true)
+    }
+
+    private val stergeTextePileup = java.util.concurrent.atomic.AtomicBoolean(false)
+
     fun clearData() {
         scope.launch {
             segmentsMutex.withLock {
@@ -725,65 +744,91 @@ class MorseAudioProcessor(private val context: Context) {
         }
     }
 
-    /** Loop de decodare narrow per track confirmat (echivalent `usePileupDecode`). */
+    /** Textul acumulat al unei statii din pileup (imbinarea ferestrelor ei succesive). */
+    private class TranscriptStatie(val merger: OverlapMerger) {
+        val confirmat = StringBuilder()
+        var previzualizare = ""
+        var ultimulConfirmat = Long.MIN_VALUE
+    }
+
+    /**
+     * Loop de decodare narrow per statie confirmata. Spre deosebire de `usePileupDecode` din
+     * referinta (care arata doar textul ultimelor 8 s, inlocuit la fiecare decodare), textul
+     * fiecarei statii se ACUMULEAZA: la fiecare PILEUP_DECODE_HOP_S se decodeaza fereastra din
+     * inel (pana la 8 s, pornita pe grila de cadre a modelului), iar ferestrele suprapuse se
+     * imbina cu OverlapMerger, ca la STREAM: WINDOWS din modul NORMAL. Pe rand: textul
+     * confirmat + coada cea mai recenta (inca neconfirmata).
+     */
     private suspend fun pileupDecodeLoop(state: PileupTracksState) {
         val decoder = ensureNarrowDecoder() ?: return
-        val texts = mutableMapOf<Int, String>()
-        val lastNonEmptyAt = mutableMapOf<Int, Long>()
+        val transcrieri = mutableMapOf<Int, TranscriptStatie>()
         var lastVersion = -1L
+        var ultimaDecodare = Long.MIN_VALUE / 2
+        var trimisGol = true
+        var ignoraInainte = Long.MIN_VALUE // caracterele de dinainte de CLEAR nu mai apar
+
+        stergeTextePileup.set(false)
 
         while (coroutineScopeActive()) {
-            val (snapshot, version) = pileupRing.snapshot()
+            val (audio, version, total) = pileupRing.snapshotFilledAbsolute()
             if (version == lastVersion) {
                 delay(POLL_INTERVAL_MS)
                 continue
             }
             lastVersion = version
 
+            if (stergeTextePileup.getAndSet(false)) {
+                transcrieri.clear()
+                ignoraInainte = total
+                pileupListener?.onTextsUpdated(emptyMap())
+                trimisGol = true
+            }
+
             val tracks = state.tracks
+            transcrieri.keys.retainAll(tracks.map { it.id }.toSet())
             if (tracks.isEmpty()) {
-                if (texts.isNotEmpty()) {
-                    texts.clear()
-                    lastNonEmptyAt.clear()
+                if (!trimisGol) {
                     pileupListener?.onTextsUpdated(emptyMap())
+                    trimisGol = true
                 }
                 continue
             }
+            // O statie noua primeste text imediat; altfel decodam o data la PILEUP_DECODE_HOP_S.
+            val statieNoua = tracks.any { it.id !in transcrieri }
+            if (!statieNoua && total - ultimaDecodare < PILEUP_DECODE_HOP_SAMPLES) continue
 
-            val decoded = mutableMapOf<Int, String>()
+            // Fereastra porneste pe grila cadrelor de iesire (288 esantioane), ca pozitiile
+            // caracterelor din ferestre diferite sa fie comparabile.
+            val inceputInel = total - audio.size
+            val start = ceil(inceputInel / OUTPUT_HOP_LENGTH.toDouble()).toLong() * OUTPUT_HOP_LENGTH
+            val offset = (start - inceputInel).toInt()
+            if (audio.size - offset < PILEUP_MIN_DECODE_SAMPLES) continue
+            val fereastra = audio.copyOfRange(offset, audio.size)
+            ultimaDecodare = total
+
             for (track in tracks) {
-                val text = decoder.decodeNarrow(snapshot, track.frequency.toFloat())
+                val tokeni = decoder.decodeNarrowTokens(fereastra, track.frequency.toFloat())
+                    ?.map { it.copy(sample = it.sample + start) }
+                    ?.filter { it.sample >= ignoraInainte } ?: continue
                 if (!coroutineScopeActive()) return
-                if (text != null) decoded[track.id] = text
+                val t = transcrieri.getOrPut(track.id) {
+                    TranscriptStatie(OverlapMerger(OVERLAP_EDGE_GUARD_SAMPLES.toLong(), OVERLAP_TOLERANCE_SAMPLES.toDouble()))
+                }
+                val confirmati = t.merger.push(start, fereastra.size.toLong(), tokeni)
+                t.confirmat.append(tokensText(confirmati))
+                confirmati.lastOrNull()?.let { t.ultimulConfirmat = it.sample }
+                if (t.confirmat.length > PILEUP_MAX_TEXT_CHARS) {
+                    t.confirmat.delete(0, t.confirmat.length - PILEUP_MAX_TEXT_CHARS)
+                }
+                val dupa = max(t.merger.committedUntil, t.ultimulConfirmat + OVERLAP_TOLERANCE_SAMPLES.toDouble())
+                t.previzualizare = tokensText(tokeni.filter { it.sample > dupa })
             }
 
-            val now = SystemClock.elapsedRealtime()
-            val activeIds = tracks.map { it.id }.toSet()
-            texts.keys.retainAll(activeIds)
-            lastNonEmptyAt.keys.retainAll(activeIds)
-
-            for (track in tracks) {
-                val text = decoded[track.id] ?: ""
-                val hasNewText = text.isNotBlank()
-                val nextText = when {
-                    hasNewText -> text
-                    // "hold": pastreaza ultimul text non-gol pentru PILEUP_TEXT_HOLD_MS
-                    texts[track.id] != null &&
-                        now - (lastNonEmptyAt[track.id] ?: 0L) < PILEUP_TEXT_HOLD_MS ->
-                        texts.getValue(track.id)
-                    else -> ""
-                }
-
-                if (nextText.isNotEmpty()) {
-                    texts[track.id] = nextText
-                    if (hasNewText) lastNonEmptyAt[track.id] = now
-                } else {
-                    texts.remove(track.id)
-                    lastNonEmptyAt.remove(track.id)
-                }
-            }
-
-            pileupListener?.onTextsUpdated(texts.toMap())
+            val texte = transcrieri
+                .mapValues { (_, t) -> collapseWhitespace(t.confirmat.toString() + t.previzualizare) }
+                .filterValues { it.isNotEmpty() }
+            pileupListener?.onTextsUpdated(texte)
+            trimisGol = texte.isEmpty()
         }
     }
 
@@ -951,6 +996,9 @@ class MorseAudioProcessor(private val context: Context) {
         /** Cate esantioane reale contine bufferul (restul e inca zero de la creare/clear). */
         private var filled = 0
 
+        /** Cate esantioane s-au scris de la crearea / ultimul clear - pozitia absoluta. */
+        private var totalWritten = 0L
+
         @Synchronized
         fun write(chunk: FloatArray) {
             for (sample in chunk) {
@@ -958,6 +1006,7 @@ class MorseAudioProcessor(private val context: Context) {
                 writeIndex = (writeIndex + 1) % data.size
             }
             filled = min(data.size, filled + chunk.size)
+            totalWritten += chunk.size
             version++
         }
 
@@ -971,6 +1020,10 @@ class MorseAudioProcessor(private val context: Context) {
         @Synchronized
         fun snapshotFilledVersioned(): Pair<FloatArray, Long> = snapshotFilled() to version
 
+        /** Esantioanele reale, versiunea si totalul scris de la ultimul clear (pozitie absoluta). */
+        @Synchronized
+        fun snapshotFilledAbsolute(): Triple<FloatArray, Long, Long> = Triple(snapshotFilled(), version, totalWritten)
+
         @Synchronized
         fun snapshot(): Pair<FloatArray, Long> {
             val result = FloatArray(data.size)
@@ -983,6 +1036,7 @@ class MorseAudioProcessor(private val context: Context) {
             data.fill(0f)
             writeIndex = 0
             filled = 0
+            totalWritten = 0L
             version++
         }
     }
@@ -1005,6 +1059,15 @@ class MorseAudioProcessor(private val context: Context) {
         const val MIN_CONFIRMED_S = 2
         const val ANALYSIS_MIN_INTERVAL_MS = 1000L
         const val POLL_INTERVAL_MS = 50L
+
+        /** Textul unei statii din pileup se re-decodeaza o data pe secunda. */
+        val PILEUP_DECODE_HOP_SAMPLES = SAMPLE_RATE
+
+        /** Fereastra minima decodata pentru o statie (la inceput inelul e inca gol). */
+        val PILEUP_MIN_DECODE_SAMPLES = 2 * SAMPLE_RATE
+
+        /** Cat text pastram pe statie (cele mai recente caractere). */
+        const val PILEUP_MAX_TEXT_CHARS = 400
 
         /** Cat audio real trebuie sa aiba inelul pileup inainte sa cautam statii in el. */
         val PILEUP_MIN_DETECT_SAMPLES = 2 * SAMPLE_RATE

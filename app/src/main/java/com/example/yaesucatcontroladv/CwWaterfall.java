@@ -27,6 +27,8 @@ public class CwWaterfall extends Waterfall {
     private final Paint centerPaint = new Paint();
     private final Paint stationPaint = new Paint();
     private final Paint labelPaint = new Paint();
+    private final Paint selectedStationPaint = new Paint();
+    private final Paint selectedLabelPaint = new Paint();
 
     private int filterFreqHz = -1;
     private int filterWidthHz = 0;
@@ -34,6 +36,8 @@ public class CwWaterfall extends Waterfall {
 
     private List<Integer> trackFrequencies = new ArrayList<>();
     private Map<Integer, String> trackTexts = new LinkedHashMap<>();
+    /** Statia din Pileup pe care s-a facut zero-beat (desenata cu rosu), -1 = niciuna. */
+    private int selectedTrackFrequency = -1;
 
     public CwWaterfall(Context context, int sampleRate) {
         super(context, sampleRate);
@@ -53,6 +57,18 @@ public class CwWaterfall extends Waterfall {
         labelPaint.setColor(Color.GREEN);
         labelPaint.setTextSize(28f);
         labelPaint.setAntiAlias(true);
+
+        selectedStationPaint.set(stationPaint);
+        selectedStationPaint.setColor(Color.RED);
+        selectedStationPaint.setStrokeWidth(3f);
+        selectedLabelPaint.set(labelPaint);
+        selectedLabelPaint.setColor(Color.RED);
+    }
+
+    /** Statia selectata in Pileup (frecventa ei in Hz), -1 = niciuna. */
+    public void setSelectedTrackFrequency(int frequencyHz) {
+        this.selectedTrackFrequency = frequencyHz;
+        postInvalidate();
     }
 
     /** Banda de decodare din modul Normal. */
@@ -82,6 +98,7 @@ public class CwWaterfall extends Waterfall {
     public void clearOverlays() {
         this.trackFrequencies = new ArrayList<>();
         this.trackTexts = new LinkedHashMap<>();
+        this.selectedTrackFrequency = -1;
         postInvalidate();
     }
 
@@ -103,8 +120,10 @@ public class CwWaterfall extends Waterfall {
         for (int index = 0; index < trackFrequencies.size(); index++) {
             int freq = trackFrequencies.get(index);
             float x = frequencyToX(freq);
-            canvas.drawLine(x, 0, x, height, stationPaint);
-            canvas.drawCircle(x, height - 10, 5, stationPaint);
+            boolean selectata = freq == selectedTrackFrequency;
+            Paint linie = selectata ? selectedStationPaint : stationPaint;
+            canvas.drawLine(x, 0, x, height, linie);
+            canvas.drawCircle(x, height - 10, 5, linie);
 
             String text = trackTexts.get(freq);
             String label = text != null && !text.trim().isEmpty()
@@ -112,7 +131,7 @@ public class CwWaterfall extends Waterfall {
                     : freq + " Hz";
             // Etichetele se escaloneaza vertical, ca sa nu se suprapuna intre stații.
             float y = 30f + (index % 4) * 34f;
-            canvas.drawText(label, x + 6f, y, labelPaint);
+            canvas.drawText(label, x + 6f, y, selectata ? selectedLabelPaint : labelPaint);
         }
     }
 }

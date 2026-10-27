@@ -15,6 +15,16 @@ public class StareRadio {
 
     private static volatile long ultimaFrecventaHz = 0L;
     private static volatile String ultimulModText = "";
+    /** Pitch-ul CW al statiei (raspunsul CAT "KPxx" = 300 + 10*xx Hz), 0 = necunoscut. */
+    private static volatile int cwPitchHz = 0;
+
+    public static void setCwPitchHz(int hz) {
+        cwPitchHz = hz;
+    }
+
+    public static int getCwPitchHz() {
+        return cwPitchHz;
+    }
 
     public static void setFrecventaHz(long hz) {
         ultimaFrecventaHz = hz;
