@@ -51,7 +51,7 @@ public class EcranEditorMacro {
         llMain.setPadding(35, 35, 35, 35);
 
         TextView tvTitlu = new TextView(context);
-        tvTitlu.setText("RTTY MACROS EDITOR (8 CANALE)");
+        tvTitlu.setText("RTTY MACROS EDITOR (8 CHANNELS)");
         tvTitlu.setTextColor(Color.WHITE);
         tvTitlu.setTextSize(19);
         tvTitlu.setTypeface(null, Typeface.BOLD);

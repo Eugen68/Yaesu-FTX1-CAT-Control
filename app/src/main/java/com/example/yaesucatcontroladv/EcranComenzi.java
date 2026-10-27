@@ -446,7 +446,7 @@ public class EcranComenzi {
         llPttSettings.addView(btnPttLineToggle);
 
         btnCascaBtToggle = new Button(context);
-        btnCascaBtToggle.setText(cascaBtActivata ? "MIC: CASCA BT" : "MIC: TELEFON");
+        btnCascaBtToggle.setText(cascaBtActivata ? "MIC: BT HEADSET" : "MIC: PHONE");
         btnCascaBtToggle.setBackgroundColor(Color.parseColor("#455A64"));
         btnCascaBtToggle.setTextColor(Color.WHITE);
         btnCascaBtToggle.setTextSize(11);
@@ -456,7 +456,7 @@ public class EcranComenzi {
         btnCascaBtToggle.setLayoutParams(pBtnCascaBt);
         btnCascaBtToggle.setOnClickListener(v -> {
             cascaBtActivata = !cascaBtActivata;
-            btnCascaBtToggle.setText(cascaBtActivata ? "MIC: CASCA BT" : "MIC: TELEFON");
+            btnCascaBtToggle.setText(cascaBtActivata ? "MIC: BT HEADSET" : "MIC: PHONE");
             salveazaSetareListen(PREF_CASCA_BT_ACTIVATA, cascaBtActivata);
             aplicaSetareCascaBt();
             reseteazaTemporizatorSetariPtt();
@@ -627,7 +627,7 @@ public class EcranComenzi {
         
         // Frecventa tonului din modul antrenament: 400 -> 500 -> 600 -> 700 -> 400 Hz.
         Button btnTon = new Button(context);
-        btnTon.setText("TON: 600Hz");
+        btnTon.setText("TONE: 600Hz");
         btnTon.setBackgroundColor(Color.parseColor("#424242"));
         btnTon.setTextColor(Color.WHITE);
         btnTon.setTextSize(10);
@@ -635,7 +635,7 @@ public class EcranComenzi {
         btnTon.setOnClickListener(v -> {
             int ton = trainingKeyer.getToneHz() >= 700 ? 400 : trainingKeyer.getToneHz() + 100;
             trainingKeyer.setToneHz(ton);
-            btnTon.setText("TON: " + ton + "Hz");
+            btnTon.setText("TONE: " + ton + "Hz");
             salveazaSetareKeyer(PREF_CW_TON, ton);
         });
 
@@ -1093,7 +1093,7 @@ public class EcranComenzi {
             // emitem aer mort in timp ce se deschide captura microfonului.
             MicUplinkPlayer.StartResult r = micUplink.startTransmit();
             if (r != MicUplinkPlayer.StartResult.OK) {
-                Toast.makeText(context, "PTT: emisie audio indisponibila (" + r + ")", Toast.LENGTH_SHORT).show();
+                Toast.makeText(context, "PTT: audio TX unavailable (" + r + ")", Toast.LENGTH_SHORT).show();
                 if (listenActive) listenPlayer.start(); // revenim la starea dinainte, TX a esuat
                 return;
             }
@@ -1119,7 +1119,7 @@ public class EcranComenzi {
 
         btnPtt.setBackgroundColor(Color.parseColor(active ? "#D32F2F" : "#757575"));
         if (active) {
-            btnPtt.setText(micUplink.getActiveMicIsBluetooth() ? "TX (MIC CASCA BT)" : "TX (MIC TELEFON)");
+            btnPtt.setText(micUplink.getActiveMicIsBluetooth() ? "TX (BT HEADSET MIC)" : "TX (PHONE MIC)");
         } else {
             btnPtt.setText("PTT");
         }
@@ -1327,7 +1327,7 @@ public class EcranComenzi {
                         } else if (child instanceof Button) {
                             Button b = (Button) child;
                             if (b.getText().toString().startsWith("TON:")) {
-                                b.setText("TON: " + ton + "Hz");
+                                b.setText("TONE: " + ton + "Hz");
                             } else if (b.getText().toString().contains("IAMBIC")) {
                                 b.setText(iambicB ? "IAMBIC B" : "IAMBIC A");
                             } else if (b.getText().toString().startsWith("USE:")) {
@@ -1408,9 +1408,9 @@ public class EcranComenzi {
             btnListenToggle.setText("🔊 LISTEN: ON");
             btnListenToggle.setBackgroundColor(Color.parseColor("#2E7D32"));
         } else if (result == AudioListenPlayer.StartResult.NO_USB_AUDIO) {
-            Toast.makeText(context, "Conectati interfata audio USB a statiei pentru a asculta", Toast.LENGTH_LONG).show();
+            Toast.makeText(context, "Connect the radio's USB audio interface to listen", Toast.LENGTH_LONG).show();
         } else {
-            Toast.makeText(context, "Nu s-a putut porni ascultarea audio", Toast.LENGTH_LONG).show();
+            Toast.makeText(context, "Could not start audio listening", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -1439,7 +1439,7 @@ public class EcranComenzi {
                 llDenoiseControls.setVisibility(View.GONE);
             }
         } else {
-            Toast.makeText(context, "Filtrul de reducere a zgomotului nu este disponibil pe acest device", Toast.LENGTH_LONG).show();
+            Toast.makeText(context, "Noise reduction is not available on this device", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -1523,7 +1523,7 @@ public class EcranComenzi {
         if (cbPttToggleMode != null) cbPttToggleMode.setChecked(pttToggleMode);
         if (btnPttLineToggle != null) btnPttLineToggle.setText(pttUseRts ? "USE: RTS" : "USE: DTR");
         if (btnCascaBtToggle != null) {
-            btnCascaBtToggle.setText(cascaBtActivata ? "MIC: CASCA BT" : "MIC: TELEFON");
+            btnCascaBtToggle.setText(cascaBtActivata ? "MIC: BT HEADSET" : "MIC: PHONE");
         }
 
         listenPlayer.setWetLevel(wet);

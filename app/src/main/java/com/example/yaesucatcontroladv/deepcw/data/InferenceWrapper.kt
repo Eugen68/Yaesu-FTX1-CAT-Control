@@ -51,7 +51,7 @@ class InferenceWrapper(private val context: Context) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Nu s-a putut copia modelul $modelPath din assets", e)
-            return "Model $modelPath indisponibil: ${e.message ?: "eroare de copiere"}"
+            return "Model $modelPath unavailable: ${e.message ?: "copy error"}"
         }
 
         return try {
@@ -70,13 +70,13 @@ class InferenceWrapper(private val context: Context) {
                 cacheFile.delete()
             } catch (ignored: Exception) {
             }
-            "Model $modelPath invalid: ${e.message ?: "eroare necunoscuta"}"
+            "Model $modelPath invalid: ${e.message ?: "unknown error"}"
         } catch (e: Throwable) {
             // OrtException poate fi insotita de erori native (ex. OutOfMemoryError) -
             // nici acelea nu trebuie sa omoare aplicatia.
             Log.e(TAG, "Eroare fatala la incarcarea $modelPath", e)
             session = null
-            "Model $modelPath nu a putut fi incarcat: ${e.message ?: "eroare necunoscuta"}"
+            "Model $modelPath could not be loaded: ${e.message ?: "unknown error"}"
         }
     }
 

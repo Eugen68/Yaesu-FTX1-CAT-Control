@@ -66,7 +66,7 @@ public class EcranCwTrainer {
     private static final String PREF_TRAINER_LUNGIME = "cw_trainer_lungime";
 
     private static final int MOD_GRUPE = 0, MOD_INDICATIVE = 1, MOD_QSO = 2, MOD_LIBER = 3;
-    private static final String[] NUME_MODURI = {"GRUPE", "INDICATIVE", "QSO", "LIBER"};
+    private static final String[] NUME_MODURI = {"GROUPS", "CALLSIGNS", "QSO", "FREE"};
 
     private static final int SET_LITERE = 1, SET_CIFRE = 2, SET_SEMNE = 4;
     private static final String LITERE = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -183,7 +183,7 @@ public class EcranCwTrainer {
         });
 
         TextView tvTitlu = new TextView(context);
-        tvTitlu.setText("CW TRAINER - EMISIE");
+        tvTitlu.setText("CW TRAINER - SENDING");
         tvTitlu.setTextColor(Color.parseColor("#FFC107"));
         tvTitlu.setTextSize(16);
         tvTitlu.setTypeface(null, Typeface.BOLD);
@@ -211,7 +211,7 @@ public class EcranCwTrainer {
         btnLitere = buton("A-Z", v -> comutaSet(SET_LITERE));
         btnCifre = buton("0-9", v -> comutaSet(SET_CIFRE));
         btnSemne = buton(".,?/=", v -> comutaSet(SET_SEMNE));
-        btnLungime = buton("LUNG: 5", v -> {
+        btnLungime = buton("LEN: 5", v -> {
             lungimeGrupa = lungimeGrupa >= 6 ? 2 : lungimeGrupa + 1;
             salveazaInt(PREF_TRAINER_LUNGIME, lungimeGrupa);
             actualizeazaButoaneGrupe();
@@ -230,7 +230,7 @@ public class EcranCwTrainer {
         zona.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        tvEtichetaTinta = eticheta("ȚINTĂ");
+        tvEtichetaTinta = eticheta("TARGET");
         zona.addView(tvEtichetaTinta);
         tvTinta = new TextView(context);
         tvTinta.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
@@ -239,7 +239,7 @@ public class EcranCwTrainer {
         tvTinta.setPadding(0, dp(2), 0, dp(8));
         zona.addView(tvTinta);
 
-        tvEtichetaDat = eticheta("AI DAT");
+        tvEtichetaDat = eticheta("YOU SENT");
         zona.addView(tvEtichetaDat);
         scrollDat = new ScrollView(context);
         scrollDat.setLayoutParams(new LinearLayout.LayoutParams(
@@ -301,10 +301,10 @@ public class EcranCwTrainer {
             actualizeazaEtichetePalete();
             if (!seIncarca) salveazaBool(PREF_CW_REV, checked);
         });
-        btnTon = buton("TON: 600Hz", v -> {
+        btnTon = buton("TONE: 600Hz", v -> {
             int ton = keyer.getToneHz() >= 700 ? 400 : keyer.getToneHz() + 100;
             keyer.setToneHz(ton);
-            btnTon.setText("TON: " + ton + "Hz");
+            btnTon.setText("TONE: " + ton + "Hz");
             salveazaInt(PREF_CW_TON, ton);
         });
         btnIambic = buton("IAMBIC B", v -> {
@@ -321,9 +321,9 @@ public class EcranCwTrainer {
         // NOU, REPETA, RESET SCOR
         LinearLayout rActiuni = randOrizontal();
         rActiuni.setPadding(0, dp(4), 0, dp(6));
-        adaugaCuSpatiu(rActiuni, buton("NOU", v -> exercitiuNou()), false);
-        adaugaCuSpatiu(rActiuni, buton("REPETĂ", v -> pornesteExercitiu(tinta)), true);
-        adaugaCuSpatiu(rActiuni, buton("RESET SCOR", v -> {
+        adaugaCuSpatiu(rActiuni, buton("NEW", v -> exercitiuNou()), false);
+        adaugaCuSpatiu(rActiuni, buton("REPEAT", v -> pornesteExercitiu(tinta)), true);
+        adaugaCuSpatiu(rActiuni, buton("RESET SCORE", v -> {
             caractereTerminate = 0;
             corecteDinPrima = 0;
             greseliSpatiere = 0;
@@ -411,14 +411,14 @@ public class EcranCwTrainer {
         boolean liber = mod == MOD_LIBER;
         tvEtichetaTinta.setVisibility(liber ? View.GONE : View.VISIBLE);
         tvTinta.setVisibility(liber ? View.GONE : View.VISIBLE);
-        tvEtichetaDat.setText(liber ? "MANIPULARE LIBERĂ" : "AI DAT");
+        tvEtichetaDat.setText(liber ? "FREE KEYING" : "YOU SENT");
     }
 
     private void actualizeazaButoaneGrupe() {
         btnLitere.setBackgroundColor(Color.parseColor((seturi & SET_LITERE) != 0 ? CULOARE_ACTIV : CULOARE_BUTON));
         btnCifre.setBackgroundColor(Color.parseColor((seturi & SET_CIFRE) != 0 ? CULOARE_ACTIV : CULOARE_BUTON));
         btnSemne.setBackgroundColor(Color.parseColor((seturi & SET_SEMNE) != 0 ? CULOARE_ACTIV : CULOARE_BUTON));
-        btnLungime.setText("LUNG: " + lungimeGrupa);
+        btnLungime.setText("LEN: " + lungimeGrupa);
     }
 
     private void actualizeazaEtichetePalete() {
@@ -549,10 +549,10 @@ public class EcranCwTrainer {
         greseala = false;
         textDat.clear();
         tvDat.setText("");
-        afiseazaMesaj(mod == MOD_LIBER ? "Manipulează ce vrei - textul decodat apare mai sus." : "", GRI);
+        afiseazaMesaj(mod == MOD_LIBER ? "Key anything you like - the decoded text appears above." : "", GRI);
         tvEtichetaTinta.setText(mod == MOD_QSO && qsoIndex >= 0
-                ? "ȚINTĂ · QSO " + (qsoIndex + 1) + "/" + qsoLista.size() + " · pas " + (qsoPas + 1) + "/" + qsoPasi.size()
-                : "ȚINTĂ");
+                ? "TARGET · QSO " + (qsoIndex + 1) + "/" + qsoLista.size() + " · step " + (qsoPas + 1) + "/" + qsoPasi.size()
+                : "TARGET");
         afiseazaTinta();
         actualizeazaScor();
     }
@@ -638,7 +638,7 @@ public class EcranCwTrainer {
                 // Pauza prea lunga in mijlocul cuvantului.
                 greseliSpatiere++;
                 adaugaDatSpatiuGresit();
-                afiseazaMesaj("⚠ Pauză prea lungă în mijlocul cuvântului", PORTOCALIU);
+                afiseazaMesaj("⚠ Pause too long in the middle of a word", PORTOCALIU);
             }
             afiseazaTinta();
             actualizeazaScor();
@@ -651,7 +651,7 @@ public class EcranCwTrainer {
             pozitie++;
             greseliSpatiere++;
             adaugaDatSpatiuGresit();
-            afiseazaMesaj("⚠ Cuvinte lipite - fă o pauză mai lungă între cuvinte", PORTOCALIU);
+            afiseazaMesaj("⚠ Words run together - leave a longer gap between words", PORTOCALIU);
             asteptat = tinta.charAt(pozitie);
         }
 
@@ -671,8 +671,8 @@ public class EcranCwTrainer {
             greseala = true;
             adaugaDat(c, ROSU);
             afiseazaMesaj(c == '*'
-                    ? "✗ Combinație necunoscută - așteptam " + asteptat + " (" + morse(asteptat) + ")"
-                    : "✗ Ai dat " + c + " (" + morse(c) + ") în loc de " + asteptat + " (" + morse(asteptat) + ")", ROSU);
+                    ? "✗ Unknown combination - expected " + asteptat + " (" + morse(asteptat) + ")"
+                    : "✗ You sent " + c + " (" + morse(c) + ") instead of " + asteptat + " (" + morse(asteptat) + ")", ROSU);
         }
 
         afiseazaTinta();
@@ -689,11 +689,11 @@ public class EcranCwTrainer {
         }
         String urmeaza;
         if (mod == MOD_QSO && qsoIndex >= 0) {
-            urmeaza = qsoPas + 1 < qsoPasi.size() ? "Urmează continuarea QSO-ului..." : "QSO terminat! Urmează alt QSO...";
+            urmeaza = qsoPas + 1 < qsoPasi.size() ? "The QSO continues..." : "QSO complete! Next QSO coming...";
         } else {
-            urmeaza = "Urmează un text nou...";
+            urmeaza = "Next text coming...";
         }
-        afiseazaMesaj("✓ Terminat: " + ok + "/" + total + " corecte din prima. " + urmeaza, VERDE);
+        afiseazaMesaj("✓ Done: " + ok + "/" + total + " right first time. " + urmeaza, VERDE);
         exercitiuUrmator = this::continuaExercitiu;
         handler.postDelayed(exercitiuUrmator, 2500);
     }
@@ -754,13 +754,13 @@ public class EcranCwTrainer {
         }
         int procent = caractereTerminate == 0 ? 0 : Math.round(100f * corecteDinPrima / caractereTerminate);
         StringBuilder sb = new StringBuilder();
-        sb.append("Corecte din prima: ").append(corecteDinPrima).append('/').append(caractereTerminate)
+        sb.append("Right first time: ").append(corecteDinPrima).append('/').append(caractereTerminate)
                 .append(" · ").append(procent).append('%')
-                .append("   Spațiere: ").append(greseliSpatiere);
+                .append("   Spacing: ").append(greseliSpatiere);
         if (!greseliPeCaracter.isEmpty()) {
             List<Map.Entry<Character, Integer>> lista = new ArrayList<>(greseliPeCaracter.entrySet());
             lista.sort((a, b) -> b.getValue() - a.getValue());
-            sb.append("\nGreșite des: ");
+            sb.append("\nOften wrong: ");
             for (int i = 0; i < Math.min(6, lista.size()); i++) {
                 if (i > 0) sb.append("  ");
                 sb.append(lista.get(i).getKey()).append('×').append(lista.get(i).getValue());
@@ -811,7 +811,7 @@ public class EcranCwTrainer {
         sbWpm.setProgress(Math.max(0, Math.min(25, wpm - 10)));
         tvWpm.setText(wpm + " WPM");
         cbRev.setChecked(rev);
-        btnTon.setText("TON: " + ton + "Hz");
+        btnTon.setText("TONE: " + ton + "Hz");
         btnIambic.setText(iambicB ? "IAMBIC B" : "IAMBIC A");
         actualizeazaEtichetePalete();
 

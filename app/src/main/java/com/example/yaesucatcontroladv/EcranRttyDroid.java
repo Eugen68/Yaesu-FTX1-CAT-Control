@@ -732,8 +732,8 @@ public class EcranRttyDroid {
             aplicaAtc(!demod.folosesteAtc);
             salveazaSetareRtty(PREF_RTTY_ATC_ON, demod.folosesteAtc);
             Toast.makeText(context, demod.folosesteAtc
-                    ? "ATC pornit (decodor Chebyshev) - pentru QSB / fading selectiv"
-                    : "ATC oprit", Toast.LENGTH_SHORT).show();
+                    ? "ATC on (Chebyshev decoder) - for QSB / selective fading"
+                    : "ATC off", Toast.LENGTH_SHORT).show();
         });
         llTrkSiNb.addView(btnAtc);
         // Sincronizarea reală de înălțime (SNR-G <-> DNR) se face în
@@ -751,7 +751,7 @@ public class EcranRttyDroid {
         pRandNb.setMargins(0, 5, 0, 10);
         rAndSliderNoiseBlanker.setLayoutParams(pRandNb);
         TextView tvNbLabel = new TextView(context);
-        tvNbLabel.setText("Prag NB:");
+        tvNbLabel.setText("NB threshold:");
         tvNbLabel.setTextColor(Color.WHITE);
         tvNbLabel.setTextSize(13);
         rAndSliderNoiseBlanker.addView(tvNbLabel);
@@ -782,7 +782,7 @@ public class EcranRttyDroid {
         rAndSliderDnr.setVisibility(View.GONE);
         rAndSliderDnr.setLayoutParams(pRandNb);
         TextView tvDnrLabel = new TextView(context);
-        tvDnrLabel.setText("Lățime DNR:");
+        tvDnrLabel.setText("DNR width:");
         tvDnrLabel.setTextColor(Color.WHITE);
         tvDnrLabel.setTextSize(13);
         rAndSliderDnr.addView(tvDnrLabel);
@@ -836,7 +836,7 @@ public class EcranRttyDroid {
         rAndSliderSnrGate.setVisibility(View.GONE);
         rAndSliderSnrGate.setLayoutParams(pRandNb);
         TextView tvSnrGLabel = new TextView(context);
-        tvSnrGLabel.setText("Prag SNR-G:");
+        tvSnrGLabel.setText("SNR-G threshold:");
         tvSnrGLabel.setTextColor(Color.WHITE);
         tvSnrGLabel.setTextSize(13);
         rAndSliderSnrGate.addView(tvSnrGLabel);
@@ -871,7 +871,7 @@ public class EcranRttyDroid {
         pRandSens.setMargins(0, 0, 0, 10);
         rAndSensibilitate.setLayoutParams(pRandSens);
         TextView tvSensLabel = new TextView(context);
-        tvSensLabel.setText("Sensibilitate:");
+        tvSensLabel.setText("Sensitivity:");
         tvSensLabel.setTextColor(Color.WHITE);
         tvSensLabel.setTextSize(13);
         rAndSensibilitate.addView(tvSensLabel);
@@ -901,7 +901,7 @@ public class EcranRttyDroid {
         rAndFiltru.setGravity(Gravity.CENTER_VERTICAL);
         rAndFiltru.setLayoutParams(pRandSens);
         TextView tvFiltruLabel = new TextView(context);
-        tvFiltruLabel.setText("Latime Filtru:");
+        tvFiltruLabel.setText("Filter width:");
         tvFiltruLabel.setTextColor(Color.WHITE);
         tvFiltruLabel.setTextSize(13);
         rAndFiltru.addView(tvFiltruLabel);
@@ -1282,7 +1282,7 @@ public class EcranRttyDroid {
 
     private void executaAutoTuneMecanic() {
         if (!decodareRttyActiva) {
-            Toast.makeText(context, "Porneste receptia (START) inainte de Auto-Tune.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "Start receiving (START) before Auto-Tune.", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -1344,7 +1344,7 @@ public class EcranRttyDroid {
                 });
             } else {
                 activity.runOnUiThread(() ->
-                        Toast.makeText(context, "Semnal slab. Faceti acordul manual.", Toast.LENGTH_SHORT).show());
+                        Toast.makeText(context, "Signal too weak - tune manually.", Toast.LENGTH_SHORT).show());
             }
         }, "AutoTune-Frecventa").start();
     }
@@ -1469,7 +1469,7 @@ public class EcranRttyDroid {
      */
     private void adaugaInCoadaTransmisieRtty(String text) {
         if (radioManager == null || radioManager.getDataPort() == null || !radioManager.getDataPort().isOpen()) {
-            Toast.makeText(context, "Porturile DATA nu sunt conectate!", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "DATA ports are not connected!", Toast.LENGTH_SHORT).show();
             return;
         }
         // Deblocăm motorul de transmisie în caz că a fost oprit anterior

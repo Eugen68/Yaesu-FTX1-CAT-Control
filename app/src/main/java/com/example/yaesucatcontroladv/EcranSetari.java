@@ -289,7 +289,7 @@ public class EcranSetari {
 
         // --- 7. FEREASTRĂ LIVE LOG CAT PLUGGED IN ---
         TextView tvLogTitlu = new TextView(context);
-        tvLogTitlu.setText("LIVE CAT MONITOR (RX / TX JURNAL):");
+        tvLogTitlu.setText("LIVE CAT MONITOR (RX / TX LOG):");
         tvLogTitlu.setTextColor(Color.parseColor("#9E9E9E"));
         tvLogTitlu.setTextSize(13);
         tvLogTitlu.setPadding(10, 20, 0, 10);

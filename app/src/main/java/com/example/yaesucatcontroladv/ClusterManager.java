@@ -175,7 +175,7 @@ public class ClusterManager {
             connectionThread.interrupt();
         }
 
-        notifyStatus(false, "Deconectat");
+        notifyStatus(false, "Disconnected");
     }
 
     /**
@@ -362,7 +362,7 @@ public class ClusterManager {
             });
             return future.get(timeoutMs + 5000L, TimeUnit.MILLISECONDS);
         } catch (TimeoutException te) {
-            throw new IOException("Timeout la conectare/rezolvare DNS pentru " + host + ":" + port
+            throw new IOException("Timeout connecting / resolving DNS for " + host + ":" + port
                     + " (peste " + (timeoutMs + 5000) + " ms)");
         } finally {
             // shutdownNow() nu poate forta oprirea unui apel DNS/connect nativ

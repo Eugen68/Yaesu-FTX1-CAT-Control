@@ -193,7 +193,7 @@ public class EcranCwDeepDecoder {
         rControls.addView(spacerModeToggle);
 
         btnDetectTone = new Button(context);
-        btnDetectTone.setText("DETECTEAZĂ TONUL");
+        btnDetectTone.setText("DETECT TONE");
         btnDetectTone.setBackgroundColor(Color.parseColor("#37474F"));
         btnDetectTone.setTextColor(Color.WHITE);
         btnDetectTone.setTextSize(11);
@@ -218,7 +218,7 @@ public class EcranCwDeepDecoder {
         rControls.addView(btnDenoiseToggle);
 
         View spacer = new View(context);
-        spacer.setLayoutParams(new LinearLayout.LayoutParams(20, 1));
+        spacer.setLayoutParams(new LinearLayout.LayoutParams(15, 1)); // ca intre celelalte butoane
         rControls.addView(spacer);
 
         spWidth = new Spinner(context);
@@ -368,7 +368,7 @@ public class EcranCwDeepDecoder {
         btnStreamMethod.setBackgroundColor(Color.parseColor("#37474F"));
         btnStreamMethod.setTextColor(Color.WHITE);
         btnStreamMethod.setTextSize(11);
-        // "STREAM: FERESTRE" pe un singur rand - de aceea butonul e la fel de lat ca START.
+        // "STREAM: WINDOWS" pe un singur rand - de aceea butonul e la fel de lat ca START.
         btnStreamMethod.setSingleLine(true);
         btnStreamMethod.setOnClickListener(v -> toggleStreamingMethod());
         rButtons.addView(btnStreamMethod, new LinearLayout.LayoutParams(0, 120, 0.8f));
@@ -407,6 +407,9 @@ public class EcranCwDeepDecoder {
                 Map<Integer, Integer> frecvente = new java.util.HashMap<>();
                 for (PileupTrack t : tracks) frecvente.put(t.getId(), t.getFrequency());
                 uiHandler.post(() -> {
+                    // Bucla pileup se opreste asincron: o actualizare care soseste dupa
+                    // revenirea in NORMAL nu trebuie sa redeseneze statiile.
+                    if (processor.getMode() != DecoderMode.PILEUP) return;
                     frecventaPeStatie = frecvente;
                     waterfall.setTrackFrequencies(freqs);
                 });
@@ -417,6 +420,7 @@ public class EcranCwDeepDecoder {
                 // Textele vin indexate dupa id-ul statiei (track id), nu dupa frecventa -
                 // atat lista cat si waterfall-ul au nevoie de frecventa.
                 uiHandler.post(() -> {
+                    if (processor.getMode() != DecoderMode.PILEUP) return;
                     Map<Integer, String> peFrecventa = new java.util.TreeMap<>();
                     for (Map.Entry<Integer, String> e : texts.entrySet()) {
                         Integer freq = frecventaPeStatie.get(e.getKey());
@@ -438,7 +442,7 @@ public class EcranCwDeepDecoder {
                 // denoiseEnabled=false, deci butonul si pref-ul trebuie sincronizate cu el.
                 syncDenoiseButtonUi(false);
                 salveazaSetare(PREF_CW_AI_DENOISE, 0);
-                Toast.makeText(context, "Filtrul de reducere a zgomotului nu este disponibil pe acest device", Toast.LENGTH_LONG).show();
+                Toast.makeText(context, "Noise reduction is not available on this device", Toast.LENGTH_LONG).show();
             }
         }));
 
@@ -476,6 +480,11 @@ public class EcranCwDeepDecoder {
         waterfall.setShowBand(isNormal);
         spWidth.setEnabled(isNormal);
         tvFreqInfo.setVisibility(isNormal ? View.VISIBLE : View.GONE);
+        if (isNormal) {
+            // Liniile si etichetele statiilor din PILEUP nu au sens in NORMAL.
+            waterfall.clearOverlays();
+            frecventaPeStatie = new java.util.HashMap<>();
+        }
         // In PILEUP statiile se gasesc singure si textul vine pe statie, nu pe streaming -
         // butoanele care regleaza doar decodarea NORMAL nu au efect acolo.
         for (View v : new View[]{btnDetectTone, btnStreamMethod}) {
@@ -489,7 +498,7 @@ public class EcranCwDeepDecoder {
         DecoderMode next = (processor.getMode() == DecoderMode.NORMAL) ? DecoderMode.PILEUP : DecoderMode.NORMAL;
         
         if (next == DecoderMode.PILEUP && !processor.getAvailability().getPileupAvailable()) {
-            Toast.makeText(context, "Modelul Pileup nu este valid! Se foloseste modul Normal.", Toast.LENGTH_LONG).show();
+            Toast.makeText(context, "Pileup model is not valid - staying in NORMAL mode.", Toast.LENGTH_LONG).show();
             return;
         }
 
@@ -513,7 +522,7 @@ public class EcranCwDeepDecoder {
         // cuvant confirmat si la fiecare reacordare, deci ar contine adesea doar o pauza.
         float[] snapshot = processor.snapshotRecentAudio();
         if (snapshot.length < TONE_MIN_AUDIO_SAMPLES) {
-            Toast.makeText(context, "Nu am destul audio inca pentru detectare - mai asteapta putin.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "Not enough audio yet - wait a moment and try again.", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -527,7 +536,7 @@ public class EcranCwDeepDecoder {
                 Constants.HOP_LENGTH);
 
         if (candidati.isEmpty()) {
-            Toast.makeText(context, "Nu am gasit niciun ton clar - acordeaza manual cu tap pe waterfall.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "No clear tone found - tap the signal on the waterfall to tune.", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -555,7 +564,7 @@ public class EcranCwDeepDecoder {
         processor.setFilterFreq(freqHz);
         tvFreqInfo.setText("Tune: " + freqHz + " Hz");
         waterfall.setFilterBand(freqHz, processor.getFilterWidthHz());
-        showTemporaryStatus("Ton detectat la " + freqHz + " Hz.");
+        showTemporaryStatus("Tone detected at " + freqHz + " Hz");
     }
 
     private void toggleStreamingMethod() {
@@ -563,8 +572,8 @@ public class EcranCwDeepDecoder {
                 ? StreamingMethod.OVERLAP : StreamingMethod.WORD_GAP;
         aplicaStreamingMethod(next);
         showTemporaryStatus(next == StreamingMethod.OVERLAP
-                ? "Text confirmat din ferestre suprapuse (12 s / 8 s)"
-                : "Text confirmat la pauzele dintre cuvinte");
+                ? "Text confirmed from overlapping windows (12 s / 8 s)"
+                : "Text confirmed at word gaps");
     }
 
     private void aplicaStreamingMethod(StreamingMethod method) {
@@ -575,7 +584,7 @@ public class EcranCwDeepDecoder {
 
     private void syncStreamMethodButtonUi(StreamingMethod method) {
         boolean overlap = method == StreamingMethod.OVERLAP;
-        btnStreamMethod.setText(overlap ? "STREAM: FERESTRE" : "STREAM: PAUZE");
+        btnStreamMethod.setText(overlap ? "STREAM: WINDOWS" : "STREAM: GAPS");
         btnStreamMethod.setBackgroundColor(overlap ? Color.parseColor("#2E7D32") : Color.parseColor("#37474F"));
     }
 

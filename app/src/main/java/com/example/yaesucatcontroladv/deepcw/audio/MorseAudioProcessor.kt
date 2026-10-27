@@ -286,7 +286,7 @@ class MorseAudioProcessor(private val context: Context) {
                         denoiseEnabled = false
                         denoiseAvailable = false
                         notifyAvailability()
-                        reportStatus("Filtrul de reducere a zgomotului nu este disponibil pe acest device")
+                        reportStatus("Noise reduction is not available on this device")
                     }
                 } else {
                     cwDenoiser.reset()
@@ -299,7 +299,7 @@ class MorseAudioProcessor(private val context: Context) {
     fun setMode(newMode: DecoderMode) {
         if (newMode == mode) return
         if (newMode == DecoderMode.PILEUP && !pileupAvailable) {
-            reportStatus("Model PILEUP indisponibil (invalid sau lipsa)")
+            reportStatus("PILEUP model unavailable (missing or invalid)")
             return
         }
         mode = newMode
@@ -309,9 +309,9 @@ class MorseAudioProcessor(private val context: Context) {
         
         if (isRunning) {
             if (newMode == DecoderMode.NORMAL) {
-                reportStatus("Comutat pe NORMAL ($MODEL_EN OK)")
+                reportStatus("Switched to NORMAL ($MODEL_EN OK)")
             } else {
-                reportStatus("Comutat pe PILEUP (modele narrow OK)")
+                reportStatus("Switched to PILEUP ($MODEL_EN_NARROW OK)")
             }
             restartModeLoops()
         }
@@ -344,7 +344,7 @@ class MorseAudioProcessor(private val context: Context) {
 
                 if (!normalAvailable) {
                     reportError(
-                        "Modelul principal CW nu s-a putut incarca: ${error ?: "eroare necunoscuta"}"
+                        "Main CW model could not be loaded: ${error ?: "unknown error"}"
                     )
                     return@withLock
                 }
@@ -362,12 +362,12 @@ class MorseAudioProcessor(private val context: Context) {
                         // denoiser-ului, care are nevoie de modelul principal validat), deci
                         // UI-ul trebuie notificat din nou ca sa isi corecteze toggle-ul.
                         notifyAvailability()
-                        reportStatus("Filtrul de reducere a zgomotului nu este disponibil pe acest device")
+                        reportStatus("Noise reduction is not available on this device")
                     }
                 }
 
                 if (!audioRecorder.start()) {
-                    reportError("Eroare de captare audio. Verifica permisiunea de microfon.")
+                    reportError("Audio capture error. Check the microphone permission.")
                     return@withLock
                 }
 
@@ -799,7 +799,7 @@ class MorseAudioProcessor(private val context: Context) {
         narrowDecoder = decoder
 
         if (!decoder.isAvailable) {
-            disablePileup("Modelul narrow (pileup) nu s-a putut incarca: ${error ?: "eroare necunoscuta"}")
+            disablePileup("Pileup model could not be loaded: ${error ?: "unknown error"}")
             return null
         }
         return decoder

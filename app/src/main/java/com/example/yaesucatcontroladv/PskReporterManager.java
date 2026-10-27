@@ -69,10 +69,10 @@ public class PskReporterManager {
         try {
             int code = conn.getResponseCode();
             if (code == 429) {
-                throw new Exception("Rate limited (429) - interoghezi prea des, așteaptă câteva minute");
+                throw new Exception("Rate limited (429) - querying too often, wait a few minutes");
             }
             if (code != 200) {
-                throw new Exception("HTTP " + code + " de la PSKReporter");
+                throw new Exception("HTTP " + code + " from PSKReporter");
             }
             InputStream raw = conn.getInputStream();
             InputStream in = "gzip".equalsIgnoreCase(conn.getContentEncoding())

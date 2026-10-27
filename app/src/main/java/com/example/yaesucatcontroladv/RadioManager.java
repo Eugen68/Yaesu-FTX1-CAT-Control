@@ -203,7 +203,7 @@ public class RadioManager {
                 Log.e(TAG, "CAT IoManager oprit (deconectare/eroare)", e);
                 if (catListener != null) catListener.onConnectionStateChanged(false);
                 handlerUi.post(() -> Toast.makeText(context,
-                        "Conexiune CAT pierduta: " + e.getMessage(), Toast.LENGTH_SHORT).show());
+                        "CAT connection lost: " + e.getMessage(), Toast.LENGTH_SHORT).show());
             }
         };
 

@@ -112,7 +112,7 @@ public class CallsignDetector {
         EcranRttyDroid.callsignBuffer = callFinal;
 
         // Toast IMEDIAT (fara runOnUiThread)
-        Toast.makeText(context, "\ud83d\udccb " + callFinal + " memorat", Toast.LENGTH_SHORT).show();
+        Toast.makeText(context, "\ud83d\udccb " + callFinal + " saved", Toast.LENGTH_SHORT).show();
 
         // PASUL 2: Verificam focusul in FSK
         if (etInputLive != null && etInputLive.hasFocus()) {
@@ -129,7 +129,7 @@ public class CallsignDetector {
                 etInputLive.getText().insert(cursorPos, textDeInserat);
                 etInputLive.setSelection(cursorPos + textDeInserat.length());
             } else {
-                Toast.makeText(context, "\u26a0\ufe0f Configureaza MY CALL in MY SETTINGS",
+                Toast.makeText(context, "\u26a0\ufe0f Set MY CALL in MY SETTINGS",
                         Toast.LENGTH_LONG).show();
             }
         }
@@ -197,7 +197,7 @@ public class CallsignDetector {
         try {
             context.startActivity(i);
         } catch (Exception e) {
-            Toast.makeText(context, "Nu s-a putut deschide browser-ul", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, "Could not open the browser", Toast.LENGTH_SHORT).show();
         }
     }
 
