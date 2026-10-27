@@ -18,3 +18,8 @@ n.artifacts/
 
 # Exporturi de conversatii Claude Code (nu fac parte din proiect)
 20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.txt
+
+# Semnatura de release: parolele si calea keystore-ului raman doar local
+keystore.properties
+*.jks
+*.keystore

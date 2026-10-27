@@ -1,4 +1,5 @@
 import java.util.Date
+import java.util.Properties
 import java.text.SimpleDateFormat
 
 plugins {
@@ -25,6 +26,13 @@ fun getSafeGitHash(): String {
 
 val gitHash = getSafeGitHash()
 
+// Semnatura de release: keystore.properties (local, ignorat de git) indica keystore-ul si
+// parolele. Fara el, build-ul de release iese nesemnat; debug-ul nu e afectat.
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) keystorePropertiesFile.inputStream().use { load(it) }
+}
+
 android {
     namespace = "com.example.yaesucatcontroladv"
     compileSdk = 35
@@ -33,8 +41,8 @@ android {
         applicationId = "com.example.yaesucatcontroladv"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.1"
+        versionCode = 2
+        versionName = "1.2"
 
         buildConfigField("String", "BUILD_TIME", "\"$buildTimestamp\"")
         buildConfigField("String", "GIT_HASH", "\"$gitHash\"")
@@ -58,8 +66,20 @@ android {
         }
     }
 
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (keystorePropertiesFile.exists()) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
