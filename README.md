@@ -37,7 +37,7 @@ Author: **Eugen Trifu, YO9VA** · License: **MIT** · Platform: Android 8.0+ (AP
 
 ## What it is
 
-The FTX-1 exposes, over one USB-C connection, two virtual serial ports (CAT and DATA) and a USB audio codec. This app uses all three from an Android phone or tablet, so the phone becomes a complete operating position:
+The Yaesu FTX-1 exposes, over one USB-C connection, two virtual serial ports (CAT and DATA) and a USB audio codec. This app uses all three from an Android phone or tablet, so the phone becomes a complete operating position:
 
 - **CAT control** of the radio (frequency, mode, PTT, keyer, filters, power, DNR, …) through the CAT port.
 - **Receive audio** from the radio's USB codec for the CW and RTTY decoders, the waterfalls and a "listen" monitor.
