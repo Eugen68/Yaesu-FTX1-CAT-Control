@@ -22,6 +22,9 @@ Author: **Eugen Trifu, YO9VA** · License: **MIT** · Platform: Android 8.0+ (AP
   - [DX CLUSTER](#dx-cluster)
   - [PSK REPORTER](#psk-reporter)
   - [MY SETTINGS](#my-settings)
+- [Hidden settings (3-second long press)](#hidden-settings-3-second-long-press)
+- [Gestures](#gestures)
+- [Typical workflows](#typical-workflows)
 - [Signal processing in detail](#signal-processing-in-detail)
   - [CW: neural decoding](#cw-neural-decoding)
   - [RTTY: three decoders](#rtty-three-decoders)
@@ -126,7 +129,7 @@ Sending practice on the on-screen paddles, with the app decoding what you send:
 - QSO entry with **GET FREQ/MODE** from the radio, UTC time (tap the header to refresh), RST, band from frequency.
 - **QRZ.com** lookup (name, QTH, grid), with **HamQTH** as a free fallback for the grid; double-tap QRZ to open the profile in the browser.
 - **GPS** grid locator for your own position.
-- QSO history; long press to edit or delete; delete all (with an ADIF backup first).
+- QSO history: tap a QSO to edit it (**SAVE CHANGES** / cancel); long press to delete it, or **Delete ALL** (with an ADIF backup first).
 - **ADIF** export, import and share (e-mail / cloud).
 
 ### LOG STATISTICS
@@ -137,11 +140,11 @@ Statistics of the log, filters, and **FILL MISSING GRIDS** from QRZ / HamQTH.
 
 - Telnet DX Cluster client running as a **foreground service** (stays connected in the background), with keep-alive.
 - Band and mode filters, callsign search, cluster commands.
-- **Tap a spot to tune the radio** (frequency and the matching mode: CW, RTTY, DATA, LSB/USB).
+- **Tap a spot to tune the radio** (frequency and the matching mode: CW, RTTY, otherwise LSB below 10 MHz / USB above).
 
 ### PSK REPORTER
 
-"Who hears me" — reception reports for a callsign from PSKReporter.info, with band/mode filters and optional automatic refresh (respecting the service's rate limit). Tap a report to tune the radio.
+"Who hears me" — reception reports for a callsign from PSKReporter.info, with band/mode filters and optional automatic refresh (respecting the service's rate limit). Tap a report to tune the radio; double-tap it to open the receiving station on QRZ.com.
 
 ### MY SETTINGS
 
@@ -150,6 +153,59 @@ Statistics of the log, filters, and **FILL MISSING GRIDS** from QRZ / HamQTH.
 - **Backup** of all app settings and RTTY macros — optionally **encrypted** with a password (AES-GCM-256, PBKDF2 key); restore.
 - **ADIF** export / import / share.
 - **Local file server**: a small web server, protected by an access token and stopping automatically after 3 minutes, to download (or delete) exported backup and ADIF files from a browser on the same Wi-Fi.
+
+## Hidden settings (3-second long press)
+
+To keep the screens uncluttered, some settings are hidden behind their button. A button whose caption is **underlined** has such a panel: **hold it for 3 seconds** to show it. A normal tap keeps doing what the button always does.
+
+| Screen | Button | Tap | Hold 3 s shows | Hides |
+|---|---|---|---|---|
+| COMMANDS | <ins>PTT</ins> | Transmit (momentary: while held; toggle: on/off) | **TOGGLE MODE** checkbox, **USE: RTS / DTR** (PTT line), **MIC: BT HEADSET / PHONE** (voice source) | 3 s after the last change |
+| COMMANDS | <ins>DENOISE</ins> (next to 🔊 LISTEN) | DENOISE on/off; switching it on opens the panel | **LEVEL** 0–100 % (wet/dry), **GAIN** 0.00–2.00×, **BUFFER** 40/60/90/120/160 ms, **KEEP CONTROLS VISIBLE** | 5 s after the last change, unless KEEP CONTROLS VISIBLE is ticked |
+| CW AI DECODER | <ins>DENOISE</ins> | DENOISE on/off; switching it on opens the panel | **LEVEL**, **GAIN**, **KEEP CONTROLS VISIBLE** | 5 s after the last change, unless locked |
+| RTTY CENTER | <ins>PTT</ins> | Manual PTT on/off | A row with **DIDDLE**, **USE: RTS / DTR** (FSK line), **ITA2 / US-TTY** | After 5 s (extended to 8 s by each touch), or hold again |
+| RTTY CENTER | <ins>NB</ins> | Noise blanker on/off | Threshold slider ×2.0–×12.0 | 5 s after you release the slider, or hold again |
+| RTTY CENTER | <ins>DNR</ins> | Band-pass on/off | Width slider 250–1500 Hz (about 437 Hz minimum with MATCHED FILTER) | 5 s after release, or hold again |
+| RTTY CENTER | <ins>SNR-G</ins> | SNR gating on/off | Gate threshold slider ×1.0–×3.0 | 5 s after release, or hold again |
+
+Notes:
+
+- The DENOISE panels open with a long press only while DENOISE is on.
+- With PTT in toggle mode, a hold that opens the settings does not switch the transmitter on. In momentary mode the radio transmits for as long as you hold the button, so open the PTT settings with the radio on a dummy load or with the power turned down — or switch to toggle mode first.
+- The RTTY PTT row opens only while PTT is off.
+- These settings are remembered between sessions, except NB (switch and threshold) and DIDDLE, which start from their defaults each time.
+
+## Gestures
+
+| Where | Gesture | Result |
+|---|---|---|
+| RTTY and CW terminals | Tap a highlighted callsign | Keeps it for the logger and the `{call}` macros ("📋 CALL saved") |
+| RTTY and CW terminals | Double-tap a callsign (within 0.5 s) | Opens it on QRZ.com in the browser |
+| RTTY terminal | Tap a callsign while the live input box has the focus | Also inserts `CALL DE MYCALL KN` at the cursor (needs MY CALL in MY SETTINGS) |
+| RTTY and CW terminals | Callsign colours | Green: valid callsign found in MASTER.SCP; gold: valid format, not in MASTER.SCP. The text itself is never corrected |
+| RTTY waterfall | Tap / drag | Puts the Mark/Space markers on the signal / fine-tunes them |
+| RTTY CENTER | Tap a macro | Inserts its text (with `{call}` filled in) into the live input; **SEND** transmits it |
+| CW AI waterfall, NORMAL | Tap a signal | Zero-beat: the radio moves so that the tapped tone falls on your CW pitch, then ZERO IN |
+| CW AI waterfall, PILEUP | Tap a green station line | Selects it (turns red) and zero-beats on it |
+| CW AI pileup list | Tap the red/green `[712 Hz]:` prefix | Same as tapping the station on the waterfall |
+| LOGGER | Tap the header | Puts the current UTC time in the time field |
+| LOGGER | Tap / double-tap **QRZ.COM** | Look up the callsign / open its QRZ.com page |
+| LOGGER history | Tap / long press a QSO | Edit it / delete it (or Delete ALL) |
+| DX CLUSTER | Tap a spot | Tunes the radio (frequency + mode) and keeps the DX callsign for the logger |
+| PSK REPORTER | Tap / double-tap a report | Tunes the radio / opens the receiving station on QRZ.com |
+| LIVE CAT MONITOR | Long press a line | Copies it to the clipboard |
+
+## Typical workflows
+
+**Voice QSO (COMMANDS).** Connect → choose LSB/USB → (once) hold <ins>PTT</ins> 3 s and pick **MIC: PHONE** or **BT HEADSET** → hold PTT (or tap it in toggle mode) and talk. Turn on 🔊 LISTEN with DENOISE to hear the band on the phone.
+
+**RTTY QSO (RTTY CENTER).** Tap the signal on the waterfall (or **A-TUNE**) → check NORM/REV → choose **DECODER: DEEPRTTY** for weak or fading signals → tap the other station's callsign → type, or tap a macro, and **SEND**. Before the first transmission, hold <ins>PTT</ins> 3 s and make sure **USE: RTS / DTR** matches the FTX-1 menu.
+
+**CW QSO (CW AI DECODER).** START the decoder → tap the signal on the waterfall or press **DETECT TONE** (the radio zero-beats on it) → read the text, tap the callsign → answer with **M1–M5** or the keyer on COMMANDS. On a crowded frequency switch to **MODE: PILEUP** and tap the station you want to work.
+
+**Logging (LOGGER).** **GET FREQ/MODE** → the callsign from the last tap is already in the call field → **QRZ.COM** fills name, QTH and grid → add the QSO. Export ADIF from LOGGER or MY SETTINGS.
+
+**Hunting DX (DX CLUSTER / PSK REPORTER).** Connect to a cluster server, filter by band and mode, tap a spot → the radio tunes there; switch to the CW or RTTY screen to decode. PSK REPORTER shows who hears your own signal.
 
 ## Signal processing in detail
 
