@@ -41,9 +41,12 @@ reproduced at the end of this section.
 2. DeepRTTY
    https://github.com/e04/DeepRTTY
    Copyright (c) 2026 e04 - MIT License
-   Used for: the overlapping-window streaming method of the CW AI decoder
-   (StreamingMethod.OVERLAP, deepcw/data/OverlapMerger.kt), adapted from the
-   DeepRTTY streaming receiver.
+   Used for: the DEEPRTTY decoder of the RTTY screen - the neural model in
+   app/src/main/assets/model_rtty_2026-10.onnx (the 2026-10-27 MIT release,
+   renamed) and the Kotlin port of its receiver (deeprtty/: front end,
+   spectrogram, streaming decode); and the overlapping-window streaming method
+   shared with the CW AI decoder (StreamingMethod.OVERLAP,
+   deepcw/data/OverlapMerger.kt).
 
 3. HamNoise
    https://github.com/e04/HamNoise  (online: https://e04.github.io/HamNoise/)

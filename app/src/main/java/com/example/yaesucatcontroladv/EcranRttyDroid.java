@@ -143,6 +143,15 @@ public class EcranRttyDroid {
     private static final String PREF_RTTY_USE_RTS_PTT = "rtty_use_rts_ptt";
     private static final String PREF_RTTY_US_TTY = "rtty_us_tty";
     private static final String PREF_RTTY_ATC_ON = "rtty_atc_on";
+    private static final String PREF_RTTY_DECODER = "rtty_decoder";
+
+    // Decodorul ales: 0 CHEBYSHEV, 1 MATCHED FILTER, 2 DEEPRTTY (model neural, e04 DeepRTTY).
+    private static final int DECODER_CHEBYSHEV = 0, DECODER_MF = 1, DECODER_DEEP = 2;
+    private volatile int modDecoder = DECODER_CHEBYSHEV;
+    // Se creeaza la prima alegere a DEEPRTTY (modelul se incarca pe un fir de fundal).
+    private volatile com.example.yaesucatcontroladv.deeprtty.DeepRttyReceiver deepRtty;
+    // Textul provizoriu (gri) al DEEPRTTY, sub terminal.
+    private TextView tvProvizoriu;
 
     private boolean isInitialLoading = false;
 
@@ -431,7 +440,17 @@ public class EcranRttyDroid {
         svRttyScroll.setOnTouchListener(listenerPauzaAutoScroll);
         tvRttyTerminal.setOnTouchListener(listenerPauzaAutoScroll);
 
-        svRttyScroll.addView(tvRttyTerminal);
+        // Sub textul confirmat, textul provizoriu (gri) al DEEPRTTY - se inlocuieste o data pe
+        // secunda si dispare cand coada se confirma (atunci intra in terminal).
+        tvProvizoriu = new TextView(context);
+        tvProvizoriu.setTextColor(Color.GRAY);
+        tvProvizoriu.setTextSize(14);
+        tvProvizoriu.setTypeface(Typeface.MONOSPACE);
+        LinearLayout llTerminal = new LinearLayout(context);
+        llTerminal.setOrientation(LinearLayout.VERTICAL);
+        llTerminal.addView(tvRttyTerminal);
+        llTerminal.addView(tvProvizoriu);
+        svRttyScroll.addView(llTerminal);
         llTopContent.addView(svRttyScroll);
 
         // RAND 1: START | CLEAR | NORM/REV | A-TUNE
@@ -463,6 +482,7 @@ public class EcranRttyDroid {
         btnRttyClear.setLayoutParams(pBtn);
         btnRttyClear.setOnClickListener(v -> {
             tvRttyTerminal.setText("--- RTTY RECEIVE TERMINAL ---\n");
+            tvProvizoriu.setText("");
             callsignDetector.resetBuffer();
         });
         rAndControaleRtty.addView(btnRttyClear);
@@ -498,27 +518,18 @@ public class EcranRttyDroid {
         rAndDecoderToggle.setLayoutParams(pRandDecoder);
 
         btnDecoderToggle = new Button(context);
-        btnDecoderToggle.setText(demod.folosesteMatchedFilter ? "DECODER: MATCHED FILTER" : "DECODER: CHEBYSHEV");
-        btnDecoderToggle.setBackgroundColor(Color.parseColor(demod.folosesteMatchedFilter ? "#6A1B9A" : "#00695C"));
+        btnDecoderToggle.setText("DECODER: CHEBYSHEV");
+        btnDecoderToggle.setBackgroundColor(Color.parseColor("#00695C"));
         btnDecoderToggle.setTextColor(Color.WHITE);
         btnDecoderToggle.setTypeface(null, Typeface.BOLD);
         btnDecoderToggle.setTextSize(10);
         LinearLayout.LayoutParams pBtnDecoder = new LinearLayout.LayoutParams(0, 110, 1f);
         pBtnDecoder.setMargins(5, 0, 5, 0);
         btnDecoderToggle.setLayoutParams(pBtnDecoder);
+        // CHEBYSHEV -> MATCHED FILTER -> DEEPRTTY -> CHEBYSHEV ...
         btnDecoderToggle.setOnClickListener(v -> {
-            demod.folosesteMatchedFilter = !demod.folosesteMatchedFilter;
-            btnDecoderToggle.setText(demod.folosesteMatchedFilter ? "DECODER: MATCHED FILTER" : "DECODER: CHEBYSHEV");
-            btnDecoderToggle.setBackgroundColor(Color.parseColor(demod.folosesteMatchedFilter ? "#6A1B9A" : "#00695C"));
-            if (demod.folosesteMatchedFilter && demod.mfBuffer == null) {
-                demod.initMatchedFilterTemplates(48000, BAUD_RTTY);
-            }
-            demod.recalculeazaShabloaneMF();
-            aplicaClampDnrPentruMatchedFilter();
-            demod.solicitaResetFiltre = true;
-            actualizeazaStareSliderLatime();
-            Toast.makeText(context, "Decoder: " + (demod.folosesteMatchedFilter ? "Matched Filter" : "Chebyshev"),
-                    Toast.LENGTH_SHORT).show();
+            aplicaDecoder((modDecoder + 1) % 3, true);
+            salveazaSetareRtty(PREF_RTTY_DECODER, modDecoder);
         });
         rAndDecoderToggle.addView(btnDecoderToggle);
 
@@ -1217,6 +1228,9 @@ public class EcranRttyDroid {
             demod.setListener(new RttyDemodulator.Listener() {
                 @Override
                 public void onCodBaudot(int cod) {
+                    // Cu DEEPRTTY textul vine de la model; demodulatorul clasic ramane pornit
+                    // pentru SNR si AFC (centrul urmarit de DEEPRTTY).
+                    if (modDecoder == DECODER_DEEP) return;
                     proceseazaCodBaudot(cod);
                 }
 
@@ -1238,6 +1252,7 @@ public class EcranRttyDroid {
             });
             demod.porneste(sampleRate);
             activity.runOnUiThread(this::actualizeazaUiReceptie);
+            if (deepRtty != null && deepRtty.isAvailable()) deepRtty.porneste();
 
             while (decodareRttyActiva) {
                 if (activity.isFinishing() || activity.isDestroyed()) break;
@@ -1261,7 +1276,14 @@ public class EcranRttyDroid {
                 }
 
                 demod.proceseazaBloc(audioBuffer, read);
+
+                com.example.yaesucatcontroladv.deeprtty.DeepRttyReceiver dr = deepRtty;
+                if (modDecoder == DECODER_DEEP && dr != null && dr.isAvailable()) {
+                    double centru = demod.frecventaTunedBaza + (demod.regimReverseSoftware ? -85.0 : 85.0);
+                    dr.alimenteaza(audioBuffer, read, centru, demod.regimReverseSoftware);
+                }
             }
+            if (deepRtty != null) deepRtty.opreste();
             try {
                 if (recorder.getState() == AudioRecord.STATE_INITIALIZED) {
                     recorder.stop();
@@ -1671,6 +1693,7 @@ public class EcranRttyDroid {
     // Apelata din MainActivity.onDestroy()
     // ============================================================
     public void eliberareResurse() {
+        if (deepRtty != null) deepRtty.elibereaza();
         // 1. Oprim decodarea (flag-ul opreste bucla while din thread)
         decodareRttyActiva = false;
 
@@ -1727,6 +1750,88 @@ public class EcranRttyDroid {
         if (btnVariantaBaudot != null) btnVariantaBaudot.setText(usTty ? "US-TTY" : "ITA2");
     }
 
+    /**
+     * Comuta decodorul. DEEPRTTY se incarca la prima alegere, pe un fir de fundal; daca modelul
+     * nu se poate incarca, se revine pe CHEBYSHEV.
+     */
+    private void aplicaDecoder(int mod, boolean cuMesaj) {
+        modDecoder = mod;
+        boolean mf = mod == DECODER_MF;
+        if (demod.folosesteMatchedFilter != mf) {
+            demod.folosesteMatchedFilter = mf;
+            if (mf && demod.mfBuffer == null) demod.initMatchedFilterTemplates(48000, BAUD_RTTY);
+            demod.recalculeazaShabloaneMF();
+            aplicaClampDnrPentruMatchedFilter();
+            demod.solicitaResetFiltre = true;
+        }
+        actualizeazaStareSliderLatime();
+        String[] nume = {"CHEBYSHEV", "MATCHED FILTER", "DEEPRTTY"};
+        String[] culori = {"#00695C", "#6A1B9A", "#1565C0"};
+        btnDecoderToggle.setText("DECODER: " + nume[mod]);
+        btnDecoderToggle.setBackgroundColor(Color.parseColor(culori[mod]));
+        if (tvProvizoriu != null) tvProvizoriu.setText("");
+
+        if (mod == DECODER_DEEP) {
+            pregatesteDeepRtty(cuMesaj);
+        } else {
+            if (deepRtty != null) deepRtty.opreste();
+            if (cuMesaj) Toast.makeText(context, "Decoder: " + nume[mod], Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void pregatesteDeepRtty(boolean cuMesaj) {
+        if (deepRtty != null && deepRtty.isAvailable()) {
+            if (decodareRttyActiva) deepRtty.porneste();
+            if (cuMesaj) Toast.makeText(context, "Decoder: DEEPRTTY (neural)", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Activity activity = (Activity) context;
+        new Thread(() -> {
+            com.example.yaesucatcontroladv.deeprtty.DeepRttyReceiver dr =
+                    new com.example.yaesucatcontroladv.deeprtty.DeepRttyReceiver(context);
+            String eroare = dr.incarca();
+            activity.runOnUiThread(() -> {
+                if (eroare != null || !dr.isAvailable()) {
+                    Toast.makeText(context, "DEEPRTTY model unavailable - using CHEBYSHEV", Toast.LENGTH_LONG).show();
+                    aplicaDecoder(DECODER_CHEBYSHEV, false);
+                    salveazaSetareRtty(PREF_RTTY_DECODER, DECODER_CHEBYSHEV);
+                    return;
+                }
+                dr.setListener(listenerDeepRtty);
+                deepRtty = dr;
+                if (modDecoder == DECODER_DEEP && decodareRttyActiva) dr.porneste();
+                if (cuMesaj) Toast.makeText(context, "Decoder: DEEPRTTY (neural)", Toast.LENGTH_SHORT).show();
+            });
+        }, "DeepRTTY-load").start();
+    }
+
+    /** Pe firul de decodare DEEPRTTY. */
+    private final com.example.yaesucatcontroladv.deeprtty.DeepRttyReceiver.Listener listenerDeepRtty =
+            new com.example.yaesucatcontroladv.deeprtty.DeepRttyReceiver.Listener() {
+        @Override
+        public void onConfirmate(int[] coduri) {
+            for (int cod : coduri) proceseazaCodBaudot(cod);
+        }
+
+        @Override
+        public void onProvizoriu(int[] coduri) {
+            // Decodat cu o copie a codecului: LTRS/FIGS din textul provizoriu nu schimba starea
+            // celui real (textul acela se mai poate corecta).
+            BaudotCodec copie = rxBaudotCodec.copie();
+            StringBuilder sb = new StringBuilder();
+            for (int cod : coduri) {
+                char c = copie.decode(cod);
+                if (c != '\0' && c != '\u0007') sb.append(c);
+            }
+            String text = sb.toString();
+            Activity activity = (Activity) context;
+            if (activity.isFinishing() || activity.isDestroyed()) return;
+            activity.runOnUiThread(() -> {
+                if (tvProvizoriu != null) tvProvizoriu.setText(modDecoder == DECODER_DEEP ? text : "");
+            });
+        }
+    };
+
     private void aplicaAtc(boolean pornit) {
         demod.folosesteAtc = pornit;
         if (btnAtc != null) btnAtc.setBackgroundColor(Color.parseColor(pornit ? "#00897B" : "#757575"));
@@ -1746,6 +1851,7 @@ public class EcranRttyDroid {
 
         folosesteRtsPtPtt = prefs.getBoolean(PREF_RTTY_USE_RTS_PTT, false);
         aplicaVariantaBaudot(prefs.getBoolean(PREF_RTTY_US_TTY, false));
+        aplicaDecoder(prefs.getInt(PREF_RTTY_DECODER, DECODER_CHEBYSHEV), false);
         aplicaAtc(prefs.getBoolean(PREF_RTTY_ATC_ON, false));
 
         // Actualizăm UI

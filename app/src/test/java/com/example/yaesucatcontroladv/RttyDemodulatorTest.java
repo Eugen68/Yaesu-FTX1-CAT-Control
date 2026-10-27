@@ -25,6 +25,8 @@ public class RttyDemodulatorTest {
     private static final double BAUD = RttyDemodulator.BAUD_RTTY;
     /** Pauze aleatoare intre caractere, ca la tastare manuala (RTTY necontinuu). */
     static boolean pauzeTastare = false;
+    /** Space SUB Mark (cum se aude o statie in modul REV). */
+    static boolean spaceSub = false;
     /** Rafale de 15-30 de caractere lipite separate de pauze (buffer type-ahead fara diddle). */
     static boolean pauzeRafale = false;
     private static final String TEXT =
@@ -256,7 +258,7 @@ public class RttyDemodulatorTest {
         for (int i = 0; i < n; i++) {
             int idx = Math.min(biti.length() - 1, (int) (i / samplesPerHalfBit));
             boolean mark = biti.charAt(idx) == '1';
-            double f = (mark ? MARK_HZ : MARK_HZ + RttyDemodulator.SHIFT_HZ) + offsetHz;
+            double f = (mark ? MARK_HZ : MARK_HZ + (spaceSub ? -1 : 1) * RttyDemodulator.SHIFT_HZ) + offsetHz;
             faza += 2 * Math.PI * f / FS;
             double castig = castigMark == null ? 1.0 : (mark ? castigMark[i] : castigSpace[i]);
             semnal[i] = amplitudine * castig * Math.sin(faza);

@@ -66,6 +66,15 @@ public class BaudotCodec {
         this.usTty = usTty;
     }
 
+    /** O copie cu aceeasi stare LTRS/FIGS si aceeasi varianta - pentru a decoda text provizoriu
+     *  fara sa schimbe starea codecului real. */
+    public BaudotCodec copie() {
+        BaudotCodec c = new BaudotCodec();
+        c.shift = shift;
+        c.usTty = usTty;
+        return c;
+    }
+
     public char getShift() {
         return shift;
     }
