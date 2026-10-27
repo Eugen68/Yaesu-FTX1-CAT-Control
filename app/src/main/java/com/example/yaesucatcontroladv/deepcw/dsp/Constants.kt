@@ -5,18 +5,39 @@ import kotlin.math.roundToInt
 /**
  * Constante DSP aliniate 1:1 la proiectul de referinta (web-deep-cw-decoder, src/const.ts).
  * Orice abatere de la aceste valori dezaliniaza spectrograma fata de datele pe care au fost
- * antrenate modelele ONNX (65 de bin-uri, 12.5 Hz/bin, 20 ms/frame).
+ * antrenate modelele ONNX (65 de bin-uri, 12.5 Hz/bin, pas de intrare 15 ms).
  */
 object Constants {
     const val FFT_LENGTH = 768
+
+    /**
+     * Pas STFT de 20 ms (192 / 9600): waterfall, "Detecteaza tonul" si scorul SNR per bin
+     * care gaseste statiile in modul pileup (estimateCwBinSnr).
+     */
     const val HOP_LENGTH = 192
     const val SAMPLE_RATE = 9600
 
     /** 9600 / 768 = 12.5 Hz per bin */
     const val BIN_RESOLUTION = SAMPLE_RATE.toFloat() / FFT_LENGTH
 
-    /** 192 / 9600 = 20 ms per frame STFT */
-    const val FRAME_DURATION_S = HOP_LENGTH.toFloat() / SAMPLE_RATE
+    // ---- Modelul de decodare model_en_2026-10.onnx (e04, 2026-10-27) ----
+    // Antrenat la 3200 Hz cu fft 256 / hop 48; la 9600 Hz parametrii se scaleaza x3 ca sa
+    // pastreze aceleasi durate de fereastra/pas si rezolutia de 12.5 Hz/bin.
+
+    /** Pas STFT al intrarii modelului de decodare: 144 / 9600 = 15 ms. */
+    const val DECODE_HOP_LENGTH = 144
+
+    /** Modelul scoate un cadru la fiecare 2 cadre de intrare. */
+    const val OUTPUT_TIME_STRIDE = 2
+
+    /** 288 esantioane = 30 ms intre cadrele de iesire ale modelului. */
+    const val OUTPUT_HOP_LENGTH = DECODE_HOP_LENGTH * OUTPUT_TIME_STRIDE
+
+    /**
+     * Intrarea e center-padded, deci cadrul de iesire t (poate fi fractionar) e centrat pe
+     * esantionul t * OUTPUT_HOP_LENGTH al ferestrei decodate.
+     */
+    fun outputFrameCenterSample(frame: Float): Float = frame * OUTPUT_HOP_LENGTH
 
     /** Marimea unui chunk de audio livrat de AudioRecorder catre procesor. */
     const val AUDIO_CHUNK_SAMPLES = 2048
@@ -33,10 +54,11 @@ object Constants {
 
     const val TOTAL_BINS = FFT_LENGTH / 2 + 1
 
-    const val NARROW_SHIFT_BINS = 5
+    /** Intrarea modelului narrow (pileup) model_en_narrow_2026-10: 3 bin-uri in jurul tonului. */
+    const val NARROW_SHIFT_BINS = 3
 
-    /** Slice-ul narrow de 5 bin-uri acopera 4 intervale intre centrele bin-urilor extreme. */
-    val PILEUP_FILTER_WIDTH_HZ = BIN_RESOLUTION * (NARROW_SHIFT_BINS - 1)
+    /** Separarea minima intre doua statii urmarite in pileup (4 bin-uri = 50 Hz). */
+    val PILEUP_FILTER_WIDTH_HZ = BIN_RESOLUTION * 4
 
     // ---- Afisare / tuning manual (mod Normal) ----
     const val MIN_FREQ_HZ = 100
@@ -49,12 +71,14 @@ object Constants {
 
     // ---- Pileup ----
     const val PILEUP_WINDOW_S = 8
-    const val PILEUP_MIN_FREQ_HZ = 100
+    /** De la 200 Hz: mai jos stau armonicele retelei (100 / 150 Hz). */
+    const val PILEUP_MIN_FREQ_HZ = 200
     const val PILEUP_MAX_FREQ_HZ = 2000
     const val PILEUP_MAX_PEAKS = 5
     val PILEUP_MATCH_HZ = BIN_RESOLUTION * 1.2f
-    const val PILEUP_LOCK_SNR_THRESHOLD_DB = -10f
-    const val PILEUP_RELEASE_SNR_THRESHOLD_DB = -10f
+    // Scorul din SpectrogramGenerator.estimateCwBinSnr; zgomotul pur da in jur de 5 dB.
+    const val PILEUP_LOCK_SNR_THRESHOLD_DB = 12f
+    const val PILEUP_RELEASE_SNR_THRESHOLD_DB = 9f
     const val PILEUP_TEXT_HOLD_MS = 1500L
     const val PILEUP_CONFIRM_MS = 400L
     const val PILEUP_HOLD_MS = 5000L

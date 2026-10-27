@@ -108,10 +108,19 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
 
     testImplementation(libs.junit)
+    // Testele de pe PC (ex. comparatia modelelor CW) ruleaza ONNX cu varianta JVM - cea
+    // Android nu are biblioteci native pentru desktop. Acelasi API si aceeasi versiune.
+    testImplementation(libs.onnxruntime.jvm)
     androidTestImplementation(libs.espresso.core)
     androidTestImplementation(libs.ext.junit)
     implementation("com.github.mik3y:usb-serial-for-android:3.10.0")
 
     // Server HTTP local (acces la fișierele de backup/log dintr-un browser din rețeaua WiFi)
     implementation("org.nanohttpd:nanohttpd:2.3.1")
+}
+
+// Varianta Android a onnxruntime nu se poate incarca pe JVM-ul de pe PC si ar intra in
+// conflict cu cea JVM (aceleasi clase ai.onnxruntime) - o scoatem doar din testele unitare.
+configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configureEach {
+    exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-android")
 }

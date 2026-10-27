@@ -17,6 +17,7 @@ import com.example.yaesucatcontroladv.deepcw.dsp.Constants
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.BIN_RESOLUTION
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.FFT_LENGTH
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.HOP_LENGTH
+import com.example.yaesucatcontroladv.deepcw.dsp.Constants.OUTPUT_HOP_LENGTH
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_LOCK_SNR_THRESHOLD_DB
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_MAX_FREQ_HZ
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_MIN_FREQ_HZ
@@ -60,9 +61,8 @@ enum class StreamingMethod { WORD_GAP, OVERLAP }
 
 /**
  * Disponibilitatea celor doua moduri, in functie de modelele ONNX care s-au incarcat.
- * `normalAvailable` depinde de model_en.onnx, `pileupAvailable` de model_en_narrow.onnx
- * SI model_detect.onnx (ambele sunt necesare; detectie fara decodare narrow, sau invers,
- * nu are sens functional).
+ * `normalAvailable` depinde de model_en_2026-10.onnx, `pileupAvailable` de
+ * model_en_narrow_2026-10.onnx (gasirea statiilor in pileup e DSP, fara model).
  */
 data class DecoderAvailability(
     val normalAvailable: Boolean,
@@ -309,7 +309,7 @@ class MorseAudioProcessor(private val context: Context) {
         
         if (isRunning) {
             if (newMode == DecoderMode.NORMAL) {
-                reportStatus("Comutat pe NORMAL (model_en.onnx OK)")
+                reportStatus("Comutat pe NORMAL ($MODEL_EN OK)")
             } else {
                 reportStatus("Comutat pe PILEUP (modele narrow OK)")
             }
@@ -349,7 +349,7 @@ class MorseAudioProcessor(private val context: Context) {
                     return@withLock
                 }
                 
-                reportStatus("Model NORMAL (model_en.onnx) OK")
+                reportStatus("Model NORMAL ($MODEL_EN) OK")
 
                 if (denoiseEnabled) {
                     val ok = withContext(Dispatchers.IO) { cwDenoiser.initialize() }
@@ -398,7 +398,6 @@ class MorseAudioProcessor(private val context: Context) {
                 cwDenoiser.release()
                 narrowDecoder?.release()
                 narrowDecoder = null
-                cwDetector?.release()
                 cwDetector = null
             }
         }
@@ -684,19 +683,23 @@ class MorseAudioProcessor(private val context: Context) {
 
     /** Loop de detectie pileup (echivalent `usePileupDetection`). */
     private suspend fun pileupDetectLoop(state: PileupTracksState) {
-        val detector = ensureCwDetector() ?: return
+        val detector = ensureCwDetector()
         val tracked = mutableListOf<TrackedPileupCandidate>()
         var reportedTracks = emptyList<PileupTrack>()
         var nextTrackId = 1
         var lastVersion = -1L
 
         while (coroutineScopeActive()) {
-            val (snapshot, version) = pileupRing.snapshot()
+            // Doar audio-ul real din inel: zerourile de la pornire (sau dupa CLEAR / schimbarea
+            // modului) ar cobori mediana benzii cu care se compara fiecare bin, si zgomotul pur
+            // ar aparea ca 5 statii fantoma in primele ~4 s.
+            val (snapshot, version) = pileupRing.snapshotFilledVersioned()
             if (version == lastVersion) {
                 delay(POLL_INTERVAL_MS)
                 continue
             }
             lastVersion = version
+            if (snapshot.size < PILEUP_MIN_DETECT_SAMPLES) continue
 
             val rawCandidates = detector.detectStations(
                 snapshot,
@@ -802,19 +805,9 @@ class MorseAudioProcessor(private val context: Context) {
         return decoder
     }
 
-    private suspend fun ensureCwDetector(): CwDetector? {
-        cwDetector?.let { return if (it.isAvailable) it else null }
-
-        val detector = CwDetector(context)
-        val error = withContext(Dispatchers.IO) { detector.initialize() }
-        cwDetector = detector
-
-        if (!detector.isAvailable) {
-            disablePileup("Modelul de detectie CW nu s-a putut incarca: ${error ?: "eroare necunoscuta"}")
-            return null
-        }
-        return detector
-    }
+    /** Gasirea statiilor e DSP pur (fara model), deci nu poate esua la incarcare. */
+    private fun ensureCwDetector(): CwDetector =
+        cwDetector ?: CwDetector().also { cwDetector = it }
 
     private fun disablePileup(message: String) {
         pileupAvailable = false
@@ -976,6 +969,9 @@ class MorseAudioProcessor(private val context: Context) {
         }
 
         @Synchronized
+        fun snapshotFilledVersioned(): Pair<FloatArray, Long> = snapshotFilled() to version
+
+        @Synchronized
         fun snapshot(): Pair<FloatArray, Long> {
             val result = FloatArray(data.size)
             for (i in data.indices) result[i] = data[(writeIndex + i) % data.size]
@@ -999,8 +995,8 @@ class MorseAudioProcessor(private val context: Context) {
     private companion object {
         const val TAG = "MorseAudioProcessor"
 
-        const val MODEL_EN = "model_en.onnx"
-        const val MODEL_EN_NARROW = "model_en_narrow.onnx"
+        const val MODEL_EN = "model_en_2026-10.onnx"
+        const val MODEL_EN_NARROW = "model_en_narrow_2026-10.onnx"
 
         // Constante de streaming portate din useStreamingDecode.ts
         const val MAX_SEGMENT_S = 30
@@ -1010,6 +1006,9 @@ class MorseAudioProcessor(private val context: Context) {
         const val ANALYSIS_MIN_INTERVAL_MS = 1000L
         const val POLL_INTERVAL_MS = 50L
 
+        /** Cat audio real trebuie sa aiba inelul pileup inainte sa cautam statii in el. */
+        val PILEUP_MIN_DETECT_SAMPLES = 2 * SAMPLE_RATE
+
         /** Istoricul audio analizat de "Detecteaza tonul". */
         const val TONE_HISTORY_S = 10
 
@@ -1018,8 +1017,10 @@ class MorseAudioProcessor(private val context: Context) {
         val MIN_PENDING_SAMPLES = MIN_PENDING_S * SAMPLE_RATE
         val MIN_CONFIRMED_SAMPLES = MIN_CONFIRMED_S * SAMPLE_RATE
 
-        // StreamingMethod.OVERLAP. Fereastra si pasul sunt multipli de HOP_LENGTH, ca
-        // pozitiile caracterelor din ferestre diferite sa cada pe aceeasi grila de cadre.
+        // StreamingMethod.OVERLAP. Fereastra si pasul sunt multipli de OUTPUT_HOP_LENGTH (pasul
+        // cadrelor de iesire ale modelului, 288 esantioane), ca pozitiile caracterelor din
+        // ferestre diferite sa cada pe aceeasi grila de cadre. 12 s = 400 cadre; 8 s nu e
+        // multiplu, deci pasul e rotunjit la cel mai apropiat (267 cadre = 8.01 s).
         const val OVERLAP_WINDOW_S = 12
         const val OVERLAP_HOP_S = 8
         const val OVERLAP_EDGE_GUARD_S = 1.0f
@@ -1027,12 +1028,13 @@ class MorseAudioProcessor(private val context: Context) {
         const val OVERLAP_MAX_CARRY_CHARS = 30
 
         val OVERLAP_WINDOW_SAMPLES = OVERLAP_WINDOW_S * SAMPLE_RATE
-        val OVERLAP_HOP_SAMPLES = OVERLAP_HOP_S * SAMPLE_RATE
+        val OVERLAP_HOP_SAMPLES =
+            (OVERLAP_HOP_S * SAMPLE_RATE / OUTPUT_HOP_LENGTH.toFloat()).roundToInt() * OUTPUT_HOP_LENGTH
         val OVERLAP_EDGE_GUARD_SAMPLES = (OVERLAP_EDGE_GUARD_S * SAMPLE_RATE).roundToInt()
         val OVERLAP_TOLERANCE_SAMPLES = (OVERLAP_TOLERANCE_S * SAMPLE_RATE).roundToInt()
 
         init {
-            require(OVERLAP_WINDOW_SAMPLES % HOP_LENGTH == 0 && OVERLAP_HOP_SAMPLES % HOP_LENGTH == 0)
+            require(OVERLAP_WINDOW_SAMPLES % OUTPUT_HOP_LENGTH == 0 && OVERLAP_HOP_SAMPLES % OUTPUT_HOP_LENGTH == 0)
         }
     }
 }

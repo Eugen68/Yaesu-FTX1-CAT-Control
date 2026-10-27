@@ -47,6 +47,9 @@ public class EcranCwDeepDecoder {
     private LinearLayout llMessagesContainer, llDenoiseControls;
     private Button btnToggle, btnModeToggle, btnDetectTone, btnDenoiseToggle, btnStreamMethod;
 
+    /** id statie (track) -> frecventa ei in Hz, pentru modul PILEUP (actualizat pe thread-ul UI). */
+    private Map<Integer, Integer> frecventaPeStatie = new java.util.HashMap<>();
+
     // Ultimul Hz pe care "Detecteaza tonul" a retunat - apasat din nou fara alta actiune
     // intre timp, trece la urmatorul candidat gasit (dupa putere), nu re-gaseste mereu pe
     // acelasi. -1 = inca nicio detectie in aceasta sesiune. Vezi detecteazaTonul().
@@ -181,12 +184,13 @@ public class EcranCwDeepDecoder {
         btnModeToggle.setTextSize(11);
         btnModeToggle.setLayoutParams(new LinearLayout.LayoutParams(0, 110, 1.2f));
         btnModeToggle.setOnClickListener(v -> toggleMode());
-        // Ascuns deocamdata (nu exista inca un model PILEUP) - toata logica din spate
-        // (toggleMode/sincronizeazaUiMod/PREF_CW_AI_MODE/restaurarea la pornire) ramane
-        // intacta si nefolosita, gata de reactivat cand va exista un model. View.GONE nu
-        // ocupa loc in rControls, deci "Detecteaza tonul" de mai jos ii ia locul vizual.
-        btnModeToggle.setVisibility(View.GONE);
+        // NORMAL: o statie, tunata manual. PILEUP: pana la 5 statii gasite automat in banda,
+        // fiecare decodata separat (model_en_narrow_2026-10).
         rControls.addView(btnModeToggle);
+
+        View spacerModeToggle = new View(context);
+        spacerModeToggle.setLayoutParams(new LinearLayout.LayoutParams(15, 1));
+        rControls.addView(spacerModeToggle);
 
         btnDetectTone = new Button(context);
         btnDetectTone.setText("DETECTEAZĂ TONUL");
@@ -217,16 +221,28 @@ public class EcranCwDeepDecoder {
         spacer.setLayoutParams(new LinearLayout.LayoutParams(20, 1));
         rControls.addView(spacer);
 
-        TextView tvW = new TextView(context);
-        tvW.setText("BW:");
-        tvW.setTextColor(Color.WHITE);
-        tvW.setPadding(10, 0, 10, 0);
-        rControls.addView(tvW);
-
         spWidth = new Spinner(context);
         List<String> widths = new ArrayList<>();
         for (int w : Constants.INSTANCE.getFILTER_WIDTH_OPTIONS()) widths.add(w + " Hz");
-        ArrayAdapter<String> adapterW = new ArrayAdapter<>(context, android.R.layout.simple_spinner_item, widths);
+        // Spinner-ul arata ca butoanele de pe rand: gri, text alb de 11 sp, "BW: 800 Hz ▾".
+        // Fundalul gri inlocuieste fundalul standard, care continea si sageata listei - de
+        // aceea "▾" e pus in text. Lista care se deschide ramane la marimea implicita, ca sa
+        // fie usor de atins.
+        ArrayAdapter<String> adapterW = new ArrayAdapter<String>(context, android.R.layout.simple_spinner_item, widths) {
+            @Override
+            public View getView(int position, View convertView, android.view.ViewGroup parent) {
+                View v = super.getView(position, convertView, parent);
+                if (v instanceof TextView) {
+                    TextView tv = (TextView) v;
+                    tv.setText("BW: " + getItem(position) + " ▾");
+                    tv.setTextSize(11);
+                    tv.setTextColor(Color.WHITE);
+                    tv.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+                    tv.setGravity(Gravity.CENTER);
+                }
+                return v;
+            }
+        };
         adapterW.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spWidth.setAdapter(adapterW);
         spWidth.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
@@ -239,7 +255,13 @@ public class EcranCwDeepDecoder {
             }
             @Override public void onNothingSelected(AdapterView<?> parent) {}
         });
-        rControls.addView(spWidth);
+        // Aceeasi inaltime ca butoanele de pe rand (110 px) - implicit Spinner-ul are minim
+        // 48 dp si iesea mai inalt.
+        spWidth.setBackgroundColor(Color.parseColor("#37474F"));
+        spWidth.setMinimumHeight(0);
+        spWidth.setPadding(20, 0, 20, 0);
+        rControls.addView(spWidth, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, 110));
         viewPrincipal.addView(rControls);
 
         // --- PANOU CONTROALE DENOISE (PLAN 3) ---
@@ -326,13 +348,17 @@ public class EcranCwDeepDecoder {
         btnToggle.setText("START AI DECODER");
         btnToggle.setBackgroundColor(Color.parseColor("#E65100"));
         btnToggle.setTextColor(Color.WHITE);
+        btnToggle.setTextSize(11);
+        btnToggle.setSingleLine(true);
         btnToggle.setOnClickListener(v -> toggleDecoder());
-        rButtons.addView(btnToggle, new LinearLayout.LayoutParams(0, 120, 1f));
+        rButtons.addView(btnToggle, new LinearLayout.LayoutParams(0, 120, 0.8f));
 
         Button btnClear = new Button(context);
         btnClear.setText("CLEAR");
         btnClear.setBackgroundColor(Color.parseColor("#424242"));
         btnClear.setTextColor(Color.WHITE);
+        btnClear.setTextSize(11);
+        btnClear.setSingleLine(true);
         btnClear.setOnClickListener(v -> clearTerminal());
         rButtons.addView(btnClear, new LinearLayout.LayoutParams(0, 120, 0.4f));
 
@@ -342,8 +368,10 @@ public class EcranCwDeepDecoder {
         btnStreamMethod.setBackgroundColor(Color.parseColor("#37474F"));
         btnStreamMethod.setTextColor(Color.WHITE);
         btnStreamMethod.setTextSize(11);
+        // "STREAM: FERESTRE" pe un singur rand - de aceea butonul e la fel de lat ca START.
+        btnStreamMethod.setSingleLine(true);
         btnStreamMethod.setOnClickListener(v -> toggleStreamingMethod());
-        rButtons.addView(btnStreamMethod, new LinearLayout.LayoutParams(0, 120, 0.6f));
+        rButtons.addView(btnStreamMethod, new LinearLayout.LayoutParams(0, 120, 0.8f));
         syncStreamMethodButtonUi(StreamingMethod.WORD_GAP);
 
         viewPrincipal.addView(rButtons);
@@ -376,14 +404,26 @@ public class EcranCwDeepDecoder {
             @Override
             public void onTracksUpdated(List<PileupTrack> tracks) {
                 List<Integer> freqs = tracks.stream().map(PileupTrack::getFrequency).collect(Collectors.toList());
-                uiHandler.post(() -> waterfall.setTrackFrequencies(freqs));
+                Map<Integer, Integer> frecvente = new java.util.HashMap<>();
+                for (PileupTrack t : tracks) frecvente.put(t.getId(), t.getFrequency());
+                uiHandler.post(() -> {
+                    frecventaPeStatie = frecvente;
+                    waterfall.setTrackFrequencies(freqs);
+                });
             }
 
             @Override
             public void onTextsUpdated(Map<Integer, String> texts) {
+                // Textele vin indexate dupa id-ul statiei (track id), nu dupa frecventa -
+                // atat lista cat si waterfall-ul au nevoie de frecventa.
                 uiHandler.post(() -> {
-                    waterfall.setTrackTexts(texts);
-                    updatePileupList(texts);
+                    Map<Integer, String> peFrecventa = new java.util.TreeMap<>();
+                    for (Map.Entry<Integer, String> e : texts.entrySet()) {
+                        Integer freq = frecventaPeStatie.get(e.getKey());
+                        if (freq != null) peFrecventa.put(freq, e.getValue());
+                    }
+                    waterfall.setTrackTexts(peFrecventa);
+                    updatePileupList(peFrecventa);
                 });
             }
         });
@@ -436,6 +476,13 @@ public class EcranCwDeepDecoder {
         waterfall.setShowBand(isNormal);
         spWidth.setEnabled(isNormal);
         tvFreqInfo.setVisibility(isNormal ? View.VISIBLE : View.GONE);
+        // In PILEUP statiile se gasesc singure si textul vine pe statie, nu pe streaming -
+        // butoanele care regleaza doar decodarea NORMAL nu au efect acolo.
+        for (View v : new View[]{btnDetectTone, btnStreamMethod}) {
+            v.setEnabled(isNormal);
+            v.setAlpha(isNormal ? 1f : 0.4f);
+        }
+        spWidth.setAlpha(isNormal ? 1f : 0.4f);
     }
 
     private void toggleMode() {
@@ -694,6 +741,7 @@ public class EcranCwDeepDecoder {
         svTerminal.post(() -> svTerminal.fullScroll(View.FOCUS_DOWN));
     }
 
+    /** Textele statiilor din pileup, indexate dupa frecventa (Hz), crescator. */
     private void updatePileupList(Map<Integer, String> texts) {
         if (processor.getMode() != DecoderMode.PILEUP) return;
         llMessagesContainer.removeAllViews();

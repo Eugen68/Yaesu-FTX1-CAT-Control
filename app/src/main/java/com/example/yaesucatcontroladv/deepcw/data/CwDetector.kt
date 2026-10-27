@@ -1,6 +1,5 @@
 package com.example.yaesucatcontroladv.deepcw.data
 
-import android.content.Context
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_FILTER_WIDTH_HZ
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_MATCH_HZ
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_MAX_PEAKS
@@ -12,17 +11,14 @@ data class DetectedStation(override val frequency: Float, override val snrDb: Fl
     PileupCandidate
 
 /**
- * Model de detectie CW pe fiecare bin de frecventa.
- * Port fidel al `handleDetectCwBins` din `src/workers/inferenceWorker.ts`.
+ * Gaseste statiile CW din banda pentru modul pileup. Port fidel al `handleDetectCwBins` din
+ * `src/workers/inferenceWorker.ts` (versiunea e04 din 2026-10-27): scorul pe bin vine din
+ * SpectrogramGenerator.estimateCwBinSnr (DSP) - modelul de detectie de dinainte a disparut.
+ *
+ * Instanta NU e thread-safe (SpectrogramGenerator reutilizeaza buffere STFT).
  */
-class CwDetector(context: Context) {
-    private val inferenceWrapper = InferenceWrapper(context)
+class CwDetector {
     private val spectrogramGenerator = SpectrogramGenerator()
-
-    val isAvailable: Boolean
-        get() = inferenceWrapper.isAvailable
-
-    fun initialize(): String? = inferenceWrapper.loadModel(MODEL_FILE)
 
     fun detectStations(
         audio: FloatArray,
@@ -32,19 +28,11 @@ class CwDetector(context: Context) {
         releaseSnrThresholdDb: Float,
         lockedFrequencies: List<Float> = emptyList()
     ): List<DetectedStation> {
-        if (!isAvailable) return emptyList()
-
-        val binSequence = spectrogramGenerator.generateBinSequence(audio, minFreqHz, maxFreqHz)
+        val binSnr = spectrogramGenerator.estimateCwBinSnr(audio, minFreqHz, maxFreqHz)
             ?: return emptyList()
 
-        val result = inferenceWrapper.runInference(binSequence.data, binSequence.dims)
-            ?: return emptyList()
-
-        val snrValues = result.first
-        val frequencies = binSequence.frequencies ?: return emptyList()
-
-        val scoredBins = frequencies.mapIndexed { index, freq ->
-            DetectedStation(freq, snrValues.getOrElse(index) { 0f })
+        val scoredBins = binSnr.frequencies.mapIndexed { index, freq ->
+            DetectedStation(freq, binSnr.snrDb[index])
         }.sortedByDescending { it.snrDb }
 
         // 1. Pastreaza stațiile deja urmarite, cat timp sunt peste pragul de release.
@@ -75,13 +63,5 @@ class CwDetector(context: Context) {
         )
 
         return retained + newCandidates
-    }
-
-    fun release() {
-        inferenceWrapper.close()
-    }
-
-    companion object {
-        const val MODEL_FILE = "model_detect.onnx"
     }
 }

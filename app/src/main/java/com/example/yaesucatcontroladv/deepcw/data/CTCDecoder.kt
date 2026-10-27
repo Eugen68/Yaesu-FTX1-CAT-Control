@@ -1,7 +1,6 @@
 package com.example.yaesucatcontroladv.deepcw.data
 
-import com.example.yaesucatcontroladv.deepcw.dsp.Constants.FFT_LENGTH
-import com.example.yaesucatcontroladv.deepcw.dsp.Constants.HOP_LENGTH
+import com.example.yaesucatcontroladv.deepcw.dsp.Constants
 import kotlin.math.roundToInt
 
 data class CharSpan(val char: String, val startFrame: Int, var endFrame: Int)
@@ -189,7 +188,7 @@ object StreamingTranscript {
     /** Eșantionul din mijlocul unei pauze de cuvant - punctul candidat de "commit". */
     fun getSpanSplitSample(span: WordSpaceSpan): Int {
         val midFrame = (span.startFrame + span.endFrame) / 2f
-        return (midFrame * HOP_LENGTH + FFT_LENGTH / 2f).roundToInt()
+        return Constants.outputFrameCenterSample(midFrame).roundToInt()
     }
 
     fun trimToFrame(result: DetailedTranscript, endFrame: Int): DetailedTranscript {

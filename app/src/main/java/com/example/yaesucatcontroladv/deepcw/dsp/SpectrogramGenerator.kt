@@ -2,6 +2,7 @@ package com.example.yaesucatcontroladv.deepcw.dsp
 
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.BIN_RESOLUTION
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.CROPPED_BINS
+import com.example.yaesucatcontroladv.deepcw.dsp.Constants.DECODE_HOP_LENGTH
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.END_BIN
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.FFT_LENGTH
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.HOP_LENGTH
@@ -12,7 +13,9 @@ import com.example.yaesucatcontroladv.deepcw.dsp.Constants.START_BIN
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.TOTAL_BINS
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.ln
 import kotlin.math.ln1p
+import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
@@ -20,26 +23,24 @@ import kotlin.math.sqrt
 
 data class SpectrogramResult(
     val data: FloatArray,
-    val dims: LongArray,
-    val frequencies: FloatArray? = null
+    val dims: LongArray
 )
 
 /**
  * Port fidel al `src/utils/spectrogramUtils.ts` din proiectul de referinta.
  *
- * ATENTIE: normalizarea CMVN este GLOBALA (o singura medie/deviatie pentru toata
- * spectrograma), exact ca in referinta - nu per cadru temporal. Varianta per-cadru
- * (folosita anterior in acest port) distruge informatia de amplitudine relativa intre
- * cadre, adica exact semnalul pe care se bazeaza modelul pentru a distinge ton de pauza.
+ * Toate spectrogramele pentru modele (decodare normala si narrow/pileup, modelele
+ * model_en_2026-10 / model_en_narrow_2026-10) folosesc versiunea e04 din 2026-10-27: pas 144,
+ * audio center-padded prin reflexie, normalizare "noise_q90_log1p". Gasirea statiilor in
+ * pileup (estimateCwBinSnr) e DSP pur, pe pasul de 192.
  *
  * Instanta NU e thread-safe (STFT reutilizeaza buffere interne): fiecare thread/loop de
  * decodare trebuie sa aiba propria instanta.
  */
 class SpectrogramGenerator {
-    private val stft = STFT(FFT_LENGTH, HOP_LENGTH)
+    private val detectStft = STFT(FFT_LENGTH, HOP_LENGTH)
+    private val decodeStft = STFT(FFT_LENGTH, DECODE_HOP_LENGTH)
     private val narrowCenterIdx = NARROW_SHIFT_BINS / 2
-
-    fun getFrameCount(signalLength: Int): Int = stft.getFrameCount(signalLength)
 
     /**
      * Spectrograma "plina" a benzii decodabile (400-1200 Hz), fara deplasare de frecventa.
@@ -56,12 +57,12 @@ class SpectrogramGenerator {
             audio
         }
 
-        val timeSteps = stft.getFrameCount(processedAudio.size)
-        if (timeSteps == 0) return null
+        val paddedAudio = centerPad(processedAudio) ?: return null
+        val timeSteps = decodeStft.getFrameCount(paddedAudio.size)
 
         val flattenedSpectrogram = FloatArray(timeSteps * CROPPED_BINS)
 
-        stft.forEachSpectrum(processedAudio) { complexFrame, frameIndex ->
+        decodeStft.forEachSpectrum(paddedAudio) { complexFrame, frameIndex ->
             val offset = frameIndex * CROPPED_BINS
             for (bin in START_BIN until END_BIN) {
                 val real = complexFrame[bin * 2]
@@ -70,7 +71,7 @@ class SpectrogramGenerator {
             }
         }
 
-        normalizeSpectrogramPerSampleCmvn(flattenedSpectrogram)
+        normalizeSpectrogramNoiseLog1p(flattenedSpectrogram, flattenedSpectrogram)
 
         return SpectrogramResult(
             data = flattenedSpectrogram,
@@ -81,14 +82,16 @@ class SpectrogramGenerator {
     /**
      * Extrage `bandwidth` Hz in jurul lui targetFreq si il muta pe centrul modelului (800 Hz).
      * Restul bin-urilor ramane zero. Aceasta e calea folosita pentru decodarea normala tunata.
+     * Nivelul de zgomot se estimeaza doar din bin-urile populate - zerourile din afara benzii
+     * ar trage percentila in jos.
      */
     fun generateShiftedSpectrogram(
         audio: FloatArray,
         targetFreq: Float,
         bandwidth: Float
     ): SpectrogramResult? {
-        val timeSteps = stft.getFrameCount(audio.size)
-        if (timeSteps == 0) return null
+        val paddedAudio = centerPad(audio) ?: return null
+        val timeSteps = decodeStft.getFrameCount(paddedAudio.size)
 
         val targetBin = round(targetFreq / BIN_RESOLUTION).toInt()
         val halfWidthBins = ceil(bandwidth / 2f / BIN_RESOLUTION).toInt()
@@ -96,7 +99,7 @@ class SpectrogramGenerator {
 
         val flattenedSpectrogram = FloatArray(timeSteps * CROPPED_BINS)
 
-        stft.forEachSpectrum(audio) { complexFrame, frameIndex ->
+        decodeStft.forEachSpectrum(paddedAudio) { complexFrame, frameIndex ->
             val offset = frameIndex * CROPPED_BINS
             for (d in -halfWidthBins..halfWidthBins) {
                 val srcBin = targetBin + d
@@ -109,7 +112,14 @@ class SpectrogramGenerator {
             }
         }
 
-        normalizeSpectrogramPerSampleCmvn(flattenedSpectrogram)
+        val destStart = max(0, destCenterIdx - halfWidthBins)
+        val destEnd = min(CROPPED_BINS, destCenterIdx + halfWidthBins + 1)
+        val width = destEnd - destStart
+        val populated = FloatArray(timeSteps * width)
+        for (t in 0 until timeSteps) {
+            flattenedSpectrogram.copyInto(populated, t * width, t * CROPPED_BINS + destStart, t * CROPPED_BINS + destEnd)
+        }
+        normalizeSpectrogramNoiseLog1p(flattenedSpectrogram, populated)
 
         return SpectrogramResult(
             data = flattenedSpectrogram,
@@ -117,18 +127,18 @@ class SpectrogramGenerator {
         )
     }
 
-    /** Slice de 5 bin-uri centrat pe targetFreq, pentru modelul narrow (pileup). */
+    /** Slice de 3 bin-uri centrat pe targetFreq, pentru modelul narrow (pileup). */
     fun generateNarrowSpectrogram(
         audio: FloatArray,
         targetFreq: Float
     ): SpectrogramResult? {
-        val timeSteps = stft.getFrameCount(audio.size)
-        if (timeSteps == 0) return null
+        val paddedAudio = centerPad(audio) ?: return null
+        val timeSteps = decodeStft.getFrameCount(paddedAudio.size)
 
         val targetBin = round(targetFreq / BIN_RESOLUTION).toInt()
         val flattenedSpectrogram = FloatArray(timeSteps * NARROW_SHIFT_BINS)
 
-        stft.forEachSpectrum(audio) { complexFrame, frameIndex ->
+        decodeStft.forEachSpectrum(paddedAudio) { complexFrame, frameIndex ->
             val offset = frameIndex * NARROW_SHIFT_BINS
             for (d in -narrowCenterIdx..narrowCenterIdx) {
                 val srcBin = targetBin + d
@@ -141,7 +151,7 @@ class SpectrogramGenerator {
             }
         }
 
-        normalizeSpectrogramPerSampleCmvn(flattenedSpectrogram)
+        normalizeSpectrogramNoiseLog1p(flattenedSpectrogram, flattenedSpectrogram)
 
         return SpectrogramResult(
             data = flattenedSpectrogram,
@@ -149,86 +159,113 @@ class SpectrogramGenerator {
         )
     }
 
+    /** SNR-ul estimat al fiecarui bin din [minFreqHz, maxFreqHz] - vezi estimateCwBinSnr. */
+    class BinSnr(val frequencies: FloatArray, val snrDb: FloatArray)
+
     /**
-     * Un "batch" de secvente temporale, una pentru fiecare bin din intervalul cerut.
-     * Intrarea modelului de detectie CW. CMVN aici e per bin (per element de batch), ca in
-     * referinta, si pe magnitudine logaritmica.
+     * SNR CW per bin (gaseste statiile in modul pileup; inlocuieste modelul de detectie):
+     * puterea bin-ului "cu cheia apasata" (percentila 90 in timp) fata de mediana puterii
+     * intregii benzi. Zgomotul pur da in jur de 5 dB. Bin-urile cu mult mai slabe decat un
+     * bin puternic din apropiere sunt benzile laterale ale manipularii lui si primesc 0 dB -
+     * altfel ar aparea ca statii-fantoma langa un semnal puternic.
+     *
+     * Adaugat fata de e04: un bin trebuie si sa fie manipulat - percentila 90 cu cel putin
+     * CW_MIN_KEYING_DB peste percentila 20 a aceluiasi bin. Telegrafia are pauze (~50% din
+     * timp); zgomotul pur fluctueaza singur ~10 dB intre cele doua percentile, o purtatoare
+     * puternica sau brumul retelei doar 0-3 dB.
      */
-    fun generateBinSequence(
-        audio: FloatArray,
-        minFreqHz: Float,
-        maxFreqHz: Float
-    ): SpectrogramResult? {
-        val timeSteps = stft.getFrameCount(audio.size)
+    fun estimateCwBinSnr(audio: FloatArray, minFreqHz: Float, maxFreqHz: Float): BinSnr? {
+        val timeSteps = detectStft.getFrameCount(audio.size)
         if (timeSteps == 0) return null
 
-        val clampedMin = max(0f, minFreqHz)
-        val clampedMax = min(SAMPLE_RATE / 2f, maxFreqHz)
-        if (clampedMin > clampedMax) return null
+        val minBin = max(0, ceil(max(0f, minFreqHz) / BIN_RESOLUTION).toInt())
+        val maxBin = min(TOTAL_BINS - 1, floor(min(SAMPLE_RATE / 2f, maxFreqHz) / BIN_RESOLUTION).toInt())
+        val binCount = maxBin - minBin + 1
+        if (binCount <= 0) return null
 
-        val minBin = max(0, floor(clampedMin / BIN_RESOLUTION).toInt())
-        val maxBin = min(TOTAL_BINS - 1, ceil(clampedMax / BIN_RESOLUTION).toInt())
-        val batchSize = maxBin - minBin + 1
-        if (batchSize <= 0) return null
-
-        val flattenedSequences = FloatArray(batchSize * timeSteps)
-        val frequencies = FloatArray(batchSize) { (minBin + it) * BIN_RESOLUTION }
-
-        stft.forEachSpectrum(audio) { complexFrame, frameIndex ->
+        val powers = FloatArray(binCount * timeSteps)
+        detectStft.forEachSpectrum(audio) { complexFrame, frameIndex ->
             for (bin in minBin..maxBin) {
                 val real = complexFrame[bin * 2]
                 val imag = complexFrame[bin * 2 + 1]
-                val magnitude = sqrt(real * real + imag * imag)
-                val batchIndex = bin - minBin
-                flattenedSequences[batchIndex * timeSteps + frameIndex] = magnitude
+                powers[(bin - minBin) * timeSteps + frameIndex] = real * real + imag * imag
             }
         }
 
-        for (b in 0 until batchSize) {
-            val offset = b * timeSteps
-            var mean = 0f
-            for (t in 0 until timeSteps) {
-                val logMag = ln1p(flattenedSequences[offset + t])
-                flattenedSequences[offset + t] = logMag
-                mean += logMag
-            }
-            mean /= timeSteps
+        val noisePower = max(powers.copyOf().also { it.sort() }[powers.size / 2], 1e-12f)
+        val snrDb = FloatArray(binCount)
+        for (index in 0 until binCount) {
+            val binPowers = powers.copyOfRange(index * timeSteps, (index + 1) * timeSteps)
+            binPowers.sort()
+            val onPower = binPowers[(CW_ON_LEVEL_QUANTILE * (timeSteps - 1)).toInt()]
+            val offPower = binPowers[(CW_OFF_LEVEL_QUANTILE * (timeSteps - 1)).toInt()]
+            val keyingDb = 10f * log10(max(onPower, 1e-12f) / max(offPower, 1e-12f))
+            // Fara pauze de manipulare nu e telegrafie: brumul retelei (100/150 Hz), o
+            // purtatoare constanta sau un semnal digital continuu ar aparea altfel ca statii.
+            snrDb[index] = if (keyingDb < CW_MIN_KEYING_DB) 0f
+            else 10f * log10(max(onPower, 1e-12f) / noisePower)
+        }
 
-            var variance = 0f
-            for (t in 0 until timeSteps) {
-                val centered = flattenedSequences[offset + t] - mean
-                variance += centered * centered
-            }
-            val std = max(sqrt(variance / timeSteps), 1e-4f)
-            for (t in 0 until timeSteps) {
-                flattenedSequences[offset + t] = (flattenedSequences[offset + t] - mean) / std
+        val maskBins = round(CW_SIDEBAND_MASK_HZ / BIN_RESOLUTION).toInt()
+        val maskedSnrDb = snrDb.copyOf()
+        for (index in 0 until binCount) {
+            val lo = max(0, index - maskBins)
+            val hi = min(binCount - 1, index + maskBins)
+            for (other in lo..hi) {
+                if (snrDb[other] - snrDb[index] > CW_SIDEBAND_MASK_DB) {
+                    maskedSnrDb[index] = 0f
+                    break
+                }
             }
         }
 
-        return SpectrogramResult(
-            data = flattenedSequences,
-            dims = longArrayOf(batchSize.toLong(), 1, timeSteps.toLong()),
-            frequencies = frequencies
-        )
+        return BinSnr(FloatArray(binCount) { (minBin + it) * BIN_RESOLUTION }, maskedSnrDb)
     }
 
-    /** CMVN global pe toata spectrograma (identic cu referinta). */
-    private fun normalizeSpectrogramPerSampleCmvn(spectrogram: FloatArray) {
-        if (spectrogram.isEmpty()) return
-
-        var mean = 0f
-        for (value in spectrogram) mean += value
-        mean /= spectrogram.size
-
-        var variance = 0f
-        for (value in spectrogram) {
-            val centered = value - mean
-            variance += centered * centered
+    /**
+     * Reflect-padding de FFT_LENGTH / 2 la ambele capete, ca la un STFT centrat: cadrul t
+     * e centrat pe esantionul t * DECODE_HOP_LENGTH al audio-ului original.
+     */
+    private fun centerPad(audio: FloatArray): FloatArray? {
+        if (audio.size <= CENTER_PAD + 1) return null
+        val padded = FloatArray(audio.size + CENTER_PAD * 2)
+        for (i in 0 until CENTER_PAD) {
+            padded[i] = audio[CENTER_PAD - i]
+            padded[CENTER_PAD + audio.size + i] = audio[audio.size - 2 - i]
         }
+        audio.copyInto(padded, CENTER_PAD)
+        return padded
+    }
 
-        val std = max(sqrt(variance / spectrogram.size), 1e-5f)
+    /**
+     * Normalizarea "noise_q90_log1p" a modelului din 2026-10: nivelul zgomotului e percentila
+     * 90 a magnitudinilor din `noiseSource`, impartita la factorul Rayleigh corespunzator
+     * (sqrt(-2 ln 0.1) ~ 2.146), cu doua plafoane de jos; apoi log1p(x / zgomot).
+     */
+    private fun normalizeSpectrogramNoiseLog1p(spectrogram: FloatArray, noiseSource: FloatArray) {
+        if (noiseSource.isEmpty()) return
+        val sorted = noiseSource.copyOf()
+        sorted.sort()
+        val noiseLevel = maxOf(
+            sorted[(NOISE_LEVEL_QUANTILE * (sorted.size - 1)).toInt()] / NOISE_LEVEL_RAYLEIGH_FACTOR,
+            sorted[sorted.size - 1] * NOISE_LEVEL_MIN_RELATIVE_TO_PEAK,
+            NOISE_LEVEL_MIN
+        )
         for (i in spectrogram.indices) {
-            spectrogram[i] = (spectrogram[i] - mean) / std
+            spectrogram[i] = ln1p(spectrogram[i] / noiseLevel)
         }
+    }
+
+    private companion object {
+        const val CENTER_PAD = FFT_LENGTH / 2
+        const val NOISE_LEVEL_QUANTILE = 0.9
+        val NOISE_LEVEL_RAYLEIGH_FACTOR = sqrt(-2.0 * ln(1.0 - NOISE_LEVEL_QUANTILE)).toFloat()
+        const val NOISE_LEVEL_MIN_RELATIVE_TO_PEAK = 1e-3f
+        const val NOISE_LEVEL_MIN = 1e-5f
+        const val CW_ON_LEVEL_QUANTILE = 0.9
+        const val CW_SIDEBAND_MASK_HZ = 150f
+        const val CW_SIDEBAND_MASK_DB = 18f
+        const val CW_OFF_LEVEL_QUANTILE = 0.2
+        const val CW_MIN_KEYING_DB = 6f
     }
 }
