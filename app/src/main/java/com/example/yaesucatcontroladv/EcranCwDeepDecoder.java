@@ -58,6 +58,25 @@ public class EcranCwDeepDecoder {
      */
     private Integer tintaSelectieHz = null;
 
+    /** Zero-beat in asteptarea frecventei curente de la statie (null = niciunul). */
+    private Integer zeroBeatTonHz = null;
+    private boolean zeroBeatPileup = false;
+    private static final long ZERO_BEAT_TIMEOUT_MS = 1500;
+    /** Pauza intre mutarea VFO-ului (FA) si ZERO IN-ul statiei (ZI0;). */
+    private static final long ZERO_IN_DELAY_MS = 300;
+    /** PILEUP: dupa cat timp de la ZI se reciteste frecventa, ca sa se vada corectia lui. */
+    private static final long ZERO_IN_CITIRE_MS = 700;
+    /** Corectie ZI peste care probabil s-a prins de alt corespondent, mai puternic. */
+    private static final long ZERO_IN_SALT_SUSPECT_HZ = 60;
+    private boolean zeroInAsteptat = false;
+    private long zeroInFrecventaInainte = 0;
+    private final Runnable zeroBeatExpirat = () -> {
+        if (zeroBeatTonHz != null) {
+            zeroBeatTonHz = null;
+            showTemporaryStatus("Radio did not answer - decoder tuned only");
+        }
+    };
+
     /** Cat de departe de o linie verde (Hz) mai conteaza tap-ul ca fiind pe ea. */
     private static final int TOLERANTA_TAP_STATIE_HZ = 40;
 
@@ -778,11 +797,97 @@ public class EcranCwDeepDecoder {
      * semnalul de la tonHz, iar cursorul decodorului pe pitch; altfel doar cursorul pe tonHz.
      */
     private void acordeazaPeSemnal(int tonHz) {
-        Integer pitch = zeroBeat(tonHz);
-        int tinta = pitch != null ? pitch : tonHz;
-        processor.setFilterFreq(tinta);
-        tvFreqInfo.setText("Tune: " + tinta + " Hz");
-        waterfall.setFilterBand(tinta, processor.getFilterWidthHz());
+        puneCursorul(tonHz);
+        cereZeroBeat(tonHz, false);
+    }
+
+    private void puneCursorul(int freqHz) {
+        processor.setFilterFreq(freqHz);
+        tvFreqInfo.setText("Tune: " + freqHz + " Hz");
+        waterfall.setFilterBand(freqHz, processor.getFilterWidthHz());
+    }
+
+    /**
+     * Zero-beat-ul porneste mereu de la frecventa CURENTA a statiei, nu de la cea memorata in
+     * StareRadio (poate fi veche: Auto-Information e oprit cat ruleaza decodorul RTTY, iar
+     * butonul de acord se poate roti oricand). Se cer modul, pitch-ul si frecventa - in aceasta
+     * ordine, ca la sosirea lui FA celelalte sa fie deja la zi - si mutarea se face in
+     * laFrecventaCat(). Fara raspuns in ZERO_BEAT_TIMEOUT_MS se acordeaza doar decodorul.
+     */
+    private void cereZeroBeat(int tonHz, boolean pileup) {
+        zeroBeatTonHz = tonHz;
+        zeroBeatPileup = pileup;
+        uiHandler.removeCallbacks(zeroBeatExpirat);
+        uiHandler.postDelayed(zeroBeatExpirat, ZERO_BEAT_TIMEOUT_MS);
+        radioManager.trimiteComandaCAT("MD0;");
+        radioManager.trimiteComandaCAT("KP;");
+        radioManager.trimiteComandaCAT("FA;");
+    }
+
+    /** Apelat de MainActivity (thread UI) la fiecare raspuns FA de la statie. */
+    public void laFrecventaCat(long frecventaHz) {
+        if (zeroBeatTonHz == null) {
+            laFrecventaDupaZeroIn(frecventaHz);
+            return;
+        }
+        int ton = zeroBeatTonHz;
+        boolean pileup = zeroBeatPileup;
+        zeroBeatTonHz = null;
+        uiHandler.removeCallbacks(zeroBeatExpirat);
+
+        long inainte = frecventaHz;
+        Integer pitch = zeroBeat(ton, frecventaHz);
+        boolean mutata = pitch != null && StareRadio.getFrecventaHz() != inainte;
+        if (pileup) {
+            if (mutata && processor.getMode() == DecoderMode.PILEUP) {
+                // Toate statiile se muta in banda cu (pitch - ton): marcajele sar direct acolo,
+                // iar textul adunat si selectia raman (aceleasi id-uri de statie).
+                processor.shiftPileupAfterRetune(pitch - ton);
+                trimiteZeroIn(true);
+            }
+        } else if (pitch != null) {
+            if (mutata) {
+                processor.restartAfterRetune();
+                trimiteZeroIn(false);
+            }
+            puneCursorul(pitch);
+        }
+    }
+
+    /**
+     * Ultima comanda dupa mutarea VFO-ului: ZERO IN-ul statiei face reglajul fin (tap-ul greseste
+     * usor cu 10-20 Hz). Dupa o pauza scurta, ca statia sa fi terminat mutarea.
+     *
+     * In PILEUP, ZI mai muta statia cu cativa Hz, deci si statiile urmarite: frecventa se
+     * reciteste si marcajele se muta cu aceeasi diferenta (laFrecventaDupaZeroIn). Atentie: ZI se
+     * acordeaza pe semnalul CW cel mai puternic din banda de receptie - cu mai multi corespondenti
+     * apropiati poate sari pe altul decat cel ales (atunci corectia e mare si apare un avertisment).
+     */
+    private void trimiteZeroIn(boolean pileup) {
+        uiHandler.postDelayed(() -> {
+            radioManager.trimiteComandaCAT("ZI0;");
+            if (pileup) {
+                zeroInFrecventaInainte = StareRadio.getFrecventaHz();
+                zeroInAsteptat = true;
+                uiHandler.postDelayed(() -> radioManager.trimiteComandaCAT("FA;"), ZERO_IN_CITIRE_MS);
+                uiHandler.postDelayed(() -> zeroInAsteptat = false, ZERO_IN_CITIRE_MS + ZERO_BEAT_TIMEOUT_MS);
+            }
+        }, ZERO_IN_DELAY_MS);
+    }
+
+    /** PILEUP: muta marcajele statiilor cu corectia facuta de ZERO IN. */
+    private void laFrecventaDupaZeroIn(long frecventaHz) {
+        if (!zeroInAsteptat || processor.getMode() != DecoderMode.PILEUP) return;
+        long corectie = frecventaHz - zeroInFrecventaInainte;
+        if (corectie == 0) return; // ecoul propriei comenzi sau ZI n-a schimbat nimic inca
+        zeroInAsteptat = false;
+        String mod = StareRadio.getModText().trim();
+        boolean cwu = !mod.isEmpty() && mod.charAt(mod.length() - 1) == '3';
+        // CW-U: frecventa urca -> tonul scade; CW-L: invers.
+        processor.shiftPileupAfterRetune((int) (cwu ? -corectie : corectie));
+        showTemporaryStatus(Math.abs(corectie) > ZERO_IN_SALT_SUSPECT_HZ
+                ? String.format(Locale.US, "Zero-in moved %+d Hz - it may have locked on a stronger station", corectie)
+                : String.format(Locale.US, "Zero-in: %+d Hz -> %.3f kHz", corectie, frecventaHz / 1000.0));
     }
 
     /** PILEUP: tap pe o linie verde -> zero-beat pe statia ei, care devine selectata (rosu). */
@@ -800,19 +905,11 @@ public class EcranCwDeepDecoder {
             Toast.makeText(context, "Tap a green station line to tune to it.", Toast.LENGTH_SHORT).show();
             return;
         }
-        Integer pitch = zeroBeat(frecventaPeStatie.get(id));
-        if (pitch != null) {
-            // Statiile se muta in banda: le regasim de la zero, pe cea selectata langa pitch.
-            statieSelectataId = null;
-            tintaSelectieHz = pitch;
-            waterfall.clearOverlays();
-            frecventaPeStatie = new java.util.HashMap<>();
-            llMessagesContainer.removeAllViews();
-        } else {
-            statieSelectataId = id;
-            tintaSelectieHz = null;
-            waterfall.setSelectedTrackFrequency(frecventaPeStatie.get(id));
-        }
+        // Selectata imediat (rosu); dupa zero-beat e regasita langa pitch (laFrecventaCat).
+        statieSelectataId = id;
+        tintaSelectieHz = null;
+        waterfall.setSelectedTrackFrequency(frecventaPeStatie.get(id));
+        cereZeroBeat(frecventaPeStatie.get(id), true);
     }
 
     /** La fiecare lista noua de statii: regaseste statia selectata dupa reacordare / o pierde. */
@@ -848,18 +945,14 @@ public class EcranCwDeepDecoder {
      * @return pitch-ul (noua frecventa audio a semnalului) daca statia a fost mutata sau era deja
      *         pe el; null daca statia nu e in CW sau frecventa / modul / pitch-ul nu se cunosc inca.
      */
-    private Integer zeroBeat(int tonHz) {
-        long frecventaHz = StareRadio.getFrecventaHz();
+    private Integer zeroBeat(int tonHz, long frecventaHz) {
         String mod = StareRadio.getModText().trim();
         int pitch = StareRadio.getCwPitchHz();
         char codMod = mod.isEmpty() ? ' ' : mod.charAt(mod.length() - 1);
         boolean cwu = codMod == '3';
         boolean cwl = codMod == '7';
         if (frecventaHz <= 0 || pitch <= 0 || codMod == ' ') {
-            radioManager.trimiteComandaCAT("FA;");
-            radioManager.trimiteComandaCAT("MD0;");
-            radioManager.trimiteComandaCAT("KP;");
-            showTemporaryStatus("Radio frequency / pitch not known yet - decoder tuned only");
+            showTemporaryStatus("Radio frequency / mode / pitch unknown - decoder tuned only");
             return null;
         }
         if (!cwu && !cwl) {
@@ -871,8 +964,9 @@ public class EcranCwDeepDecoder {
         long noua = frecventaHz + (cwu ? abatere : -abatere);
         radioManager.trimiteComandaCAT(String.format(Locale.US, "FA%09d;", noua));
         StareRadio.setFrecventaHz(noua);
-        processor.restartAfterRetune();
-        showTemporaryStatus(String.format(Locale.US, "Zero-beat: %+d Hz -> %.3f kHz", noua - frecventaHz, noua / 1000.0));
+        // Tot calculul pe ecran: daca statia sare in partea gresita, se vede de ce.
+        showTemporaryStatus(String.format(Locale.US, "Zero-beat %d Hz, pitch %d, %s: %+d Hz -> %.3f kHz",
+                tonHz, pitch, cwu ? "CW-U" : "CW-L", noua - frecventaHz, noua / 1000.0));
         return pitch;
     }
 
@@ -889,11 +983,22 @@ public class EcranCwDeepDecoder {
 
             android.text.SpannableStringBuilder linie = new android.text.SpannableStringBuilder();
             linie.append(String.format(Locale.US, "[%d Hz]: ", entry.getKey()));
-            if (entry.getKey().equals(frecventaSelectata())) {
-                // statia pe care s-a facut zero-beat: doar "[712 Hz]:" cu rosu, ca linia ei
-                linie.setSpan(new android.text.style.ForegroundColorSpan(Color.RED), 0, linie.length() - 1,
-                        android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-            }
+            final int freqStatie = entry.getKey();
+            // statia pe care s-a facut zero-beat: doar "[712 Hz]:" cu rosu, ca linia ei
+            final int culoarePrefix = entry.getKey().equals(frecventaSelectata()) ? Color.RED : Color.GREEN;
+            // Click pe "[712 Hz]:" = tap pe linia verde a statiei (zero-beat + selectie).
+            linie.setSpan(new android.text.style.ClickableSpan() {
+                @Override
+                public void onClick(View widget) {
+                    selecteazaStatiePileup(freqStatie);
+                }
+
+                @Override
+                public void updateDrawState(android.text.TextPaint ds) {
+                    ds.setColor(culoarePrefix);
+                    ds.setUnderlineText(false);
+                }
+            }, 0, linie.length() - 1, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
             linie.append(callsignDetector.proceseazaTextComplet(
                     CallsignDetector.repareazaCuvinteLipite(entry.getValue())));
             tv.setText(linie);

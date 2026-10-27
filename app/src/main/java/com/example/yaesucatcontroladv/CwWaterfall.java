@@ -43,6 +43,8 @@ public class CwWaterfall extends Waterfall {
         super(context, sampleRate);
         // Markerii RTTY nu au sens aici (waterfall-ul CW arata altfel decat cel RTTY).
         this.showRttyMarkers = false;
+        // Un tap = un singur zero-beat (vezi Waterfall.doarLaRidicareaDegetului).
+        this.doarLaRidicareaDegetului = true;
 
         bandPaint.setColor(Color.argb(60, 255, 64, 64));
         bandPaint.setStyle(Paint.Style.FILL);

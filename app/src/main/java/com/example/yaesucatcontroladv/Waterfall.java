@@ -91,6 +91,13 @@ public class Waterfall extends View {
     private int shiftHz = 170;
     private OnFrequencyTappedListener listener;
 
+    /**
+     * false (RTTY): fiecare miscare a degetului acordeaza - se poate trage pe waterfall.
+     * true (CW): tap-ul se anunta o singura data, la ridicarea degetului - acolo tap-ul muta si
+     * statia (zero-beat), iar fiecare ACTION_MOVE ar fi mutat-o inca o data cu aceeasi abatere.
+     */
+    protected boolean doarLaRidicareaDegetului = false;
+
     public Waterfall(Context context, int sampleRate) {
         super(context);
         this.sampleRate = sampleRate;
@@ -249,6 +256,20 @@ public class Waterfall extends View {
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         int action = event.getAction();
+        if (doarLaRidicareaDegetului) {
+            // O singura notificare pe tap, la ridicarea degetului (vezi campul).
+            if (action == MotionEvent.ACTION_DOWN) return true;
+            if (action == MotionEvent.ACTION_UP) {
+                if (getWidth() <= 0) return true;
+                int frequencyHz = xToFrequency(event.getX());
+                tunedFrequencyHz = frequencyHz;
+                invalidate();
+                if (listener != null) listener.onFrequencyTapped(frequencyHz);
+                performClick();
+                return true;
+            }
+            return super.onTouchEvent(event);
+        }
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {
             if (getWidth() <= 0) return true;
             int frequencyHz = xToFrequency(event.getX());

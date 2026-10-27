@@ -137,6 +137,10 @@ public class MainActivity extends AppCompatActivity {
                                 String cifre = cmd.substring(2).replaceAll("[^0-9]", "");
                                 if (!cifre.isEmpty()) {
                                     StareRadio.setFrecventaHz(Long.parseLong(cifre));
+                                    // zero-beat-ul din CW decoder asteapta frecventa proaspata
+                                    if (prefix.equals("FA") && managerEcranCwDeep != null) {
+                                        managerEcranCwDeep.laFrecventaCat(StareRadio.getFrecventaHz());
+                                    }
                                 }
                             } catch (Exception ignored) {}
                         } else if (prefix.equals("MD")) {

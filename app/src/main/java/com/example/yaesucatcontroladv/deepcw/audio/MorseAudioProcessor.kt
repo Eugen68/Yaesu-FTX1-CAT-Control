@@ -254,6 +254,24 @@ class MorseAudioProcessor(private val context: Context) {
      * Statia a fost reacordata (zero-beat): audio-ul deja strans e la vechile frecvente
      * audio, deci se arunca - in NORMAL transcriptul in curs, in PILEUP si statiile urmarite.
      */
+    /**
+     * PILEUP dupa zero-beat: tonul tuturor statiilor s-a mutat cu `shiftHz` (pitch - tonul
+     * statiei alese, la fel in CW-U si CW-L). Statiile urmarite se muta direct la noile pozitii -
+     * isi pastreaza id-ul, deci textul adunat si selectia - iar audio-ul de dinainte de mutare
+     * nu mai e folosit (nici la detectie, nici la decodare); inelul nu se goleste, ca pozitiile
+     * absolute ale caracterelor sa continue.
+     */
+    fun shiftPileupAfterRetune(shiftHz: Int) {
+        toneHistory.clear()
+        pileupValidFrom = pileupRing.totalWritten()
+        pileupShiftPending.addAndGet(shiftHz)
+    }
+
+    /** Pozitia absoluta (in inelul pileup) de la care audio-ul e de dupa ultima reacordare. */
+    @Volatile
+    private var pileupValidFrom = 0L
+    private val pileupShiftPending = java.util.concurrent.atomic.AtomicInteger(0)
+
     fun restartAfterRetune() {
         toneHistory.clear() // "Detecteaza tonul" ar gasi tonurile de la vechile frecvente
         if (isRunning) restartModeLoops()
@@ -707,18 +725,32 @@ class MorseAudioProcessor(private val context: Context) {
         var reportedTracks = emptyList<PileupTrack>()
         var nextTrackId = 1
         var lastVersion = -1L
+        pileupShiftPending.set(0)
+        pileupValidFrom = 0L
 
         while (coroutineScopeActive()) {
+            // Zero-beat: statiile se muta direct la noile pozitii (vezi shiftPileupAfterRetune).
+            val shift = pileupShiftPending.getAndSet(0)
+            if (shift != 0) {
+                tracked.forEach { it.frequency += shift }
+                reportedTracks = reportedTracks.map { it.copy(frequency = it.frequency + shift) }
+                state.tracks = reportedTracks
+                pileupListener?.onTracksUpdated(reportedTracks)
+            }
+
             // Doar audio-ul real din inel: zerourile de la pornire (sau dupa CLEAR / schimbarea
             // modului) ar cobori mediana benzii cu care se compara fiecare bin, si zgomotul pur
-            // ar aparea ca 5 statii fantoma in primele ~4 s.
-            val (snapshot, version) = pileupRing.snapshotFilledVersioned()
+            // ar aparea ca 5 statii fantoma in primele ~4 s. Iar dupa un zero-beat, doar audio-ul
+            // de dupa mutare - cel vechi are statiile la alte frecvente.
+            val (filled, version, total) = pileupRing.snapshotFilledAbsolute()
             if (version == lastVersion) {
                 delay(POLL_INTERVAL_MS)
                 continue
             }
             lastVersion = version
-            if (snapshot.size < PILEUP_MIN_DETECT_SAMPLES) continue
+            val valid = (total - pileupValidFrom).coerceAtMost(filled.size.toLong()).toInt()
+            if (valid < PILEUP_MIN_DETECT_SAMPLES) continue
+            val snapshot = if (valid == filled.size) filled else filled.copyOfRange(filled.size - valid, filled.size)
 
             val rawCandidates = detector.detectStations(
                 snapshot,
@@ -799,9 +831,10 @@ class MorseAudioProcessor(private val context: Context) {
 
             // Fereastra porneste pe grila cadrelor de iesire (288 esantioane), ca pozitiile
             // caracterelor din ferestre diferite sa fie comparabile.
-            val inceputInel = total - audio.size
+            // Dupa un zero-beat, doar audio-ul de dupa mutare (statiile erau la alte frecvente).
+            val inceputInel = max(total - audio.size, pileupValidFrom)
             val start = ceil(inceputInel / OUTPUT_HOP_LENGTH.toDouble()).toLong() * OUTPUT_HOP_LENGTH
-            val offset = (start - inceputInel).toInt()
+            val offset = (start - (total - audio.size)).toInt()
             if (audio.size - offset < PILEUP_MIN_DECODE_SAMPLES) continue
             val fereastra = audio.copyOfRange(offset, audio.size)
             ultimaDecodare = total
@@ -1019,6 +1052,9 @@ class MorseAudioProcessor(private val context: Context) {
 
         @Synchronized
         fun snapshotFilledVersioned(): Pair<FloatArray, Long> = snapshotFilled() to version
+
+        @Synchronized
+        fun totalWritten(): Long = totalWritten
 
         /** Esantioanele reale, versiunea si totalul scris de la ultimul clear (pozitie absoluta). */
         @Synchronized
