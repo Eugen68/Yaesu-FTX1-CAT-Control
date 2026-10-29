@@ -8,6 +8,7 @@ import com.example.yaesucatcontroladv.deepcw.dsp.Constants.FFT_LENGTH
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.HOP_LENGTH
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.NARROW_SHIFT_BINS
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.NORMAL_CENTER_BIN
+import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_FILTER_WIDTH_HZ
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.SAMPLE_RATE
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.START_BIN
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.TOTAL_BINS
@@ -219,7 +220,79 @@ class SpectrogramGenerator {
             }
         }
 
+        maskHarmonics(powers, timeSteps, minBin, snrDb, maskedSnrDb)
+
         return BinSnr(FloatArray(binCount) { (minBin + it) * BIN_RESOLUTION }, maskedSnrDb)
+    }
+
+    /**
+     * Armonicele (2f, 3f) unei statii puternice primesc 0 dB. O distorsiune in lantul audio
+     * (placa de sunet, AGC, volum prea mare) face din statia de la f o copie la 2f si 3f,
+     * manipulata identic, prea slaba ca sa se vada pe waterfall, dar peste pragul de lock
+     * fata de mediana benzii - ar aparea in pileup ca a doua statie cu acelasi text.
+     * Un bin e armonica doar daca e mai slab decat fundamentala SI puterea lui urmeaza in
+     * timp manipularea ei (corelatie mare); o statie reala aflata intamplator la 2f are alt
+     * text, deci alta manipulare, si ramane.
+     */
+    private fun maskHarmonics(
+        powers: FloatArray,
+        timeSteps: Int,
+        minBin: Int,
+        snrDb: FloatArray,
+        maskedSnrDb: FloatArray
+    ) {
+        val binCount = snrDb.size
+        val filterBins = round(PILEUP_FILTER_WIDTH_HZ / BIN_RESOLUTION).toInt()
+        for (f0 in 0 until binCount) {
+            if (maskedSnrDb[f0] < HARMONIC_MIN_FUNDAMENTAL_DB) continue
+            if (f0 > 0 && snrDb[f0 - 1] > snrDb[f0]) continue
+            if (f0 < binCount - 1 && snrDb[f0 + 1] > snrDb[f0]) continue
+            val absoluteF0 = minBin + f0
+            for (k in 2..HARMONIC_MAX_ORDER) {
+                // varful armonicii: cel mai puternic bin in jurul lui k*f0 (rotunjirea bin-ului
+                // fundamentalei se inmulteste cu k)
+                val center = k * absoluteF0 - minBin
+                var peak = -1
+                for (h in center - k..center + k) {
+                    if (h !in 0 until binCount) continue
+                    if (peak < 0 || snrDb[h] > snrDb[peak]) peak = h
+                }
+                if (peak < 0 || maskedSnrDb[peak] == 0f) continue
+                if (snrDb[f0] - snrDb[peak] < HARMONIC_MIN_DROP_DB) continue
+                if (powerCorrelation(powers, timeSteps, f0, peak) < HARMONIC_MIN_CORRELATION) continue
+                // ca la o statie: tot ce e mai slab sub PILEUP_FILTER_WIDTH_HZ de varf (scurgerea
+                // spectrala a armonicii) dispare odata cu ea
+                for (h in max(0, peak - filterBins + 1)..min(binCount - 1, peak + filterBins - 1)) {
+                    if (snrDb[h] <= snrDb[peak]) maskedSnrDb[h] = 0f
+                }
+            }
+        }
+    }
+
+    /** Corelatia Pearson intre puterile in timp ale bin-urilor a si b. */
+    private fun powerCorrelation(powers: FloatArray, timeSteps: Int, a: Int, b: Int): Float {
+        val offA = a * timeSteps
+        val offB = b * timeSteps
+        var meanA = 0.0
+        var meanB = 0.0
+        for (t in 0 until timeSteps) {
+            meanA += powers[offA + t]
+            meanB += powers[offB + t]
+        }
+        meanA /= timeSteps
+        meanB /= timeSteps
+        var cov = 0.0
+        var varA = 0.0
+        var varB = 0.0
+        for (t in 0 until timeSteps) {
+            val da = powers[offA + t] - meanA
+            val db = powers[offB + t] - meanB
+            cov += da * db
+            varA += da * da
+            varB += db * db
+        }
+        if (varA <= 0.0 || varB <= 0.0) return 0f
+        return (cov / sqrt(varA * varB)).toFloat()
     }
 
     /**
@@ -267,5 +340,9 @@ class SpectrogramGenerator {
         const val CW_SIDEBAND_MASK_DB = 18f
         const val CW_OFF_LEVEL_QUANTILE = 0.2
         const val CW_MIN_KEYING_DB = 6f
+        const val HARMONIC_MAX_ORDER = 3
+        const val HARMONIC_MIN_FUNDAMENTAL_DB = 12f
+        const val HARMONIC_MIN_DROP_DB = 3f
+        const val HARMONIC_MIN_CORRELATION = 0.6f
     }
 }

@@ -151,6 +151,39 @@ class CwModelTest {
     }
 
     /**
+     * Armonica a doua a unei statii (distorsiune in lantul audio) nu e o statie: 425 Hz
+     * distorsionat da o copie manipulata identic la 850 Hz, invizibila pe waterfall. O statie
+     * reala, independenta, la 850 Hz trebuie insa gasita.
+     */
+    @Test
+    fun faraArmoniciInPileup() {
+        val detector = com.example.yaesucatcontroladv.deepcw.data.CwDetector()
+        val n = Constants.PILEUP_WINDOW_S * Constants.SAMPLE_RATE
+        val statie = CwSintetic.genereaza("CQ CQ DE YO9VA YO9VA K CQ CQ", 25.0, 425.0, Double.POSITIVE_INFINITY, 1).audio
+        val alta = CwSintetic.genereaza("TEST DE DL1ABC DL1ABC K TEST", 22.0, 850.0, Double.POSITIVE_INFINITY, 2).audio
+        fun detecteaza(cuAlta: Boolean): List<Float> {
+            val rnd = java.util.Random(5)
+            val mix = FloatArray(n) { i ->
+                val x = if (i + 9600 < statie.size) statie[i + 9600] else 0f
+                val b = if (cuAlta && i + 9600 < alta.size) alta[i + 9600] * 0.1f else 0f
+                // distorsiune patratica: armonica a doua la ~-27 dB
+                (x + 0.3f * x * x + b + rnd.nextGaussian() * 0.002).toFloat()
+            }
+            return detector.detectStations(mix, Constants.PILEUP_MIN_FREQ_HZ.toFloat(),
+                Constants.PILEUP_MAX_FREQ_HZ.toFloat(), Constants.PILEUP_LOCK_SNR_THRESHOLD_DB,
+                Constants.PILEUP_RELEASE_SNR_THRESHOLD_DB).map { it.frequency }
+        }
+        val doarStatia = detecteaza(false)
+        println("ARMONICA: $doarStatia")
+        assertTrue("statia de 425 Hz: $doarStatia", doarStatia.any { kotlin.math.abs(it - 425f) <= 13f })
+        assertTrue("fara armonica: $doarStatia", doarStatia.all { kotlin.math.abs(it - 425f) <= 13f })
+
+        val cuAlta = detecteaza(true)
+        println("ARMONICA + statie reala 850: $cuAlta")
+        assertTrue("statia reala de 850 Hz: $cuAlta", cuAlta.any { kotlin.math.abs(it - 850f) <= 13f })
+    }
+
+    /**
      * Pozitia in timp a caracterelor (Constants.outputFrameCenterSample) trebuie sa cada pe
      * caracterul real - OVERLAP si taierea la pauza de cuvant se bazeaza pe ea.
      */
