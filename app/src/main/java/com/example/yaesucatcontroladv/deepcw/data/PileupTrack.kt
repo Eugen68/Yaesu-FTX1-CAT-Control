@@ -5,6 +5,8 @@ import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_FILTER_WIDTH_H
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_HOLD_MS
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_MATCH_HZ
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_MAX_PEAKS
+import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_REACQUIRE_HZ
+import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_ROW_KEEP_MS
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -23,6 +25,61 @@ data class TrackedPileupCandidate(
 
 /** O stație confirmata, raportata catre UI si catre loop-ul de decodare. */
 data class PileupTrack(val id: Int, val frequency: Int)
+
+/**
+ * Un rand din fereastra de decodare pileup. `active` = statia transmite acum (are linie pe
+ * waterfall); un rand inactiv e al unei statii care tace (de ex. asculta corespondentul) si
+ * ramane afisat PILEUP_ROW_KEEP_MS.
+ */
+data class PileupRow(val id: Int, val frequency: Int, val text: String, val active: Boolean)
+
+/**
+ * Statiile care au tacut. Intr-un QSO fiecare statie tace cat transmite corespondentul; daca
+ * la intoarcere ar primi un id nou, si-ar pierde randul, textul adunat si selectia. Asa ca
+ * id-ul unei statii disparute se pastreaza PILEUP_ROW_KEEP_MS, iar o statie noua aparuta la
+ * cel mult PILEUP_REACQUIRE_HZ de ea il preia.
+ *
+ * Adaugat fata de referinta e04 (acolo o statie disparuta isi pierde textul).
+ */
+class DormantStations {
+    private class Dormant(val id: Int, var frequency: Float, val since: Long)
+
+    private val dormant = mutableListOf<Dormant>()
+    // id-urile preluate de track-uri inca neconfirmate: daca track-ul dispare inainte de
+    // confirmare (o sclipire), statia dormanta isi recapata locul neatinsa
+    private val borrowed = mutableMapOf<Int, Dormant>()
+
+    /** Id-ul statiei dormante celei mai apropiate de `frequency`, sau null. */
+    fun reacquire(frequency: Float): Int? {
+        val match = dormant
+            .filter { abs(it.frequency - frequency) <= PILEUP_REACQUIRE_HZ }
+            .minByOrNull { abs(it.frequency - frequency) } ?: return null
+        dormant.remove(match)
+        borrowed[match.id] = match
+        return match.id
+    }
+
+    /** Track-urile care au disparut intre `before` si `after` devin dormante. */
+    fun update(before: List<TrackedPileupCandidate>, after: List<TrackedPileupCandidate>, now: Long) {
+        val alive = after.mapTo(mutableSetOf()) { it.id }
+        for (track in before) {
+            if (track.id in alive) continue
+            val original = borrowed.remove(track.id)
+            when {
+                track.lastSeen - track.firstSeen >= PILEUP_CONFIRM_MS ->
+                    dormant.add(Dormant(track.id, track.frequency, track.lastSeen))
+                original != null -> dormant.add(original)
+            }
+        }
+        dormant.removeAll { now - it.since >= PILEUP_ROW_KEEP_MS }
+    }
+
+    /** Zero-beat: tonurile tuturor statiilor s-au mutat cu `shiftHz`. */
+    fun shift(shiftHz: Int) {
+        dormant.forEach { it.frequency += shiftHz }
+        borrowed.values.forEach { it.frequency += shiftHz }
+    }
+}
 
 /** Port fidel al `src/utils/pileupCandidates.ts`. */
 object PileupCandidates {
@@ -53,7 +110,7 @@ object PileupCandidates {
         tracked: MutableList<TrackedPileupCandidate>,
         rawCandidates: List<PileupCandidate>,
         now: Long,
-        createTrackId: () -> Int
+        createTrackId: (frequency: Float) -> Int
     ): MutableList<TrackedPileupCandidate> {
         val matched = mutableSetOf<Int>()
 
@@ -78,7 +135,7 @@ object PileupCandidates {
 
             tracked.add(
                 TrackedPileupCandidate(
-                    id = createTrackId(),
+                    id = createTrackId(candidate.frequency),
                     frequency = candidate.frequency,
                     snrDb = candidate.snrDb,
                     firstSeen = now,

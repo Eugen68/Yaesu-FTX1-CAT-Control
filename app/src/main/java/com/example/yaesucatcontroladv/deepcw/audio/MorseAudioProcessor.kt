@@ -5,10 +5,12 @@ import android.os.SystemClock
 import android.util.Log
 import com.example.yaesucatcontroladv.deepcw.data.CtcToken
 import com.example.yaesucatcontroladv.deepcw.data.CwDetector
+import com.example.yaesucatcontroladv.deepcw.data.DormantStations
 import com.example.yaesucatcontroladv.deepcw.data.MorseDecoder
 import com.example.yaesucatcontroladv.deepcw.data.MorseVocabularies
 import com.example.yaesucatcontroladv.deepcw.data.OverlapMerger
 import com.example.yaesucatcontroladv.deepcw.data.PileupCandidates
+import com.example.yaesucatcontroladv.deepcw.data.PileupRow
 import com.example.yaesucatcontroladv.deepcw.data.PileupTrack
 import com.example.yaesucatcontroladv.deepcw.data.StreamingTranscript
 import com.example.yaesucatcontroladv.deepcw.data.TrackedPileupCandidate
@@ -20,8 +22,10 @@ import com.example.yaesucatcontroladv.deepcw.dsp.Constants.HOP_LENGTH
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.OUTPUT_HOP_LENGTH
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_LOCK_SNR_THRESHOLD_DB
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_MAX_FREQ_HZ
+import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_MAX_ROWS
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_MIN_FREQ_HZ
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_RELEASE_SNR_THRESHOLD_DB
+import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_ROW_KEEP_MS
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.PILEUP_WINDOW_S
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.SAMPLE_RATE
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants.TOTAL_BINS
@@ -98,7 +102,7 @@ class MorseAudioProcessor(private val context: Context) {
 
     interface PileupListener {
         fun onTracksUpdated(tracks: List<PileupTrack>)
-        fun onTextsUpdated(texts: Map<Int, String>)
+        fun onTextsUpdated(rows: List<PileupRow>)
     }
 
     interface ModeListener {
@@ -265,12 +269,14 @@ class MorseAudioProcessor(private val context: Context) {
         toneHistory.clear()
         pileupValidFrom = pileupRing.totalWritten()
         pileupShiftPending.addAndGet(shiftHz)
+        pileupRowShiftPending.addAndGet(shiftHz)
     }
 
     /** Pozitia absoluta (in inelul pileup) de la care audio-ul e de dupa ultima reacordare. */
     @Volatile
     private var pileupValidFrom = 0L
     private val pileupShiftPending = java.util.concurrent.atomic.AtomicInteger(0)
+    private val pileupRowShiftPending = java.util.concurrent.atomic.AtomicInteger(0)
 
     fun restartAfterRetune() {
         toneHistory.clear() // "Detecteaza tonul" ar gasi tonurile de la vechile frecvente
@@ -365,7 +371,7 @@ class MorseAudioProcessor(private val context: Context) {
             pendingSamples.clear()
             pileupRing.clear()
             notifySegments(emptyList(), "")
-            pileupListener?.onTextsUpdated(emptyMap())
+            pileupListener?.onTextsUpdated(emptyList())
         }
     }
 
@@ -723,6 +729,7 @@ class MorseAudioProcessor(private val context: Context) {
         val detector = ensureCwDetector()
         val tracked = mutableListOf<TrackedPileupCandidate>()
         var reportedTracks = emptyList<PileupTrack>()
+        val dormant = DormantStations()
         var nextTrackId = 1
         var lastVersion = -1L
         pileupShiftPending.set(0)
@@ -733,6 +740,7 @@ class MorseAudioProcessor(private val context: Context) {
             val shift = pileupShiftPending.getAndSet(0)
             if (shift != 0) {
                 tracked.forEach { it.frequency += shift }
+                dormant.shift(shift)
                 reportedTracks = reportedTracks.map { it.copy(frequency = it.frequency + shift) }
                 state.tracks = reportedTracks
                 pileupListener?.onTracksUpdated(reportedTracks)
@@ -763,7 +771,11 @@ class MorseAudioProcessor(private val context: Context) {
             if (!coroutineScopeActive()) return
 
             val now = SystemClock.elapsedRealtime()
-            val updated = PileupCandidates.updateTracked(tracked, rawCandidates, now) { nextTrackId++ }
+            // O statie care reapare langa una care a tacut ii preia id-ul (randul si textul).
+            val updated = PileupCandidates.updateTracked(tracked, rawCandidates, now) { f ->
+                dormant.reacquire(f) ?: nextTrackId++
+            }
+            dormant.update(tracked, updated, now)
             tracked.clear()
             tracked.addAll(updated)
 
@@ -777,10 +789,24 @@ class MorseAudioProcessor(private val context: Context) {
     }
 
     /** Textul acumulat al unei statii din pileup (imbinarea ferestrelor ei succesive). */
-    private class TranscriptStatie(val merger: OverlapMerger) {
+    private class TranscriptStatie(val merger: OverlapMerger, var frecventa: Int) {
         val confirmat = StringBuilder()
         var previzualizare = ""
         var ultimulConfirmat = Long.MIN_VALUE
+        /** Statia transmite acum (e printre track-urile confirmate). */
+        var activ = true
+        /** Ultima data (elapsedRealtime) cand statia era activa. */
+        var ultimaActivitate = 0L
+
+        /** Statia a tacut: coada neconfirmata ramane in text (nu mai vine alta fereastra). */
+        fun dezactiveaza() {
+            activ = false
+            confirmat.append(previzualizare)
+            previzualizare = ""
+            if (confirmat.length > PILEUP_MAX_TEXT_CHARS) {
+                confirmat.delete(0, confirmat.length - PILEUP_MAX_TEXT_CHARS)
+            }
+        }
     }
 
     /**
@@ -790,13 +816,17 @@ class MorseAudioProcessor(private val context: Context) {
      * inel (pana la 8 s, pornita pe grila de cadre a modelului), iar ferestrele suprapuse se
      * imbina cu OverlapMerger, ca la STREAM: WINDOWS din modul NORMAL. Pe rand: textul
      * confirmat + coada cea mai recenta (inca neconfirmata).
+     *
+     * O statie care tace (asculta corespondentul) nu-si pierde randul: ramane inactiv (gri in
+     * UI) PILEUP_ROW_KEEP_MS, iar cand statia revine (DormantStations ii da acelasi id) textul
+     * continua pe acelasi rand.
      */
     private suspend fun pileupDecodeLoop(state: PileupTracksState) {
         val decoder = ensureNarrowDecoder() ?: return
         val transcrieri = mutableMapOf<Int, TranscriptStatie>()
         var lastVersion = -1L
         var ultimaDecodare = Long.MIN_VALUE / 2
-        var trimisGol = true
+        var trimise: List<PileupRow>? = null
         var ignoraInainte = Long.MIN_VALUE // caracterele de dinainte de CLEAR nu mai apar
 
         stergeTextePileup.set(false)
@@ -812,21 +842,47 @@ class MorseAudioProcessor(private val context: Context) {
             if (stergeTextePileup.getAndSet(false)) {
                 transcrieri.clear()
                 ignoraInainte = total
-                pileupListener?.onTextsUpdated(emptyMap())
-                trimisGol = true
             }
+            val shift = pileupRowShiftPending.getAndSet(0)
+            if (shift != 0) transcrieri.values.forEach { it.frecventa += shift }
 
             val tracks = state.tracks
-            transcrieri.keys.retainAll(tracks.map { it.id }.toSet())
-            if (tracks.isEmpty()) {
-                if (!trimisGol) {
-                    pileupListener?.onTextsUpdated(emptyMap())
-                    trimisGol = true
+            val acum = SystemClock.elapsedRealtime()
+            val active = tracks.mapTo(mutableSetOf()) { it.id }
+            for ((id, t) in transcrieri) {
+                if (id in active) t.ultimaActivitate = acum
+                else if (t.activ) t.dezactiveaza()
+            }
+            transcrieri.values.removeAll { !it.activ && acum - it.ultimaActivitate >= PILEUP_ROW_KEEP_MS }
+            // Prea multe randuri: iese cel mai vechi inactiv.
+            while (transcrieri.size > PILEUP_MAX_ROWS) {
+                val celMaiVechi = transcrieri.entries.filter { !it.value.activ }
+                    .minByOrNull { it.value.ultimaActivitate } ?: break
+                transcrieri.remove(celMaiVechi.key)
+            }
+            fun trimiteRanduri() {
+                val randuri = transcrieri
+                    .map { (id, t) ->
+                        PileupRow(id, t.frecventa, collapseWhitespace(t.confirmat.toString() + t.previzualizare), t.activ)
+                    }
+                    .filter { it.text.isNotEmpty() }
+                    .sortedBy { it.frequency }
+                if (randuri != trimise) {
+                    pileupListener?.onTextsUpdated(randuri)
+                    trimise = randuri
                 }
+            }
+            if (tracks.isEmpty()) {
+                trimiteRanduri()
                 continue
             }
-            // O statie noua primeste text imediat; altfel decodam o data la PILEUP_DECODE_HOP_S.
-            val statieNoua = tracks.any { it.id !in transcrieri }
+            // O statie noua (sau una care revine) primeste text imediat; altfel decodam o data
+            // la PILEUP_DECODE_HOP_S.
+            val statieNoua = tracks.any { transcrieri[it.id]?.activ != true }
+            if (!statieNoua && total - ultimaDecodare < PILEUP_DECODE_HOP_SAMPLES) {
+                trimiteRanduri()
+                continue
+            }
             if (!statieNoua && total - ultimaDecodare < PILEUP_DECODE_HOP_SAMPLES) continue
 
             // Fereastra porneste pe grila cadrelor de iesire (288 esantioane), ca pozitiile
@@ -845,8 +901,11 @@ class MorseAudioProcessor(private val context: Context) {
                     ?.filter { it.sample >= ignoraInainte } ?: continue
                 if (!coroutineScopeActive()) return
                 val t = transcrieri.getOrPut(track.id) {
-                    TranscriptStatie(OverlapMerger(OVERLAP_EDGE_GUARD_SAMPLES.toLong(), OVERLAP_TOLERANCE_SAMPLES.toDouble()))
+                    TranscriptStatie(OverlapMerger(OVERLAP_EDGE_GUARD_SAMPLES.toLong(), OVERLAP_TOLERANCE_SAMPLES.toDouble()), track.frequency)
                 }
+                t.frecventa = track.frequency
+                t.activ = true
+                t.ultimaActivitate = acum
                 val confirmati = t.merger.push(start, fereastra.size.toLong(), tokeni)
                 t.confirmat.append(tokensText(confirmati))
                 confirmati.lastOrNull()?.let { t.ultimulConfirmat = it.sample }
@@ -857,11 +916,7 @@ class MorseAudioProcessor(private val context: Context) {
                 t.previzualizare = tokensText(tokeni.filter { it.sample > dupa })
             }
 
-            val texte = transcrieri
-                .mapValues { (_, t) -> collapseWhitespace(t.confirmat.toString() + t.previzualizare) }
-                .filterValues { it.isNotEmpty() }
-            pileupListener?.onTextsUpdated(texte)
-            trimisGol = texte.isEmpty()
+            trimiteRanduri()
         }
     }
 

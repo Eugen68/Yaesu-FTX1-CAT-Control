@@ -25,6 +25,7 @@ import android.widget.ArrayAdapter;
 import com.example.yaesucatcontroladv.deepcw.audio.MorseAudioProcessor;
 import com.example.yaesucatcontroladv.deepcw.audio.DecoderMode;
 import com.example.yaesucatcontroladv.deepcw.audio.StreamingMethod;
+import com.example.yaesucatcontroladv.deepcw.data.PileupRow;
 import com.example.yaesucatcontroladv.deepcw.data.PileupTrack;
 import com.example.yaesucatcontroladv.deepcw.dsp.Constants;
 import com.example.yaesucatcontroladv.deepcw.dsp.ToneCandidate;
@@ -52,6 +53,8 @@ public class EcranCwDeepDecoder {
 
     /** Statia din PILEUP pe care s-a facut zero-beat (track id), null = niciuna. */
     private Integer statieSelectataId = null;
+    /** Randurile din fereastra de decodare pileup (active si inactive), crescator dupa frecventa. */
+    private List<PileupRow> randuriPileup = new java.util.ArrayList<>();
     /**
      * Dupa reacordare toate statiile se muta in banda audio si sunt regasite de la zero; statia
      * selectata trebuie sa apara pe pitch-ul CW - pe ea o cautam la primele statii noi.
@@ -79,6 +82,8 @@ public class EcranCwDeepDecoder {
 
     /** Cat de departe de o linie verde (Hz) mai conteaza tap-ul ca fiind pe ea. */
     private static final int TOLERANTA_TAP_STATIE_HZ = 40;
+    /** Randul unei statii din pileup care tace acum (ramane PILEUP_ROW_KEEP_MS). */
+    private static final int CULOARE_RAND_INACTIV = Color.parseColor("#9E9E9E");
 
     // Ultimul Hz pe care "Detecteaza tonul" a retunat - apasat din nou fara alta actiune
     // intre timp, trece la urmatorul candidat gasit (dupa putere), nu re-gaseste mereu pe
@@ -451,18 +456,19 @@ public class EcranCwDeepDecoder {
             }
 
             @Override
-            public void onTextsUpdated(Map<Integer, String> texts) {
-                // Textele vin indexate dupa id-ul statiei (track id), nu dupa frecventa -
-                // atat lista cat si waterfall-ul au nevoie de frecventa.
+            public void onTextsUpdated(List<PileupRow> rows) {
                 uiHandler.post(() -> {
                     if (processor.getMode() != DecoderMode.PILEUP) return;
+                    randuriPileup = rows;
+                    // Etichetele de pe waterfall: doar statiile care transmit acum (au linie).
                     Map<Integer, String> peFrecventa = new java.util.TreeMap<>();
-                    for (Map.Entry<Integer, String> e : texts.entrySet()) {
-                        Integer freq = frecventaPeStatie.get(e.getKey());
-                        if (freq != null) peFrecventa.put(freq, e.getValue());
+                    for (PileupRow r : rows) {
+                        Integer freq = frecventaPeStatie.get(r.getId());
+                        if (r.getActive() && freq != null) peFrecventa.put(freq, r.getText());
                     }
                     waterfall.setTrackTexts(peFrecventa);
-                    updatePileupList(peFrecventa);
+                    pastreazaSelectiaDacaExista();
+                    updatePileupList();
                 });
             }
         });
@@ -519,6 +525,7 @@ public class EcranCwDeepDecoder {
             // Liniile si etichetele statiilor din PILEUP nu au sens in NORMAL.
             waterfall.clearOverlays();
             frecventaPeStatie = new java.util.HashMap<>();
+            randuriPileup = new java.util.ArrayList<>();
             statieSelectataId = null;
             tintaSelectieHz = null;
         }
@@ -926,11 +933,37 @@ public class EcranCwDeepDecoder {
                 statieSelectataId = gasita.getId();
                 tintaSelectieHz = null;
             }
-        } else if (statieSelectataId != null && !frecventaPeStatie.containsKey(statieSelectataId)) {
-            statieSelectataId = null; // statia a disparut din banda
+        } else {
+            pastreazaSelectiaDacaExista();
         }
         Integer f = frecventaSelectata();
         waterfall.setSelectedTrackFrequency(f != null ? f : -1);
+        updatePileupList();
+    }
+
+    /**
+     * Selectia ramane cat timp statia transmite SAU are inca rand (inactiv) in fereastra de
+     * decodare - cand revine, primeste acelasi id si e tot selectata.
+     */
+    private void pastreazaSelectiaDacaExista() {
+        if (statieSelectataId == null || frecventaPeStatie.containsKey(statieSelectataId)) return;
+        for (PileupRow r : randuriPileup) {
+            if (r.getId() == statieSelectataId) return;
+        }
+        statieSelectataId = null; // statia a disparut din banda si din fereastra
+    }
+
+    /**
+     * Click pe "[712 Hz]:" in fereastra de decodare: zero-beat pe statia randului si selectie.
+     * Merge si pe un rand inactiv (statia tace acum) - de exemplu ca sa raspunzi unui CQ.
+     */
+    private void selecteazaRandPileup(PileupRow rand) {
+        Integer freqActiva = frecventaPeStatie.get(rand.getId());
+        statieSelectataId = rand.getId();
+        tintaSelectieHz = null;
+        waterfall.setSelectedTrackFrequency(freqActiva != null ? freqActiva : -1);
+        updatePileupList();
+        cereZeroBeat(freqActiva != null ? freqActiva : rand.getFrequency(), true);
     }
 
     private Integer frecventaSelectata() {
@@ -970,27 +1003,31 @@ public class EcranCwDeepDecoder {
         return pitch;
     }
 
-    /** Textele statiilor din pileup, indexate dupa frecventa (Hz), crescator. */
-    private void updatePileupList(Map<Integer, String> texts) {
+    /**
+     * Fereastra de decodare pileup: un rand pe statie, crescator dupa frecventa. Randul unei
+     * statii care tace acum (inactiv) e gri in intregime - ramane PILEUP_ROW_KEEP_MS.
+     */
+    private void updatePileupList() {
         if (processor.getMode() != DecoderMode.PILEUP) return;
         llMessagesContainer.removeAllViews();
-        for (Map.Entry<Integer, String> entry : texts.entrySet()) {
+        for (PileupRow rand : randuriPileup) {
+            final boolean activ = rand.getActive();
             TextView tv = new TextView(context);
-            tv.setTextColor(Color.GREEN);
+            tv.setTextColor(activ ? Color.GREEN : CULOARE_RAND_INACTIV);
             tv.setTextSize(16);
             tv.setTypeface(Typeface.MONOSPACE);
             tv.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
 
             android.text.SpannableStringBuilder linie = new android.text.SpannableStringBuilder();
-            linie.append(String.format(Locale.US, "[%d Hz]: ", entry.getKey()));
-            final int freqStatie = entry.getKey();
+            linie.append(String.format(Locale.US, "[%d Hz]: ", rand.getFrequency()));
             // statia pe care s-a facut zero-beat: doar "[712 Hz]:" cu rosu, ca linia ei
-            final int culoarePrefix = entry.getKey().equals(frecventaSelectata()) ? Color.RED : Color.GREEN;
+            final int culoarePrefix = statieSelectataId != null && rand.getId() == statieSelectataId
+                    ? Color.RED : (activ ? Color.GREEN : CULOARE_RAND_INACTIV);
             // Click pe "[712 Hz]:" = tap pe linia verde a statiei (zero-beat + selectie).
             linie.setSpan(new android.text.style.ClickableSpan() {
                 @Override
                 public void onClick(View widget) {
-                    selecteazaStatiePileup(freqStatie);
+                    selecteazaRandPileup(rand);
                 }
 
                 @Override
@@ -999,8 +1036,14 @@ public class EcranCwDeepDecoder {
                     ds.setUnderlineText(false);
                 }
             }, 0, linie.length() - 1, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            int inceputText = linie.length();
             linie.append(callsignDetector.proceseazaTextComplet(
-                    CallsignDetector.repareazaCuvinteLipite(entry.getValue())));
+                    CallsignDetector.repareazaCuvinteLipite(rand.getText())));
+            if (!activ) {
+                // si indicativele devin gri (raman clicabile); span-ul adaugat ultimul castiga
+                linie.setSpan(new android.text.style.ForegroundColorSpan(CULOARE_RAND_INACTIV),
+                        inceputText, linie.length(), android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
             tv.setText(linie);
 
             llMessagesContainer.addView(tv);

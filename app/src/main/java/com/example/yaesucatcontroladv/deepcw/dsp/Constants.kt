@@ -82,6 +82,12 @@ object Constants {
     const val PILEUP_TEXT_HOLD_MS = 1500L
     const val PILEUP_CONFIRM_MS = 400L
     const val PILEUP_HOLD_MS = 5000L
+    /** Cat ramane in fereastra de decodare randul unei statii care a tacut. */
+    const val PILEUP_ROW_KEEP_MS = 180_000L
+    /** O statie care reapare la cel mult atat de una care a tacut ii preia randul. */
+    const val PILEUP_REACQUIRE_HZ = 25f
+    /** Randuri in fereastra de decodare (active + inactive); in plus iese cel mai vechi inactiv. */
+    const val PILEUP_MAX_ROWS = 12
 
     init {
         require(END_BIN <= TOTAL_BINS) {
