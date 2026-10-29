@@ -253,8 +253,8 @@ Requirements:
 - A JDK for Gradle — the build is configured for a **JDK 21** daemon (`gradle/gradle-daemon-jvm.properties`), which Gradle can download automatically; the one bundled with a recent Android Studio also works.
 
 ```bash
-git clone https://github.com/Eugen68/YaesuCATControlADVQWEN.git
-cd YaesuCATControlADVQWEN
+git clone https://github.com/Eugen68/Yaesu-FTX1-CAT-Control.git
+cd Yaesu-FTX1-CAT-Control
 ./gradlew assembleDebug        # Windows: gradlew.bat assembleDebug
 ```
 
