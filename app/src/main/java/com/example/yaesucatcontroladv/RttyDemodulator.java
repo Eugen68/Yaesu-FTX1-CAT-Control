@@ -658,12 +658,18 @@ public class RttyDemodulator {
                     if (esantionAbs >= mijlocStart && (bitCurent == 0 || esantionAbs >= sfarsitStart)) {
                         if (bitCurent == 0 && (esantionAbs == mijlocStart
                                 || contorConfirmareStart >= samplesPerBit * 0.3)) {
-                            double start = startPrezis;
-                            if (contorConfirmareStart >= samplesPerBit * 0.3) {
-                                double abatere = (esantionAbs - contorConfirmareStart) - startPrezis;
-                                double limita = 0.25 * samplesPerBit;
-                                start += VOLANT_CORECTIE * Math.max(-limita, Math.min(limita, abatere));
-                            }
+                            // CORECTIE: frontul real (esantionAbs - contorConfirmareStart) e cunoscut si
+                            // cand space-ul a inceput chiar inainte de mijlocStart (contor < 0.3 biti) -
+                            // inainte, pe acea ramura cadrul pornea pe startul prezis, necorectat. Acolo
+                            // frontul e mereu intarziat (mediana +0.3 biti), deci biti cititi prea devreme
+                            // si grila decalata si pentru caracterul urmator. Apare in 1-12% din cadre la
+                            // Chebyshev si 8-20% la MF (trecerea MF prin zero e o rampa pe un bit, mai
+                            // imprastiata). Acum se corecteaza mereu, cu aceeasi regula (castig 0.5,
+                            // plafon +-0.25 biti). W6IWI 14089 kHz: Chebyshev 144 -> 38 erori, MF 83 -> 35.
+                            double abatere = (esantionAbs - contorConfirmareStart) - startPrezis;
+                            double limita = 0.25 * samplesPerBit;
+                            double start = startPrezis
+                                    + VOLANT_CORECTIE * Math.max(-limita, Math.min(limita, abatere));
                             incepeCadru(start);
                         } else if (esantionAbs >= sfarsitStart) {
                             // Mark pe tot inceputul bitului de start prezis: de regula emitatorul
