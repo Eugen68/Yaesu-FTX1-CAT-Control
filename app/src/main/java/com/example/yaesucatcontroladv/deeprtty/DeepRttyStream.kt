@@ -151,18 +151,27 @@ class DeepRttyStream(private val inferenta: (FloatArray, LongArray) -> Pair<Floa
     }
 
     /**
-     * Coada neconfirmata: decodeaza ultimele <= 12 s (completate in oglinda pana la 12 s, ca in
-     * referinta) si intoarce caracterele de dupa textul deja confirmat.
+     * Coada neconfirmata: tokenii inca neconfirmati ai ultimei ferestre complete, pana la inceputul
+     * zonei sigure a unei ferestre de final, plus fereastra de final (ultimele <= 12 s, completate in
+     * oglinda pana la 12 s, ca in referinta) de acolo incolo.
+     *
+     * CORECTIE: inainte coada era doar fereastra de final, iar tokenii ultimei ferestre dintre textul
+     * confirmat si inceputul ferestrei de final (pana la ~4 s) nu apareau nicaieri - textul gri avea
+     * un gol pana la urmatoarea confirmare (vezi DeepRttyTest.coadaNeconfirmataFaraGol).
      */
     fun preview(): List<CtcToken> {
         val start = max(if (lastWindowStart >= 0) lastWindowStart else bufStart, total - DeepRttyConst.WINDOW)
             .coerceAtLeast(bufStart)
         val lungime = (total - start).toInt()
-        if (lungime < DeepRttyConst.SAMPLE_RATE) return emptyList()
-        val audio = buf.copyOfRange((start - bufStart).toInt(), buf.size)
-        val tokeni = decodeaza(oglinda(audio, DeepRttyConst.WINDOW), start) ?: return emptyList()
         val dupa = max(merger.committedUntil, ultimulConfirmat + DeepRttyConst.TOLERANCE)
-        return tokeni.filter { it.sample > dupa && it.sample < total }
+        // de aici incolo crede fereastra de final (fara marginea ei nesigura de la inceput)
+        val granita = max(if (lastWindowStart >= 0) (start + DeepRttyConst.EDGE_GUARD).toDouble() else start.toDouble(), dupa)
+        val rezultat = merger.pendingTokens.filter { it.sample > dupa && it.sample < granita }.toMutableList()
+        if (lungime < DeepRttyConst.SAMPLE_RATE) return rezultat
+        val audio = buf.copyOfRange((start - bufStart).toInt(), buf.size)
+        val tokeni = decodeaza(oglinda(audio, DeepRttyConst.WINDOW), start) ?: return rezultat
+        tokeni.filterTo(rezultat) { it.sample >= granita && it.sample > dupa && it.sample < total }
+        return rezultat
     }
 
     private fun decodeaza(audio: FloatArray, start: Long): List<CtcToken>? {

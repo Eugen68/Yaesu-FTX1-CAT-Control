@@ -82,6 +82,10 @@ class OverlapMerger(private val edgeGuard: Long, private val tolerance: Double) 
     var committedUntil = Double.NEGATIVE_INFINITY
         private set
 
+    /** Tokenii ultimei ferestre, de dupa `committedUntil`, inca neconfirmati. */
+    val pendingTokens: List<CtcToken>
+        get() = pending
+
     fun push(windowStart: Long, windowLength: Long, windowTokens: List<CtcToken>): List<CtcToken> {
         val reliableStart = windowStart + if (windows > 0) edgeGuard else 0L
         val tokens = windowTokens.filter { it.sample >= reliableStart }

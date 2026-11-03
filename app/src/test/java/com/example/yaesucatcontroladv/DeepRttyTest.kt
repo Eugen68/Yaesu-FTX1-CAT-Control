@@ -115,4 +115,20 @@ class DeepRttyTest {
         println(String.format("DEEPRTTY REV -6 dB: %.1f%%", c * 100))
         assertTrue("CER REV la -6 dB = $c", c < 0.06)
     }
+
+    /**
+     * Coada neconfirmata (textul gri) trebuie sa contina si tokenii ultimei ferestre complete de dupa
+     * textul confirmat, nu doar fereastra de final - altfel lipseau pana la ~4 s, in functie de unde
+     * cade grila ferestrelor fata de sfarsit. Taiem inceputul (doar ton Mark) ca sa mutam grila.
+     */
+    @Test
+    fun coadaNeconfirmataFaraGol() {
+        val tot = RttyDemodulatorTest.genereaza(text, 10.0, 4, 0.0, RttyDemodulator.BAUD_RTTY, 0.0)
+        for (taie in listOf(0.0, 0.3, 0.6, 0.9, 1.2, 1.5)) {
+            val pcm = tot.copyOfRange((taie * 48000).toInt(), tot.size)
+            val d = decodeaza(pcm, 2125.0, false)
+            val c = cer(d)
+            assertTrue("taiat $taie s: CER $c ($d)", c < 0.02)
+        }
+    }
 }

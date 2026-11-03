@@ -29,13 +29,17 @@ class DeepRttyReceiver(context: Context) {
     private val inferenta = InferenceWrapper(context)
     private val frontEnd = RttyFrontEnd(48000)
     private val stream = DeepRttyStream { date, dims -> inferenta.runInference(date, dims) }
-    private val coada = LinkedBlockingQueue<FloatArray>()
+    /**
+     * Blocuri audio (FloatArray) si marcaje de reset, in ordinea sosirii. CORECTIE: resetul era un
+     * flag partajat, iar firul de decodare golea apoi toata coada - daca intre timp firul audio
+     * pusese deja blocuri noi (sosite DUPA reset), le arunca si pe ele: la pornire si la fiecare
+     * reacordare se pierdeau cateva sute de ms de audio bun. Ca marcaj in coada, resetul arunca doar
+     * ce era inainte de el.
+     */
+    private val coada = LinkedBlockingQueue<Any>()
 
     @Volatile
     private var ruleaza = false
-
-    @Volatile
-    private var resetCerut = false
     private var worker: Thread? = null
 
     // doar pe firul audio
@@ -51,8 +55,10 @@ class DeepRttyReceiver(context: Context) {
 
     fun porneste() {
         if (ruleaza) return
+        coada.clear()
+        stream.reseteaza() // firul de decodare nu ruleaza inca
+        ultimulCentru = Double.NaN
         ruleaza = true
-        resetCerut = true
         worker = Thread({ bucla() }, "DeepRTTY").apply { start() }
     }
 
@@ -76,7 +82,7 @@ class DeepRttyReceiver(context: Context) {
 
     /** Arunca audio-ul si textul neconfirmat (ex. CLEAR); textul deja confirmat ramane. */
     fun reseteaza() {
-        resetCerut = true
+        if (ruleaza) coada.offer(MarcajReset)
     }
 
     /**
@@ -88,7 +94,7 @@ class DeepRttyReceiver(context: Context) {
         if (!ruleaza) return
         if (ultimulCentru.isNaN() || abs(centruHz - ultimulCentru) > SALT_ACORD_HZ || reverse != ultimulReverse) {
             frontEnd.reseteaza()
-            resetCerut = true
+            if (!ultimulCentru.isNaN()) coada.offer(MarcajReset) // reacordare; la pornire stream-ul e deja gol
         }
         ultimulCentru = centruHz
         ultimulReverse = reverse
@@ -99,26 +105,33 @@ class DeepRttyReceiver(context: Context) {
 
     private fun bucla() {
         var ultimulProvizoriu = 0L
+        listener?.onProvizoriu(IntArray(0))
         while (ruleaza) {
             try {
                 val primul = coada.poll(100, TimeUnit.MILLISECONDS)
-                if (resetCerut) {
-                    resetCerut = false
-                    stream.reseteaza()
-                    coada.clear()
-                    listener?.onProvizoriu(IntArray(0))
-                    continue
-                }
                 if (primul != null) {
-                    // tot ce s-a strans intre timp, intr-un singur push
-                    val lot = ArrayList<FloatArray>().apply { add(primul); coada.drainTo(this) }
-                    val total = lot.sumOf { it.size }
-                    val audio = FloatArray(total)
-                    var o = 0
-                    for (b in lot) { b.copyInto(audio, o); o += b.size }
-                    val confirmate = stream.push(audio, total)
-                    if (confirmate.isNotEmpty()) {
-                        listener?.onConfirmate(IntArray(confirmate.size) { confirmate[it].index })
+                    // tot ce s-a strans intre timp, intr-un singur push; un marcaj de reset arunca
+                    // doar audio-ul de dinaintea lui
+                    val elemente = ArrayList<Any>().apply { add(primul); coada.drainTo(this) }
+                    val lot = ArrayList<FloatArray>()
+                    for (e in elemente) {
+                        if (e === MarcajReset) {
+                            lot.clear()
+                            stream.reseteaza()
+                            listener?.onProvizoriu(IntArray(0))
+                        } else {
+                            lot.add(e as FloatArray)
+                        }
+                    }
+                    if (lot.isNotEmpty()) {
+                        val total = lot.sumOf { it.size }
+                        val audio = FloatArray(total)
+                        var o = 0
+                        for (b in lot) { b.copyInto(audio, o); o += b.size }
+                        val confirmate = stream.push(audio, total)
+                        if (confirmate.isNotEmpty()) {
+                            listener?.onConfirmate(IntArray(confirmate.size) { confirmate[it].index })
+                        }
                     }
                 }
                 val acum = SystemClock.elapsedRealtime()
@@ -134,6 +147,9 @@ class DeepRttyReceiver(context: Context) {
             }
         }
     }
+
+    /** Marcajul de reset din coada. */
+    private object MarcajReset
 
     private companion object {
         const val TAG = "DeepRttyReceiver"
