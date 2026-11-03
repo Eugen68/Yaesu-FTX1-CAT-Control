@@ -310,51 +310,17 @@ public class RttyDemodulator {
     /**
      * OPTIMIZARE: in loc sa recalculam N valori sin/cos (O(N)) de fiecare data cand se
      * schimba frecventa (ex: din AFC, la fiecare fractiune de secunda), recalculam doar
-     * cateva constante de rotatie (O(1)).
-     *
-     * CORECTIE: acumulatorii NU pot continua pur si simplu sub noua rotatie. Recursia scade
-     * esantionul care iese din fereastra cu coeficientul 1, ceea ce e corect doar daca a fost
-     * rotit N pasi cu ACEEASI frecventa; dupa o schimbare, fiecare esantion din fereastra lasa
-     * un rest care nu mai iese niciodata din suma (integrator fara pierderi). Cu AFC/PLL activ
-     * (o corectie la ~2 biti) resturile se adunau: pe inregistrarea W6IWI 14086 kHz, MF + PLL
-     * scadea de la 69 la 26 de randuri perfecte. Acum sumele se recalculeaza din buffer la
-     * fiecare schimbare de frecventa (O(N) la ~2 biti, neglijabil).
+     * cateva constante de rotatie (O(1)). Acumulatorul corelatiei glisante NU se reseteaza
+     * aici - continua sa evolueze lin sub noua rotatie, la fel cum bufferul audio (mfBuffer)
+     * nu e resetat la o simpla derivare de frecventa din AFC (se reseteaza doar explicit,
+     * la solicitaResetFiltre).
      */
     void recalculeazaShabloaneMF() {
         if (mfBuffer != null) {
             double fMark = frecventaTunedBaza;
             double fSpace = frecventaTunedBaza + getSpaceOffsetHz();
             setareaConstantelorMF(fMark, fSpace, sampleRateFiltre);
-            double[] s = sumaFereastra(mfBuffer, mfBufferPos, 2.0 * Math.PI * fMark / sampleRateFiltre);
-            mfMarkAccRe = s[0];
-            mfMarkAccIm = s[1];
-            s = sumaFereastra(mfBuffer, mfBufferPos, 2.0 * Math.PI * fSpace / sampleRateFiltre);
-            mfSpaceAccRe = s[0];
-            mfSpaceAccIm = s[1];
-            jumMark.resincronizeaza();
-            jumSpace.resincronizeaza();
         }
-    }
-
-    /**
-     * Suma corelatiei glisante calculata direct din buffer, in forma pe care o mentine recursia:
-     * S = sum_{k=0}^{N-1} x[n-k] e^{jw(N-1-k)} (cel mai vechi esantion are coeficientul 1).
-     * pozVechi = indexul celui mai vechi esantion din bufferul circular.
-     */
-    static double[] sumaFereastra(double[] buf, int pozVechi, double w) {
-        double re = 0, im = 0, cRe = 1, cIm = 0;
-        double pasRe = Math.cos(w), pasIm = Math.sin(w);
-        int n = buf.length;
-        for (int i = 0, k = pozVechi; i < n; i++) {
-            double x = buf[k];
-            re += x * cRe;
-            im += x * cIm;
-            double t = cRe * pasRe - cIm * pasIm;
-            cIm = cRe * pasIm + cIm * pasRe;
-            cRe = t;
-            if (++k == n) k = 0;
-        }
-        return new double[]{re, im};
     }
 
     private void setareaConstantelorMF(double fMark, double fSpace, double sampleRate) {
@@ -376,6 +342,37 @@ public class RttyDemodulator {
         mfMarkPowNIm = Math.sin(wMarkN);
         mfSpacePowNRe = Math.cos(wSpaceN);
         mfSpacePowNIm = Math.sin(wSpaceN);
+
+        // CORECTIE: recursia S(n+1) = e^{-jw} (S(n) - x_iesit + x_nou e^{jwN}) e corecta doar cat w
+        // ramane acelasi. La o schimbare de frecventa esantioanele din fereastra au intrat cu vechea
+        // referinta de faza si ar fi scazute cu cea noua - eroarea ramanea in suma pentru totdeauna.
+        // Cu AFC-ul care corecteaza la ~2 biti se aduna (7-28% din nivelul semnalului; MF + PLL pe
+        // W6IWI 14086 kHz: 1548 -> 110 erori). Sumele se recalculeaza exact din buffer.
+        if (mfBuffer != null) {
+            double[] m = sumaExacta(mfBuffer, mfBufferPos, wMark);
+            mfMarkAccRe = m[0]; mfMarkAccIm = m[1];
+            double[] sp = sumaExacta(mfBuffer, mfBufferPos, wSpace);
+            mfSpaceAccRe = sp[0]; mfSpaceAccIm = sp[1];
+        }
+    }
+
+    /**
+     * Suma exacta a corelatorului glisant din buffer: S = suma b_i e^{j w i}, b_0 = esantionul cel
+     * mai vechi - forma inchisa a recursiei S(n+1) = e^{-jw} (S(n) - x_iesit + x_nou e^{jwN}).
+     */
+    private static double[] sumaExacta(double[] buf, int pozCelMaiVechi, double w) {
+        double re = 0, im = 0, pasRe = Math.cos(w), pasIm = Math.sin(w), fRe = 1, fIm = 0;
+        int n = buf.length, idx = pozCelMaiVechi;
+        for (int i = 0; i < n; i++) {
+            double x = buf[idx];
+            re += x * fRe;
+            im += x * fIm;
+            double t = fRe * pasRe - fIm * pasIm;
+            fIm = fRe * pasIm + fIm * pasRe;
+            fRe = t;
+            if (++idx == n) idx = 0;
+        }
+        return new double[]{re, im};
     }
 
     /** Calculeaza coeficientii pentru filtrul bandpass biquad DNR (RBJ cookbook). */
@@ -470,7 +467,7 @@ public class RttyDemodulator {
             integratVech = 0;
             inFrame = false;
             fazaCeasAcumulator = 0;
-            bitCounter = 0;
+                bitCounter = 0;
             currentByte = 0;
             contorConfirmareStart = 0;
             contorEroriFramingConsecutive = 0;
@@ -603,7 +600,7 @@ public class RttyDemodulator {
                     ? decizieAtc(markFiltrat, spaceFiltrat)
                     : markFiltrat - spaceFiltrat;
 
-            if (modUrmarireFrecventa > 0) actualizeazaAfc(sample, markFiltrat, spaceFiltrat);
+            if (modUrmarireFrecventa > 0) actualizeazaAfc(sample);
 
             double magTotala = magMark + magSpace;
 
@@ -740,13 +737,19 @@ public class RttyDemodulator {
      * (coerenta ~1), zgomotul le imprastie (~0) - sub prag corectia nu se aplica, deci pauzele
      * dintre transmisii nu muta acordul. Castigurile (AFC 5%, PLL 25%) si limitele sunt cele vechi.
      */
-    private void actualizeazaAfc(double sample, double markFiltrat, double spaceFiltrat) {
+    private void actualizeazaAfc(double sample) {
         afcMark.proceseaza(sample);
         afcSpace.proceseaza(sample);
-        if (markFiltrat > AFC_DOMINANTA * spaceFiltrat) {
+        // Dominanta se judeca pe filtrele proprii AFC (raspund in cateva ms), nu pe anvelopele
+        // decodorului: cele MF intarzie ~1/2 bit, iar dupa fiecare tranzitie AFC-ul masura inca pe
+        // tonul disparut (coada filtrului + scurgerea celuilalt ton) - cu Mark mai slab decat Space,
+        // acordul aluneca in sus (MF + PLL: +9..+10 Hz pe inregistrarile W6IWI).
+        double pm = afcMark.putere(), ps = afcSpace.putere();
+        double d2 = AFC_DOMINANTA * AFC_DOMINANTA;
+        if (pm > d2 * ps) {
             acumuleaza(afcMark);
             afcDominant++;
-        } else if (spaceFiltrat > AFC_DOMINANTA * markFiltrat) {
+        } else if (ps > d2 * pm) {
             acumuleaza(afcSpace);
             afcDominant++;
         }
@@ -789,6 +792,11 @@ public class RttyDemodulator {
         private int poz;
         private double zRe, zIm;
         double pRe, pIm;
+
+        /** |z|^2 - puterea tonului in banda de baza acum. */
+        double putere() {
+            return zRe * zRe + zIm * zIm;
+        }
 
         void configureaza(double lpfHz, double fs, int intarziere) {
             i1.configureazaTreceJos(lpfHz, fs); i2.configureazaTreceJos(lpfHz, fs);
@@ -874,6 +882,9 @@ public class RttyDemodulator {
             rotIm = Math.sin(-w);
             powRe = Math.cos(w * buf.length);
             powIm = Math.sin(w * buf.length);
+            double[] s = sumaExacta(buf, poz, w); // vezi setareaConstantelorMF
+            accRe = s[0];
+            accIm = s[1];
         }
 
         void reseteaza() {
@@ -894,13 +905,6 @@ public class RttyDemodulator {
 
         double magnitudine() {
             return Math.sqrt(accRe * accRe + accIm * accIm);
-        }
-
-        /** Dupa o schimbare de frecventa: suma recalculata din buffer (vezi recalculeazaShabloaneMF). */
-        void resincronizeaza() {
-            double[] s = sumaFereastra(buf, poz, w);
-            accRe = s[0];
-            accIm = s[1];
         }
     }
 
