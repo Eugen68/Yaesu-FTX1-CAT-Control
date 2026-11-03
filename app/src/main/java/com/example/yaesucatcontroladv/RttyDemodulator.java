@@ -241,7 +241,7 @@ public class RttyDemodulator {
     private final AfcTon afcMark = new AfcTon();
     private final AfcTon afcSpace = new AfcTon();
     private double afcSumRe, afcSumIm, afcSumAbs;
-    private int afcContor, afcDominant;
+    private int afcContor, afcDominant, afcDominantDecodor;
     private int afcFereastra;
     private int afcIntarziere;
     private double freqErrorFiltrat;
@@ -467,7 +467,7 @@ public class RttyDemodulator {
             integratVech = 0;
             inFrame = false;
             fazaCeasAcumulator = 0;
-                bitCounter = 0;
+            bitCounter = 0;
             currentByte = 0;
             contorConfirmareStart = 0;
             contorEroriFramingConsecutive = 0;
@@ -600,7 +600,7 @@ public class RttyDemodulator {
                     ? decizieAtc(markFiltrat, spaceFiltrat)
                     : markFiltrat - spaceFiltrat;
 
-            if (modUrmarireFrecventa > 0) actualizeazaAfc(sample);
+            if (modUrmarireFrecventa > 0) actualizeazaAfc(sample, markFiltrat, spaceFiltrat);
 
             double magTotala = magMark + magSpace;
 
@@ -725,7 +725,7 @@ public class RttyDemodulator {
         afcMark.reseteaza();
         afcSpace.reseteaza();
         afcSumRe = afcSumIm = afcSumAbs = 0;
-        afcContor = afcDominant = 0;
+        afcContor = afcDominant = afcDominantDecodor = 0;
         freqErrorFiltrat = 0;
     }
 
@@ -737,7 +737,7 @@ public class RttyDemodulator {
      * (coerenta ~1), zgomotul le imprastie (~0) - sub prag corectia nu se aplica, deci pauzele
      * dintre transmisii nu muta acordul. Castigurile (AFC 5%, PLL 25%) si limitele sunt cele vechi.
      */
-    private void actualizeazaAfc(double sample) {
+    private void actualizeazaAfc(double sample, double markFiltrat, double spaceFiltrat) {
         afcMark.proceseaza(sample);
         afcSpace.proceseaza(sample);
         // Dominanta se judeca pe filtrele proprii AFC (raspund in cateva ms), nu pe anvelopele
@@ -753,11 +753,20 @@ public class RttyDemodulator {
             acumuleaza(afcSpace);
             afcDominant++;
         }
+        // CORECTIE: filtrele AFC (50 Hz, cativa ms) sunt prea rapide ca sa deosebeasca singure
+        // semnalul de zgomot - pe zgomot un ton pare des "dominant", iar AFC-ul muta acordul
+        // (3 min de zgomot, Chebyshev + PLL: 2125 -> 2072 Hz; QRN W6IWI: 2048 -> 2036 Hz). Ca
+        // ferestra sa conteze trebuie sa fie semnal si dupa anvelopele decodorului (integrate pe
+        // bit): cu ele pe zgomot acordul nu se misca, iar masuratoarea ramane pe filtrele rapide.
+        if (markFiltrat > AFC_DOMINANTA * spaceFiltrat || spaceFiltrat > AFC_DOMINANTA * markFiltrat) {
+            afcDominantDecodor++;
+        }
 
         if (++afcContor < afcFereastra) return;
         afcContor = 0;
-        boolean semnal = afcDominant >= AFC_FRACTIE_DOMINANTA_MIN * afcFereastra;
-        afcDominant = 0;
+        boolean semnal = afcDominant >= AFC_FRACTIE_DOMINANTA_MIN * afcFereastra
+                && afcDominantDecodor >= AFC_FRACTIE_DOMINANTA_MIN * afcFereastra;
+        afcDominant = afcDominantDecodor = 0;
         double sumAbs = afcSumAbs;
         double coerenta = sumAbs > 0 ? Math.sqrt(afcSumRe * afcSumRe + afcSumIm * afcSumIm) / sumAbs : 0;
         double eroareHz = Math.atan2(afcSumIm, afcSumRe) * sampleRate / (2 * Math.PI * afcIntarziere);
