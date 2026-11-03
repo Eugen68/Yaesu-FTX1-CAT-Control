@@ -122,7 +122,6 @@ public class RttyDemodulator {
 
     // ---- Coeficienti derivati din frecventa ----
     private double qMarkA, qSpaceA;
-    private double afcRotRe = 1.0, afcRotIm = 0.0; // increment de rotatie per esantion: cos(w), sin(w)
 
     // Matched Filter & SNR
     // OPTIMIZARE: nu mai pastram sabloanele sin/cos pe toata fereastra (O(N) per esantion),
@@ -143,6 +142,38 @@ public class RttyDemodulator {
     private double mfSpaceAccRe, mfSpaceAccIm;
     private double noiseFloor = 1e-9;
 
+    // Matched Filter - doua corectii gasite pe inregistrari reale (W6IWI):
+    //
+    // 1. Fading selectiv. Corelatorul integreaza un bit intreg, deci la o tranzitie |Mark| si |Space|
+    //    se schimba liniar pe toata durata bitului; cand un ton e mai slab, trecerea prin zero a
+    //    diferentei se muta spre el, cu pana la 1/2 bit - fronturile de start si momentele de
+    //    esantionare aluneca, iar caracterele pica la bitul de stop. Fiecare ton e raportat acum la
+    //    amplitudinea lui, invatata la momentele de esantionare (fereastra aliniata pe bit, SNR maxim):
+    //    trecerea prin zero ramane la mijlocul tranzitiei. Cu MF, startul se confirma dupa 0.35 biti
+    //    (semnalul MF e deja integrat pe un bit; 0.7 biti respingea starturile scurtate de fading).
+    //    Sintetic, fading 0.2-1 Hz: 24-32% -> 0.2-9% CER; zgomot fara fading: neschimbat.
+    //
+    // 2. Faza instabila in interiorul unui bit (flutter, propagare cu Doppler): doua jumatati de
+    //    fereastra cu faze diferite se anuleaza partial in suma coerenta. In paralel ruleaza un
+    //    corelator de 1/2 bit; doua jumatati consecutive adunate necoerent (|S1| + |S2|) nu depind de
+    //    faza. Coerenta |S1 + S2| / (|S1| + |S2|) se masoara la fiecare bit; sub 0.93 (medie pe ~200
+    //    de biti) se trece pe jumatati, peste 0.97 inapoi. Pe semnal stabil nu comuta.
+    //
+    // Limita: la flutter rapid (fading complex de 5-10 Hz) MF ramane slab (~25% CER). Acolo Chebyshev.
+    private static final double MF_PRAG_START_BITI = 0.35;
+    private static final double MF_DD_ALFA = 0.4;
+    private static final double MF_DD_PODEA = 0.1;
+    private static final double MF_PRAG_NECOERENT = 0.93;
+    private static final double MF_PRAG_COERENT = 0.97;
+    private static final double MF_ALFA_COERENTA = 0.005;
+    private double ddAm, ddAs;
+    private final CorelatorGlisant jumMark = new CorelatorGlisant(), jumSpace = new CorelatorGlisant();
+    private double[] jumIstMark = new double[1], jumIstSpace = new double[1];
+    private int jumPoz;
+    private double magCohMark, magCohSpace, magNcMark, magNcSpace;
+    double coerentaMedie = 1.0;
+    boolean mfNecoerent;
+
     // ---- Stare de decodare (pornita de porneste()) ----
     private int sampleRate = 48000;
     private double samplesPerBit;
@@ -153,7 +184,6 @@ public class RttyDemodulator {
     private double nivelZgomotMediu;
     private boolean inFrame;
     private double fazaCeasAcumulator;
-    private double fazaVectRe, fazaVectIm; // Vector de faza complex (inlocuieste fazaAFC)
     private int bitCounter;
     private int currentByte;
 
@@ -167,7 +197,7 @@ public class RttyDemodulator {
     private int contorConfirmareStart;
     // Prag confirmat de utilizator pe semnal real cu QRN/QRM (0.7 a mers mai bine
     // decat 0.6 la respingerea puseurilor scurte de zgomot).
-    private int pragConfirmareStart;
+    private int pragConfirmareStart, pragConfirmareStartMf;
 
     // ISTORIC: am experimentat cu esantionarea aproape de finalul bitului pentru
     // Matched Filter (teoria: fereastra corelatorului, care are exact lungimea unui
@@ -203,31 +233,31 @@ public class RttyDemodulator {
 
     private double dnrX1, dnrX2, dnrY1, dnrY2; // stare filtru bandpass DNR
 
-    private double I_acc, Q_acc;
-    private double last_phase;
-    private int samplesSinceLastAFC;
-    // OPTIMIZARE/CORECTIE: fereastra de acumulare AFC trebuie sa fie un multiplu
-    // intreg al perioadei unui simbol (samplesPerBit), altfel punctul de esantionare
-    // a fazei "aluneca" fata de granitele reale ale bitilor RTTY, ceea ce introduce
-    // eroare suplimentara in estimarea de frecventa (mai ales pe semnal slab).
-    // OPTIMIZARE: 2 perioade de simbol intre corectii - mai putina reactivitate, dar
-    // discriminatorul de frecventa mediaza zgomotul pe o fereastra mai mare.
-    private static final int FERESTRE_AFC = 2; // cate perioade de simbol acumulam intre 2 corectii AFC
-    private int fereastraAFCSamples;
-
-    // OPTIMIZARE: filtru de bucla AFC:
-    //  - freqErrorFiltrat: o medie exponentiala (EMA) care neteze masuratorile brute
-    //    intre ferestre succesive (echivalent unui filtru de bucla simplu);
-    //  - AFC_MAX_CORECTIE_HZ: plafon pe marimea corectiei aplicate per fereastra -
-    //    un semnal RTTY normal nu deriva brusc cu zeci de Hz intre doua ferestre
-    //    consecutive (~44ms), deci limitam corectia la o valoare fizic plauzibila;
-    //  - AFC_PRAG_OUTLIER_HZ: daca masuratoarea bruta e nefiziologic de mare (fereastra
-    //    "murdara" - de ex. o tranzitie mark/space cade in mijlocul ei - sau zgomot),
-    //    o ignoram complet in loc s-o aplicam (fie si trunchiata).
+    // AFC / PLL - discriminator de frecventa pe ambele tonuri (vezi actualizeazaAfc).
+    // CORECTIE: varianta veche corela audio-ul cu un fazor e^{+j w_mark t} pe ferestre de 2 biti:
+    // semnul erorii iesea INVERSAT (reactie pozitiva - acordul fugea de semnal, +9..+13 Hz pe
+    // inregistrarile W6IWI), fereastra amesteca Mark cu Space, iar pe semnal stabil conditia
+    // magMark > 2 x nivelZgomotMediu bloca de altfel complet bucla.
+    private final AfcTon afcMark = new AfcTon();
+    private final AfcTon afcSpace = new AfcTon();
+    private double afcSumRe, afcSumIm, afcSumAbs;
+    private int afcContor, afcDominant;
+    private int afcFereastra;
+    private int afcIntarziere;
     private double freqErrorFiltrat;
+    /** Banda trece-jos a fiecarui ton in banda de baza (Hz): taie celalalt ton (la 170 Hz). */
+    private static final double AFC_LPF_HZ = 50.0;
+    /** Intarzierea pe care se masoara rotatia fazei: 4 ms (domeniu neambiguu +-125 Hz). */
+    private static final double AFC_INTARZIERE_SEC = 0.004;
+    /** Un ton "domina" daca anvelopa lui e de cel putin atatea ori mai mare decat a celuilalt. */
+    private static final double AFC_DOMINANTA = 2.0;
+    /** Coerenta minima |suma| / suma |.| a masuratorilor dintr-o fereastra (zgomotul da ~0). */
+    private static final double AFC_COERENTA_MIN = 0.5;
+    /** Fractia minima din fereastra in care un ton domina clar (semnal RTTY real, nu zgomot). */
+    private static final double AFC_FRACTIE_DOMINANTA_MIN = 0.6;
     private static final double AFC_EMA_ALPHA = 0.25;
     private static final double AFC_MAX_CORECTIE_HZ = 5.0;
-    private static final double AFC_PRAG_OUTLIER_HZ = 20.0;
+    private static final double AFC_PRAG_OUTLIER_HZ = 60.0;
 
     // CIZELARE: cand SNR Gating ingheata decizia (energie insuficienta), nu mai
     // pastram pur si simplu semnul vechi al integratorului - daca fade-ul incepe
@@ -262,6 +292,12 @@ public class RttyDemodulator {
     void initMatchedFilterTemplates(int sampleRate, double baud) {
         mfSamplesPerBit = (int) Math.round(sampleRate / baud);
         mfBuffer = new double[mfSamplesPerBit];
+        int jumatate = Math.max(1, (int) Math.round(sampleRate / baud / 2));
+        jumMark.configureaza(jumatate);
+        jumSpace.configureaza(jumatate);
+        jumIstMark = new double[jumatate];
+        jumIstSpace = new double[jumatate];
+        jumPoz = 0;
         mfBufferPos = 0;
         mfMarkAccRe = mfMarkAccIm = 0;
         mfSpaceAccRe = mfSpaceAccIm = 0;
@@ -300,6 +336,8 @@ public class RttyDemodulator {
         // PsiN = e^{+j*w*N}  (corectia legata de esantionul care iese din fereastra)
         double wMarkN = wMark * mfSamplesPerBit;
         double wSpaceN = wSpace * mfSamplesPerBit;
+        jumMark.setFrecventa(wMark);
+        jumSpace.setFrecventa(wSpace);
         mfMarkPowNRe = Math.cos(wMarkN);
         mfMarkPowNIm = Math.sin(wMarkN);
         mfSpacePowNRe = Math.cos(wSpaceN);
@@ -329,9 +367,8 @@ public class RttyDemodulator {
     }
 
     private void recalculeazaCoeficientiFrecventa() {
-        double wAfc = 2.0 * Math.PI * frecventaTunedBaza / sampleRateFiltre;
-        afcRotRe = Math.cos(wAfc);
-        afcRotIm = Math.sin(wAfc);
+        afcMark.setFrecventa(frecventaTunedBaza, sampleRateFiltre);
+        afcSpace.setFrecventa(frecventaTunedBaza + getSpaceOffsetHz(), sampleRateFiltre);
 
         calculeazaCoeficientiDnr(sampleRateFiltre);
 
@@ -355,21 +392,24 @@ public class RttyDemodulator {
         nivelZgomotMediu = 0.05;
         inFrame = false;
         fazaCeasAcumulator = 0;
-        fazaVectRe = 1.0; fazaVectIm = 0.0;
         bitCounter = 0;
         currentByte = 0;
         contorConfirmareStart = 0;
         pragConfirmareStart = (int) Math.round(samplesPerBit * 0.7);
+        pragConfirmareStartMf = (int) Math.round(samplesPerBit * MF_PRAG_START_BITI);
+        ddAm = ddAs = 0;
+        coerentaMedie = 1.0;
+        mfNecoerent = false;
         contorEroriFramingConsecutive = 0;
         nbNivelMediu = 0.05;
         nbUltimulEsantionValid = 0;
         nbContorBlankConsecutiv = 0;
         dnrX1 = 0; dnrX2 = 0; dnrY1 = 0; dnrY2 = 0;
-        I_acc = 0; Q_acc = 0;
-        last_phase = 0;
-        samplesSinceLastAFC = 0;
-        fereastraAFCSamples = Math.max(1, (int) Math.round(samplesPerBit)) * FERESTRE_AFC;
-        freqErrorFiltrat = 0;
+        afcIntarziere = Math.max(1, (int) Math.round(AFC_INTARZIERE_SEC * sampleRate));
+        afcFereastra = Math.max(1, (int) Math.round(samplesPerBit)) * 2;
+        afcMark.configureaza(AFC_LPF_HZ, sampleRate, afcIntarziere);
+        afcSpace.configureaza(AFC_LPF_HZ, sampleRate, afcIntarziere);
+        reseteazaAfc();
 
         noiseFloor = 1e-9;
         if (lpfDecizieHz > 0) {
@@ -396,8 +436,7 @@ public class RttyDemodulator {
             integratVech = 0;
             inFrame = false;
             fazaCeasAcumulator = 0;
-            fazaVectRe = 1.0; fazaVectIm = 0.0;
-            bitCounter = 0;
+                bitCounter = 0;
             currentByte = 0;
             contorConfirmareStart = 0;
             contorEroriFramingConsecutive = 0;
@@ -410,6 +449,7 @@ public class RttyDemodulator {
             dnrX1 = 0; dnrX2 = 0; dnrY1 = 0; dnrY2 = 0;
             lpfMark.reseteaza();
             lpfSpace.reseteaza();
+            reseteazaAfc();
             reseteazaAtc();
             deblocheazaVolant();
             if (folosesteMatchedFilter && mfBuffer != null) {
@@ -417,7 +457,14 @@ public class RttyDemodulator {
                 mfBufferPos = 0;
                 mfMarkAccRe = mfMarkAccIm = 0;
                 mfSpaceAccRe = mfSpaceAccIm = 0;
+                jumMark.reseteaza();
+                jumSpace.reseteaza();
+                java.util.Arrays.fill(jumIstMark, 0);
+                java.util.Arrays.fill(jumIstSpace, 0);
+                jumPoz = 0;
             }
+            // amplitudinile invatate tin de semnal (acord, statie); coerenta tine de emitator - ramane
+            ddAm = ddAs = 0;
             solicitaResetFiltre = false;
         }
 
@@ -483,6 +530,22 @@ public class RttyDemodulator {
                 double scalareMF = 2.0 / mfSamplesPerBit;
                 magMark = Math.sqrt(mfMarkAccRe * mfMarkAccRe + mfMarkAccIm * mfMarkAccIm) * scalareMF;
                 magSpace = Math.sqrt(mfSpaceAccRe * mfSpaceAccRe + mfSpaceAccIm * mfSpaceAccIm) * scalareMF;
+
+                // jumatatile de bit: corelatorul de 1/2 bit acum si cel de acum 1/2 bit
+                jumMark.proceseaza(sample);
+                jumSpace.proceseaza(sample);
+                double jm = jumMark.magnitudine() * scalareMF, js = jumSpace.magnitudine() * scalareMF;
+                magCohMark = magMark;
+                magCohSpace = magSpace;
+                magNcMark = jm + jumIstMark[jumPoz];
+                magNcSpace = js + jumIstSpace[jumPoz];
+                jumIstMark[jumPoz] = jm;
+                jumIstSpace[jumPoz] = js;
+                if (++jumPoz == jumIstMark.length) jumPoz = 0;
+                if (mfNecoerent) {
+                    magMark = magNcMark;
+                    magSpace = magNcSpace;
+                }
                 diferentaBruta = magMark - magSpace;
             } else {
                 double m0 = sample - rCheb * rCheb * mx2 + qMarkA * rCheb * mx1;
@@ -499,69 +562,14 @@ public class RttyDemodulator {
             // identic cu filtrarea diferentei), ca ATC sa primeasca anvelopele netezite.
             double markFiltrat = lpfDecizieHz > 0 ? lpfMark.proceseaza(magMark) : magMark;
             double spaceFiltrat = lpfDecizieHz > 0 ? lpfSpace.proceseaza(magSpace) : magSpace;
-            // ATC doar pe Chebyshev: pe inregistrarea reala cu fading (W6IWI, 14086 kHz) MF + ATC
-            // a scos 36 de randuri perfecte din 95, fata de 55 la MF simplu.
-            diferentaBruta = folosesteAtc && !folosesteMatchedFilter
+            // ATC doar pe Chebyshev; MF are propria normalizare a tonurilor (decizieMf).
+            diferentaBruta = folosesteMatchedFilter
+                    ? decizieMf(markFiltrat, spaceFiltrat)
+                    : folosesteAtc
                     ? decizieAtc(markFiltrat, spaceFiltrat)
                     : markFiltrat - spaceFiltrat;
 
-            // AFC/PLL
-            double newPhaseRe = fazaVectRe * afcRotRe - fazaVectIm * afcRotIm;
-            double newPhaseIm = fazaVectRe * afcRotIm + fazaVectIm * afcRotRe;
-            fazaVectRe = newPhaseRe;
-            fazaVectIm = newPhaseIm;
-
-            I_acc += sample * fazaVectRe;
-            Q_acc += sample * fazaVectIm;
-            samplesSinceLastAFC++;
-
-            if (samplesSinceLastAFC >= fereastraAFCSamples) {
-                double current_phase = Math.atan2(Q_acc, I_acc);
-                double delta_phase = current_phase - last_phase;
-
-                while (delta_phase > Math.PI) delta_phase -= 2.0 * Math.PI;
-                while (delta_phase < -Math.PI) delta_phase += 2.0 * Math.PI;
-
-                double freq_error = (delta_phase * sampleRate) / (2.0 * Math.PI * samplesSinceLastAFC);
-
-                if (magMark > magSpace * 1.2 && magMark > nivelZgomotMediu * 2.0) {
-                    // Respingere outlieri - o masuratoare nefiziologic de mare e ignorata
-                    // complet (nu doar trunchiata), tratata ca fereastra "murdara"/zgomot.
-                    if (Math.abs(freq_error) <= AFC_PRAG_OUTLIER_HZ) {
-                        // Filtru de bucla (EMA) - amortizeaza zgomotul dintre ferestre succesive.
-                        freqErrorFiltrat = freqErrorFiltrat * (1.0 - AFC_EMA_ALPHA) + freq_error * AFC_EMA_ALPHA;
-
-                        // Plafon pe marimea corectiei aplicate per fereastra.
-                        double freqErrorLimitat = Math.max(-AFC_MAX_CORECTIE_HZ,
-                                Math.min(AFC_MAX_CORECTIE_HZ, freqErrorFiltrat));
-
-                        if (modUrmarireFrecventa == 1) {
-                            frecventaTunedBaza += freqErrorLimitat * 0.05;
-                        } else if (modUrmarireFrecventa == 2) {
-                            frecventaTunedBaza += freqErrorLimitat * 0.25;
-                        }
-
-                        if (modUrmarireFrecventa > 0) {
-                            sampleRateFiltre = sampleRate;
-                            recalculeazaCoeficientiFrecventa();
-
-                            if (folosesteMatchedFilter && Math.abs(freq_error) > 0.5) {
-                                recalculeazaShabloaneMF();
-                            }
-                        }
-                    }
-                }
-                I_acc = 0; Q_acc = 0;
-                last_phase = current_phase;
-                samplesSinceLastAFC = 0;
-
-                // Renormalizare anti-drift a vectorului de faza
-                double normAfc = Math.sqrt(fazaVectRe * fazaVectRe + fazaVectIm * fazaVectIm);
-                if (normAfc > 1e-9) {
-                    fazaVectRe /= normAfc;
-                    fazaVectIm /= normAfc;
-                }
-            }
+            if (modUrmarireFrecventa > 0) actualizeazaAfc(sample, markFiltrat, spaceFiltrat);
 
             double magTotala = magMark + magSpace;
 
@@ -642,7 +650,7 @@ public class RttyDemodulator {
                             fantomaActiva = true;
                         }
                     }
-                } else if (bitCurent == 0 && contorConfirmareStart >= pragConfirmareStart) {
+                } else if (bitCurent == 0 && contorConfirmareStart >= (folosesteMatchedFilter ? pragConfirmareStartMf : pragConfirmareStart)) {
                     // CORECTIE: faza nu porneste de la 0, ci de la cate esantioane au trecut
                     // deja de la INCEPUTUL real al starii "space" (cat am asteptat sa
                     // confirmam) - altfel am introduce o intarziere sistematica la fiecare bit.
@@ -656,6 +664,7 @@ public class RttyDemodulator {
 
                 if (fazaCeasAcumulator >= punctEstantionareTinta) {
                     fazaCeasAcumulator -= punctEstantionareTinta;
+                    if (folosesteMatchedFilter) invataMf(bitCurent, markFiltrat, spaceFiltrat);
                     if (bitCounter < 5) {
                         if (bitCurent == 1) currentByte |= (1 << bitCounter);
                         bitCounter++;
@@ -678,6 +687,179 @@ public class RttyDemodulator {
                     }
                 }
             }
+        }
+    }
+
+    private void reseteazaAfc() {
+        afcMark.reseteaza();
+        afcSpace.reseteaza();
+        afcSumRe = afcSumIm = afcSumAbs = 0;
+        afcContor = afcDominant = 0;
+        freqErrorFiltrat = 0;
+    }
+
+    /**
+     * AFC / PLL. Fiecare ton e coborat in banda de baza la frecventa lui nominala si filtrat
+     * (~50 Hz); rotatia fazei pe 4 ms, z[n]*conj(z[n-D]), da direct abaterea tonului fata de
+     * acord, cu semnul corect. Se masoara doar tonul care domina clar in acel moment (nu la
+     * tranzitii), iar produsele se aduna vectorial pe ~2 biti: un ton curat le aliniaza
+     * (coerenta ~1), zgomotul le imprastie (~0) - sub prag corectia nu se aplica, deci pauzele
+     * dintre transmisii nu muta acordul. Castigurile (AFC 5%, PLL 25%) si limitele sunt cele vechi.
+     */
+    private void actualizeazaAfc(double sample, double markFiltrat, double spaceFiltrat) {
+        afcMark.proceseaza(sample);
+        afcSpace.proceseaza(sample);
+        if (markFiltrat > AFC_DOMINANTA * spaceFiltrat) {
+            acumuleaza(afcMark);
+            afcDominant++;
+        } else if (spaceFiltrat > AFC_DOMINANTA * markFiltrat) {
+            acumuleaza(afcSpace);
+            afcDominant++;
+        }
+
+        if (++afcContor < afcFereastra) return;
+        afcContor = 0;
+        boolean semnal = afcDominant >= AFC_FRACTIE_DOMINANTA_MIN * afcFereastra;
+        afcDominant = 0;
+        double sumAbs = afcSumAbs;
+        double coerenta = sumAbs > 0 ? Math.sqrt(afcSumRe * afcSumRe + afcSumIm * afcSumIm) / sumAbs : 0;
+        double eroareHz = Math.atan2(afcSumIm, afcSumRe) * sampleRate / (2 * Math.PI * afcIntarziere);
+        afcSumRe = afcSumIm = afcSumAbs = 0;
+        afcMark.renormalizeaza();
+        afcSpace.renormalizeaza();
+        if (!semnal || sumAbs <= 0 || coerenta < AFC_COERENTA_MIN || Math.abs(eroareHz) > AFC_PRAG_OUTLIER_HZ) return;
+
+        freqErrorFiltrat = freqErrorFiltrat * (1.0 - AFC_EMA_ALPHA) + eroareHz * AFC_EMA_ALPHA;
+        double limitat = Math.max(-AFC_MAX_CORECTIE_HZ, Math.min(AFC_MAX_CORECTIE_HZ, freqErrorFiltrat));
+        double castig = modUrmarireFrecventa == 2 ? 0.25 : 0.05;
+        frecventaTunedBaza += limitat * castig;
+        // Eroarea masurata e relativa la acordul vechi: dupa corectie scade cu cat s-a corectat.
+        freqErrorFiltrat -= limitat * castig;
+
+        sampleRateFiltre = sampleRate;
+        recalculeazaCoeficientiFrecventa();
+        if (folosesteMatchedFilter) recalculeazaShabloaneMF();
+    }
+
+    private void acumuleaza(AfcTon t) {
+        afcSumRe += t.pRe;
+        afcSumIm += t.pIm;
+        afcSumAbs += Math.sqrt(t.pRe * t.pRe + t.pIm * t.pIm);
+    }
+
+    /** Un ton pentru AFC: mixer complex, trece-jos de ordin 4 pe I/Q, linie de intarziere. */
+    private static final class AfcTon {
+        private final Biquad i1 = new Biquad(), i2 = new Biquad(), q1 = new Biquad(), q2 = new Biquad();
+        private double osRe = 1, osIm, pasRe = 1, pasIm;
+        private double[] intRe = new double[1], intIm = new double[1];
+        private int poz;
+        private double zRe, zIm;
+        double pRe, pIm;
+
+        void configureaza(double lpfHz, double fs, int intarziere) {
+            i1.configureazaTreceJos(lpfHz, fs); i2.configureazaTreceJos(lpfHz, fs);
+            q1.configureazaTreceJos(lpfHz, fs); q2.configureazaTreceJos(lpfHz, fs);
+            intRe = new double[intarziere];
+            intIm = new double[intarziere];
+            reseteaza();
+        }
+
+        void setFrecventa(double hz, double fs) {
+            double w = 2 * Math.PI * hz / fs;
+            pasRe = Math.cos(w);
+            pasIm = -Math.sin(w); // e^{-jw}: tonul la frecventa nominala ajunge la 0 Hz
+        }
+
+        void reseteaza() {
+            i1.reseteaza(); i2.reseteaza(); q1.reseteaza(); q2.reseteaza();
+            java.util.Arrays.fill(intRe, 0);
+            java.util.Arrays.fill(intIm, 0);
+            poz = 0;
+            zRe = zIm = pRe = pIm = 0;
+        }
+
+        /** Un esantion: z[n] in banda de baza si produsul z[n]*conj(z[n-D]). */
+        void proceseaza(double x) {
+            zRe = i2.proceseaza(i1.proceseaza(x * osRe));
+            zIm = q2.proceseaza(q1.proceseaza(x * osIm));
+            double r = osRe * pasRe - osIm * pasIm;
+            osIm = osRe * pasIm + osIm * pasRe;
+            osRe = r;
+
+            double vRe = intRe[poz], vIm = intIm[poz];
+            pRe = zRe * vRe + zIm * vIm;
+            pIm = zIm * vRe - zRe * vIm;
+            intRe[poz] = zRe;
+            intIm[poz] = zIm;
+            if (++poz == intRe.length) poz = 0;
+        }
+
+        void renormalizeaza() {
+            double n = Math.sqrt(osRe * osRe + osIm * osIm);
+            osRe /= n;
+            osIm /= n;
+        }
+    }
+
+    /** MF: fiecare ton raportat la amplitudinea lui invatata (vezi comentariul de la campuri). */
+    private double decizieMf(double mark, double space) {
+        if (ddAm <= 0 || ddAs <= 0) return mark - space; // pana se invata ambele tonuri
+        double am = Math.max(ddAm, MF_DD_PODEA * ddAs);
+        double asp = Math.max(ddAs, MF_DD_PODEA * ddAm);
+        // inapoi pe scara unei amplitudini, ca pragul de Sensibilitate sa ramana comparabil
+        return (mark / am - space / asp) * 0.5 * (am + asp);
+    }
+
+    /** La fiecare bit esantionat: amplitudinea tonului decis si coerenta pe jumatati. */
+    private void invataMf(int bit, double markFiltrat, double spaceFiltrat) {
+        if (bit == 1) ddAm = ddAm <= 0 ? markFiltrat : ddAm + MF_DD_ALFA * (markFiltrat - ddAm);
+        else ddAs = ddAs <= 0 ? spaceFiltrat : ddAs + MF_DD_ALFA * (spaceFiltrat - ddAs);
+
+        double coh = bit == 1 ? magCohMark : magCohSpace;
+        double nc = bit == 1 ? magNcMark : magNcSpace;
+        if (nc <= 0) return;
+        coerentaMedie += MF_ALFA_COERENTA * (Math.min(1.0, coh / nc) - coerentaMedie);
+        mfNecoerent = mfNecoerent ? coerentaMedie < MF_PRAG_COERENT : coerentaMedie < MF_PRAG_NECOERENT;
+    }
+
+    /** Corelator glisant recursiv pe o fereastra de lungime data (aceeasi formula ca MF). */
+    private static final class CorelatorGlisant {
+        private double[] buf = new double[1];
+        private int poz;
+        private double w, rotRe = 1, rotIm, powRe = 1, powIm, accRe, accIm;
+
+        void configureaza(int lungime) {
+            buf = new double[lungime];
+            reseteaza();
+            setFrecventa(w);
+        }
+
+        void setFrecventa(double omega) {
+            w = omega;
+            rotRe = Math.cos(-w);
+            rotIm = Math.sin(-w);
+            powRe = Math.cos(w * buf.length);
+            powIm = Math.sin(w * buf.length);
+        }
+
+        void reseteaza() {
+            java.util.Arrays.fill(buf, 0);
+            poz = 0;
+            accRe = accIm = 0;
+        }
+
+        void proceseaza(double x) {
+            double iesit = buf[poz];
+            buf[poz] = x;
+            if (++poz == buf.length) poz = 0;
+            double inRe = accRe - iesit + x * powRe;
+            double inIm = accIm + x * powIm;
+            accRe = rotRe * inRe - rotIm * inIm;
+            accIm = rotRe * inIm + rotIm * inRe;
+        }
+
+        double magnitudine() {
+            return Math.sqrt(accRe * accRe + accIm * accIm);
         }
     }
 
