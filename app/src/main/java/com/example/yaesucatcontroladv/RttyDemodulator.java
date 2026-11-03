@@ -242,6 +242,7 @@ public class RttyDemodulator {
     private final AfcTon afcSpace = new AfcTon();
     private double afcSumRe, afcSumIm, afcSumAbs;
     private int afcContor, afcDominant, afcDominantDecodor;
+    private boolean afcFereastraAnterioaraValida;
     private int afcFereastra;
     private int afcIntarziere;
     private double freqErrorFiltrat;
@@ -726,6 +727,7 @@ public class RttyDemodulator {
         afcSpace.reseteaza();
         afcSumRe = afcSumIm = afcSumAbs = 0;
         afcContor = afcDominant = afcDominantDecodor = 0;
+        afcFereastraAnterioaraValida = false;
         freqErrorFiltrat = 0;
     }
 
@@ -773,7 +775,14 @@ public class RttyDemodulator {
         afcSumRe = afcSumIm = afcSumAbs = 0;
         afcMark.renormalizeaza();
         afcSpace.renormalizeaza();
-        if (!semnal || sumAbs <= 0 || coerenta < AFC_COERENTA_MIN || Math.abs(eroareHz) > AFC_PRAG_OUTLIER_HZ) return;
+        boolean valida = semnal && sumAbs > 0 && coerenta >= AFC_COERENTA_MIN && Math.abs(eroareHz) <= AFC_PRAG_OUTLIER_HZ;
+        // Corectia se aplica doar daca si fereastra anterioara a fost valida. Pe zgomot trec
+        // izolat ~0.6% din ferestre (niciodata doua la rand in 2 x 3 min), destul ca MF + PLL sa
+        // derive cu ~8 Hz in 3 minute; pe semnal ferestrele valide vin in serii (W6IWI 14086 kHz:
+        // 98.7% -> 98.0% aplicate).
+        boolean aplica = valida && afcFereastraAnterioaraValida;
+        afcFereastraAnterioaraValida = valida;
+        if (!aplica) return;
 
         freqErrorFiltrat = freqErrorFiltrat * (1.0 - AFC_EMA_ALPHA) + eroareHz * AFC_EMA_ALPHA;
         double limitat = Math.max(-AFC_MAX_CORECTIE_HZ, Math.min(AFC_MAX_CORECTIE_HZ, freqErrorFiltrat));
