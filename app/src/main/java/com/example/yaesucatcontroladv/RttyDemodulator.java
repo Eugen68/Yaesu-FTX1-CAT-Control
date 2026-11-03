@@ -310,17 +310,51 @@ public class RttyDemodulator {
     /**
      * OPTIMIZARE: in loc sa recalculam N valori sin/cos (O(N)) de fiecare data cand se
      * schimba frecventa (ex: din AFC, la fiecare fractiune de secunda), recalculam doar
-     * cateva constante de rotatie (O(1)). Acumulatorul corelatiei glisante NU se reseteaza
-     * aici - continua sa evolueze lin sub noua rotatie, la fel cum bufferul audio (mfBuffer)
-     * nu e resetat la o simpla derivare de frecventa din AFC (se reseteaza doar explicit,
-     * la solicitaResetFiltre).
+     * cateva constante de rotatie (O(1)).
+     *
+     * CORECTIE: acumulatorii NU pot continua pur si simplu sub noua rotatie. Recursia scade
+     * esantionul care iese din fereastra cu coeficientul 1, ceea ce e corect doar daca a fost
+     * rotit N pasi cu ACEEASI frecventa; dupa o schimbare, fiecare esantion din fereastra lasa
+     * un rest care nu mai iese niciodata din suma (integrator fara pierderi). Cu AFC/PLL activ
+     * (o corectie la ~2 biti) resturile se adunau: pe inregistrarea W6IWI 14086 kHz, MF + PLL
+     * scadea de la 69 la 26 de randuri perfecte. Acum sumele se recalculeaza din buffer la
+     * fiecare schimbare de frecventa (O(N) la ~2 biti, neglijabil).
      */
     void recalculeazaShabloaneMF() {
         if (mfBuffer != null) {
             double fMark = frecventaTunedBaza;
             double fSpace = frecventaTunedBaza + getSpaceOffsetHz();
             setareaConstantelorMF(fMark, fSpace, sampleRateFiltre);
+            double[] s = sumaFereastra(mfBuffer, mfBufferPos, 2.0 * Math.PI * fMark / sampleRateFiltre);
+            mfMarkAccRe = s[0];
+            mfMarkAccIm = s[1];
+            s = sumaFereastra(mfBuffer, mfBufferPos, 2.0 * Math.PI * fSpace / sampleRateFiltre);
+            mfSpaceAccRe = s[0];
+            mfSpaceAccIm = s[1];
+            jumMark.resincronizeaza();
+            jumSpace.resincronizeaza();
         }
+    }
+
+    /**
+     * Suma corelatiei glisante calculata direct din buffer, in forma pe care o mentine recursia:
+     * S = sum_{k=0}^{N-1} x[n-k] e^{jw(N-1-k)} (cel mai vechi esantion are coeficientul 1).
+     * pozVechi = indexul celui mai vechi esantion din bufferul circular.
+     */
+    static double[] sumaFereastra(double[] buf, int pozVechi, double w) {
+        double re = 0, im = 0, cRe = 1, cIm = 0;
+        double pasRe = Math.cos(w), pasIm = Math.sin(w);
+        int n = buf.length;
+        for (int i = 0, k = pozVechi; i < n; i++) {
+            double x = buf[k];
+            re += x * cRe;
+            im += x * cIm;
+            double t = cRe * pasRe - cIm * pasIm;
+            cIm = cRe * pasIm + cIm * pasRe;
+            cRe = t;
+            if (++k == n) k = 0;
+        }
+        return new double[]{re, im};
     }
 
     private void setareaConstantelorMF(double fMark, double fSpace, double sampleRate) {
@@ -436,7 +470,7 @@ public class RttyDemodulator {
             integratVech = 0;
             inFrame = false;
             fazaCeasAcumulator = 0;
-                bitCounter = 0;
+            bitCounter = 0;
             currentByte = 0;
             contorConfirmareStart = 0;
             contorEroriFramingConsecutive = 0;
@@ -860,6 +894,13 @@ public class RttyDemodulator {
 
         double magnitudine() {
             return Math.sqrt(accRe * accRe + accIm * accIm);
+        }
+
+        /** Dupa o schimbare de frecventa: suma recalculata din buffer (vezi recalculeazaShabloaneMF). */
+        void resincronizeaza() {
+            double[] s = sumaFereastra(buf, poz, w);
+            accRe = s[0];
+            accIm = s[1];
         }
     }
 
