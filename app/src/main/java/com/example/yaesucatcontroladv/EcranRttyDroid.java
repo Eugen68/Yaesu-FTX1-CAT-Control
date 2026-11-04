@@ -1575,7 +1575,7 @@ public class EcranRttyDroid {
                         if (!folosesteDiddle) {
                             // Dacă Diddle e oprit, stăm în Mark (Idle) fără bit-banging activ
                             setHardwarePtt(true);
-                            setHardwareFsk(!demod.regimReverseSoftware); // Mark tone (Idle)
+                            setHardwareFsk(true); // Mark tone (Idle); polaritatea TX nu urmeaza REV-ul receptiei
                             Thread.sleep(50); // Mică pauză de relaxare CPU
                             anchorTimeNanos = System.nanoTime(); // Resetăm ancora după pauză
                             continue;
@@ -1649,7 +1649,12 @@ public class EcranRttyDroid {
      * @return Momentul de timp (nanos) la care s-a încheiat bitul de stop.
      */
     private long trimiteCodBaudotMetronom(int codBaudot, long startAnchorNanos) {
-        boolean reverse = demod.regimReverseSoftware;
+        // Polaritatea pinului e mereu normala (Mark = pin activ). CORECTIE: inainte urma butonul
+        // NORM/REV al receptiei - in RTTY-U pui REV ca sa citesti statia, iar raspunsul iesea in aer
+        // inversat. Testat pe statii (FTX-1 + aplicatia <-> FTDX10, 2026-11-04): pe NORM emisia e
+        // corecta si in RTTY-L si in RTTY-U, iar receptia in RTTY-U cere REV ca la decodorul FTDX10.
+        // Emisia inversata, cand chiar e nevoie, se face din meniul statiei (RTTY polaritate TX).
+        final boolean reverse = false;
         long timeNext = startAnchorNanos;
 
         // 1. START BIT (Space)
