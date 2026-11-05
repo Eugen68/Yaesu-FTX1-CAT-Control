@@ -38,6 +38,15 @@ public final class RttyPolarity {
     /** Duratele: minimul de rulari (1.2-8 biti, ambele tonuri) ca sa decida. */
     public static final int MIN_RULARI = 16;
 
+    /**
+     * Duratele decid doar daca macar una dintre ipoteze incadreaza atatea caractere (0..1): altfel in
+     * fereastra nu e semnal decodabil (pauza, alt semnal, QRN) si rularile sunt intamplatoare. Pe
+     * inregistrarile reale (toate ferestrele de 5 s cu pas 1 s, fara filtrul de semnal al A-TUNE, NORM
+     * + REV oglindit) fara ea: 14086 39 gresite din 4475, QRN 7086 91 din 2147; cu ea: 0 din 4426,
+     * 1 din 1843 (RYRY 14089: 1 din 889).
+     */
+    public static final double MIN_INCADRARE_DURATE = 0.30;
+
     /** Incadrarea: minimul de caractere incadrate ca sa decida. */
     public static final int MIN_CADRE = 12;
 
@@ -124,7 +133,8 @@ public final class RttyPolarity {
         double[] jos = scor(josPornit, m, spb, true);
         double[] sus = scor(josPornit, m, spb, false);
 
-        if (dj[1] + ds[1] >= MIN_RULARI && Math.abs(dj[0] - ds[0]) >= MARJA_DURATE) {
+        if (dj[1] + ds[1] >= MIN_RULARI && Math.abs(dj[0] - ds[0]) >= MARJA_DURATE
+                && Math.max(jos[0], sus[0]) >= MIN_INCADRARE_DURATE) {
             boolean markJos = dj[0] > ds[0];
             return new Rezultat(markJos, jos[0], sus[0], (int) (markJos ? jos[1] : sus[1]), dj[0], ds[0]);
         }
