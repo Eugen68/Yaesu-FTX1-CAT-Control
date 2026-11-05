@@ -2,9 +2,15 @@ package com.example.yaesucatcontroladv;
 
 /**
  * A-TUNE pentru emisie: unde trebuie dusa statia (VFO-A) ca emisia FSK sa plece exact pe frecventa
- * corespondentului. In modul RTTY al statiei (FSK) tonurile receptiei sunt fixe - Mark pe 2125 Hz,
- * shift 170 - iar statia emite acolo unde e acordata. Daca semnalul corespondentului se aude cu
- * Mark-ul in alta parte, statia se muta cu diferenta (QSY), nu decodorul.
+ * corespondentului. In modul RTTY al statiei (FSK) o statie de pe aceeasi frecventa se aude cu
+ * perechea de tonuri pe 2125 / 2295 Hz in ambele moduri - in RTTY-L Mark-ul e tonul de jos (NORM), in
+ * RTTY-U tonul de sus (2295, de aceea receptia cere REV) - iar statia emite acolo unde e acordata.
+ * Daca perechea corespondentului se aude in alta parte, statia se muta cu diferenta (QSY), nu
+ * decodorul.
+ *
+ * CORECTIE: se aliniaza perechea (tonul de jos pe 2125), nu Mark-ul. Cu Mark-ul pe 2125, in RTTY-U
+ * QSY-ul ducea statia cu 170 Hz alaturi (test YO9VA 2026-11-05: FTDX10 pe 3.505.000, FTX-1 emite pe
+ * 3.505.200 -> RTTY-L QSY la 3.505.201, RTTY-U la 3.505.370).
  *
  * Ca in RttyDecoder (C#, HamRig RigMath.QsyDial): in RTTY-L statia lucreaza ca in LSB (ton audio
  * mai jos = frecventa RF mai mare), in RTTY-U ca in USB. Conteaza doar diferenta, nu ce arata
@@ -12,7 +18,7 @@ package com.example.yaesucatcontroladv;
  */
 public final class RttyQsy {
 
-    /** Tonul Mark al statiei in modul RTTY (FSK). */
+    /** Tonul de jos al perechii in modul RTTY al statiei (FSK): Mark pe NORM, Space pe REV. */
     public static final double MARK_FSK_HZ = 2125.0;
 
     /** Sub atat statia e deja pe frecventa (Hz). */
@@ -32,13 +38,19 @@ public final class RttyQsy {
     }
 
     /**
-     * Noua frecventa VFO astfel incat Mark-ul auzit acum la markHz sa ajunga pe 2125 Hz, sau null
-     * daca statia nu e in RTTY-L / RTTY-U ori frecventa nu se stie.
+     * Noua frecventa VFO astfel incat tonul de jos al perechii, auzit acum la tonJosHz, sa ajunga pe
+     * 2125 Hz (perechea pe 2125 / 2295), sau null daca statia nu e in RTTY-L / RTTY-U ori frecventa
+     * nu se stie. Atentie: tonul de JOS, nu Mark-ul (pe REV Mark-ul e tonul de sus).
      */
-    public static Long frecventaPentruEmisie(long dialHz, char codMod, double markHz) {
+    public static Long frecventaPentruEmisie(long dialHz, char codMod, double tonJosHz) {
         if (dialHz <= 0 || !esteRtty(codMod)) return null;
-        double delta = markHz - MARK_FSK_HZ;
+        double delta = tonJosHz - MARK_FSK_HZ;
         return Math.round(codMod == '9' ? dialHz + delta : dialHz - delta);
+    }
+
+    /** Mark-ul decodorului dupa QSY: tonul de jos (2125) pe NORM, cel de sus (2295) pe REV. */
+    public static double markDupaQsy(boolean rev) {
+        return rev ? MARK_FSK_HZ + RttyDemodulator.SHIFT_HZ : MARK_FSK_HZ;
     }
 
     /**

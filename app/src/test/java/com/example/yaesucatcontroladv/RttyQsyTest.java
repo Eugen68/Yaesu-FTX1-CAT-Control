@@ -36,6 +36,24 @@ public class RttyQsyTest {
         assertEquals(Long.valueOf(14_084_950), RttyQsy.frecventaPentruEmisie(14_085_000, '9', 2075));
     }
 
+    /**
+     * Testul pe statii (YO9VA, 2026-11-05): FTDX10 pe 3.505.000, FTX-1 emite pe 3.505.200. Se
+     * aliniaza tonul de JOS al perechii. In RTTY-U Mark-ul e tonul de sus (2495 aici); cu Mark-ul pe
+     * 2125 QSY-ul iesea 3.505.370 - exact ce s-a vazut pe statie.
+     */
+    @Test
+    public void perecheaNuMarkulTestulPeStatii() {
+        assertEquals(Long.valueOf(3_505_200), RttyQsy.frecventaPentruEmisie(3_505_000, '6', 1925));  // RTTY-L
+        assertEquals(Long.valueOf(3_505_200), RttyQsy.frecventaPentruEmisie(3_505_000, '9', 2325));  // RTTY-U
+        assertEquals(Long.valueOf(3_505_370), RttyQsy.frecventaPentruEmisie(3_505_000, '9', 2495));  // greseala veche
+    }
+
+    @Test
+    public void markulDupaQsy() {
+        assertEquals(2125.0, RttyQsy.markDupaQsy(false), 0);
+        assertEquals(2295.0, RttyQsy.markDupaQsy(true), 0);
+    }
+
     @Test
     public void deJaPeFrecventa() {
         assertEquals(Long.valueOf(7_080_000), RttyQsy.frecventaPentruEmisie(7_080_000, '6', 2125));

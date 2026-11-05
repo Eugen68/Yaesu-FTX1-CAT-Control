@@ -1416,7 +1416,7 @@ public class EcranRttyDroid {
                     demod.regimReverseSoftware = rev;
                     demod.frecventaTunedBaza = rev ? tonJos + RttyDemodulator.SHIFT_HZ : tonJos;
                     sincronizeazaSetariReceptie();
-                    String qsy = pregatesteQsy(demod.frecventaTunedBaza);
+                    String qsy = pregatesteQsy(tonJos);   // perechea, nu Mark-ul (pe REV Mark-ul e sus)
                     atuneInCurs = false;
                     Toast.makeText(context, "Auto-Tune: " + Math.round(demod.frecventaTunedBaza) + " Hz, "
                                     + (rev ? "REV" : "NORM")
@@ -1450,16 +1450,17 @@ public class EcranRttyDroid {
     }
 
     /**
-     * Calculeaza (fara sa mute statia) frecventa VFO pentru emisie: Mark-ul semnalului, auzit acum la
-     * markHz, sa ajunga pe 2125 Hz - acolo emisia FSK pleaca exact pe frecventa corespondentului.
+     * Calculeaza (fara sa mute statia) frecventa VFO pentru emisie: tonul de jos al perechii, auzit
+     * acum la tonJosHz, sa ajunga pe 2125 Hz (perechea pe 2125 / 2295, oricare ar fi Mark-ul) - acolo
+     * emisia FSK pleaca exact pe frecventa corespondentului.
      * Doar cu statia conectata si in RTTY-L / RTTY-U. Intoarce textul pentru toast.
      */
-    private String pregatesteQsy(double markHz) {
+    private String pregatesteQsy(double tonJosHz) {
         qsyFrecventa = null;
         if (radioManager == null || !radioManager.isConectat()) return "";
         long dial = StareRadio.getFrecventaHz();
         char mod = RttyQsy.codMod(StareRadio.getModText());
-        Long noua = RttyQsy.frecventaPentruEmisie(dial, mod, markHz);
+        Long noua = RttyQsy.frecventaPentruEmisie(dial, mod, tonJosHz);
         if (noua == null) return dial > 0 && mod != ' ' ? "\nRadio not in RTTY-L/U - no QSY for TX." : "";
         if (Math.abs(noua - dial) < RttyQsy.TOLERANTA_HZ) return "\nRadio already on the TX frequency.";
         qsyFrecventa = noua;
@@ -1505,11 +1506,12 @@ public class EcranRttyDroid {
     private void mutaStatiaPentruEmisie(long noua) {
         radioManager.trimiteComandaCAT(String.format(java.util.Locale.US, "FA%09d;", noua));
         StareRadio.setFrecventaHz(noua);
-        // semnalul vine acum cu Mark-ul pe 2125 (si pe NORM, si pe REV - frecventaTunedBaza e Mark-ul)
-        demod.frecventaTunedBaza = RttyQsy.MARK_FSK_HZ;
+        // perechea semnalului vine acum pe 2125 / 2295: Mark-ul pe tonul de jos (NORM) sau de sus (REV)
+        demod.frecventaTunedBaza = RttyQsy.markDupaQsy(demod.regimReverseSoftware);
         sincronizeazaSetariReceptie();
         Toast.makeText(context, String.format(java.util.Locale.US,
-                "QSY: %.3f kHz - signal Mark on 2125 Hz, TX on its frequency.", noua / 1000.0),
+                "QSY: %.3f kHz - signal on 2125/2295 Hz (Mark %d), TX on its frequency.", noua / 1000.0,
+                Math.round(demod.frecventaTunedBaza)),
                 Toast.LENGTH_SHORT).show();
     }
 
