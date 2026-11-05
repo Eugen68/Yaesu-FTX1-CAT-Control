@@ -135,6 +135,21 @@ public class EcranRttyDroid {
 
     private final short[] vectorIstoricPeak = new short[512];
 
+    // Ultimele secunde de audio (48 kHz), pentru detectia polaritatii la A-TUNE (RttyPolarity).
+    private static final int RATA_AUDIO_RTTY = 48000;
+    private final RttyPolarity.Istoric istoricAudioRtty = new RttyPolarity.Istoric(RATA_AUDIO_RTTY, 6);
+
+    // A-TUNE pentru emisie (RttyQsy): tap = acord + calculul frecventei statiei pentru emisie,
+    // dublu tap = statia mutata acolo (Mark-ul corespondentului pe 2125 Hz). Doar pe firul UI.
+    private static final long DUBLU_TAP_MS = 450;
+    private static final long QSY_VALABIL_MS = 30000;
+    private long ultimulTapAtune;
+    private boolean atuneInCurs;
+    private boolean qsyDupaAtune;   // dublu tap venit cat A-TUNE inca lucra
+    private Long qsyFrecventa;      // unde trebuie dusa statia pentru emisie, sau null
+    private long qsyDeLa;           // frecventa statiei la calcul
+    private long qsyCalculatLa;
+
     // Chei SharedPreferences pentru RTTY
     private static final String PREF_RTTY_DNR_ON = "rtty_dnr_on";
     private static final String PREF_RTTY_DNR_BW = "rtty_dnr_bw";
@@ -505,7 +520,7 @@ public class EcranRttyDroid {
         btnAutoTune.setBackgroundColor(Color.parseColor("#007ACC"));
         btnAutoTune.setTextColor(Color.WHITE);
         btnAutoTune.setLayoutParams(pBtn);
-        btnAutoTune.setOnClickListener(v -> executaAutoTuneMecanic());
+        btnAutoTune.setOnClickListener(v -> laTapAtune());
         rAndControaleRtty.addView(btnAutoTune);
         llTopContent.addView(rAndControaleRtty);
 
@@ -1212,7 +1227,7 @@ public class EcranRttyDroid {
 
         threadDecodareRtty = new Thread(() -> {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
-            int sampleRate = 48000;
+            int sampleRate = RATA_AUDIO_RTTY;
             int bufferSize = AudioRecord.getMinBufferSize(sampleRate,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
             if (bufferSize <= 0) bufferSize = 4096;
@@ -1251,6 +1266,7 @@ public class EcranRttyDroid {
                 }
             });
             demod.porneste(sampleRate);
+            istoricAudioRtty.goleste();
             activity.runOnUiThread(this::actualizeazaUiReceptie);
             if (deepRtty != null && deepRtty.isAvailable()) deepRtty.porneste();
 
@@ -1276,6 +1292,7 @@ public class EcranRttyDroid {
                 }
 
                 demod.proceseazaBloc(audioBuffer, read);
+                istoricAudioRtty.adauga(audioBuffer, read);
 
                 com.example.yaesucatcontroladv.deeprtty.DeepRttyReceiver dr = deepRtty;
                 if (modDecoder == DECODER_DEEP && dr != null && dr.isAvailable()) {
@@ -1302,13 +1319,39 @@ public class EcranRttyDroid {
         btnRttyAudioToggle.setBackgroundColor(Color.parseColor("#E65100"));
     }
 
+    /** Tap pe A-TUNE: acord. Dublu tap: si QSY pe frecventa corespondentului (executaQsyAtune). */
+    private void laTapAtune() {
+        long acum = android.os.SystemClock.elapsedRealtime();
+        if (acum - ultimulTapAtune < DUBLU_TAP_MS) {
+            ultimulTapAtune = 0;
+            if (atuneInCurs) qsyDupaAtune = true;   // QSY-ul se face cand termina primul tap
+            else executaQsyAtune();
+            return;
+        }
+        ultimulTapAtune = acum;
+        executaAutoTuneMecanic();
+    }
+
     private void executaAutoTuneMecanic() {
         if (!decodareRttyActiva) {
             Toast.makeText(context, "Start receiving (START) before Auto-Tune.", Toast.LENGTH_SHORT).show();
             return;
         }
+        if (atuneInCurs) return;
+        atuneInCurs = true;
+        qsyDupaAtune = false;
+        qsyFrecventa = null;
+        // In RTTY receptia porneste cu AI0 (fara raspunsuri automate): modul si frecventa se cer
+        // acum, sosesc in StareRadio pana termina FFT-ul de mai jos (~0.3 s).
+        if (radioManager != null && radioManager.isConectat()) {
+            radioManager.trimiteComandaCAT("MD0;");
+            radioManager.trimiteComandaCAT("FA;");
+        }
 
         new Thread(() -> {
+          // CORECTIE: orice exceptie de aici lasa atuneInCurs = true si A-TUNE nu mai raspundea
+          // pana la repornirea aplicatiei; acum se elibereaza si se spune in toast.
+          try {
             final int NUMAR_CADRE_MEDIATE = 8;
             final long PAUZA_INTRE_CADRE_MS = 35;
             float[] magnitudeMediata = null;
@@ -1354,21 +1397,120 @@ public class EcranRttyDroid {
             Activity activity = (Activity) context;
             if (lowerBin != -1 && maxPairScore > 0.002) {
                 double freqBinDeJos = lowerBin * (8000.0 / 512.0);
-                double freqBinDeSus = (lowerBin + shiftBins) * (8000.0 / 512.0);
-                demod.frecventaTunedBaza = demod.regimReverseSoftware ? freqBinDeSus : freqBinDeJos;
+
+                // Care ton e Mark, pe ultimele 5 s (RttyPolarity: duratele - stopul de 1.5 biti e pe
+                // Mark - apoi incadrarea caracterelor). Asa A-TUNE pune singur NORM/REV dupa semnal -
+                // de exemplu in RTTY-U, unde receptia cere REV (FTX-1 nu are decodor intern, citesti
+                // doar aici). Nesigur (semnal scurt/slab): ramane NORM/REV-ul curent, ca inainte.
+                short[] ultimele = istoricAudioRtty.ultimele(5 * RATA_AUDIO_RTTY);
+                // Binurile FFT au 15.6 Hz: tonul de jos se rafineaza la ~1 Hz (discriminator, pentru QSY)
+                double tonJos = RttyQsy.rafineazaTonJos(ultimele, ultimele.length, RATA_AUDIO_RTTY,
+                        freqBinDeJos, RttyDemodulator.SHIFT_HZ);
+                RttyPolarity.Rezultat pol = RttyPolarity.detecteaza(ultimele, ultimele.length,
+                        RATA_AUDIO_RTTY, tonJos, tonJos + RttyDemodulator.SHIFT_HZ);
 
                 if (activity.isFinishing() || activity.isDestroyed()) return;
                 activity.runOnUiThread(() -> {
                     if (activity.isFinishing() || activity.isDestroyed()) return;
+                    boolean rev = pol.markJos != null ? !pol.markJos : demod.regimReverseSoftware;
+                    demod.regimReverseSoftware = rev;
+                    demod.frecventaTunedBaza = rev ? tonJos + RttyDemodulator.SHIFT_HZ : tonJos;
                     sincronizeazaSetariReceptie();
-                    Toast.makeText(context, "Auto-Tune: " + (int) demod.frecventaTunedBaza + " Hz",
-                            Toast.LENGTH_SHORT).show();
+                    String qsy = pregatesteQsy(demod.frecventaTunedBaza);
+                    atuneInCurs = false;
+                    Toast.makeText(context, "Auto-Tune: " + Math.round(demod.frecventaTunedBaza) + " Hz, "
+                                    + (rev ? "REV" : "NORM")
+                                    + (pol.markJos == null ? " (polarity uncertain - signal too short or weak)" : "")
+                                    + qsy,
+                            qsy.isEmpty() ? Toast.LENGTH_SHORT : Toast.LENGTH_LONG).show();
+                    if (qsyDupaAtune) {
+                        qsyDupaAtune = false;
+                        executaQsyAtune();
+                    }
                 });
             } else {
-                activity.runOnUiThread(() ->
-                        Toast.makeText(context, "Signal too weak - tune manually.", Toast.LENGTH_SHORT).show());
+                activity.runOnUiThread(() -> {
+                    atuneInCurs = false;
+                    qsyDupaAtune = false;
+                    Toast.makeText(context, "Signal too weak - tune manually.", Toast.LENGTH_SHORT).show();
+                });
             }
+          } catch (RuntimeException e) {
+            android.util.Log.e("RTTY_ATUNE", "Auto-Tune", e);
+            Activity act = (Activity) context;
+            if (act != null && !act.isFinishing() && !act.isDestroyed()) {
+                act.runOnUiThread(() -> {
+                    atuneInCurs = false;
+                    qsyDupaAtune = false;
+                    Toast.makeText(context, "Auto-Tune error - try again.", Toast.LENGTH_SHORT).show();
+                });
+            }
+          }
         }, "AutoTune-Frecventa").start();
+    }
+
+    /**
+     * Calculeaza (fara sa mute statia) frecventa VFO pentru emisie: Mark-ul semnalului, auzit acum la
+     * markHz, sa ajunga pe 2125 Hz - acolo emisia FSK pleaca exact pe frecventa corespondentului.
+     * Doar cu statia conectata si in RTTY-L / RTTY-U. Intoarce textul pentru toast.
+     */
+    private String pregatesteQsy(double markHz) {
+        qsyFrecventa = null;
+        if (radioManager == null || !radioManager.isConectat()) return "";
+        long dial = StareRadio.getFrecventaHz();
+        char mod = RttyQsy.codMod(StareRadio.getModText());
+        Long noua = RttyQsy.frecventaPentruEmisie(dial, mod, markHz);
+        if (noua == null) return dial > 0 && mod != ' ' ? "\nRadio not in RTTY-L/U - no QSY for TX." : "";
+        if (Math.abs(noua - dial) < RttyQsy.TOLERANTA_HZ) return "\nRadio already on the TX frequency.";
+        qsyFrecventa = noua;
+        qsyDeLa = dial;
+        qsyCalculatLa = android.os.SystemClock.elapsedRealtime();
+        return String.format(java.util.Locale.US, "\nTX: radio to %.3f kHz (%+d Hz) - double-tap A-TUNE.",
+                noua / 1000.0, noua - dial);
+    }
+
+    /** Dublu tap pe A-TUNE: statia pe frecventa calculata, decodorul pe Mark 2125 Hz. */
+    private void executaQsyAtune() {
+        Long noua = qsyFrecventa;
+        if (noua == null || radioManager == null || !radioManager.isConectat()) {
+            Toast.makeText(context, "A-TUNE: nothing to move (radio already on frequency, not in RTTY, or not connected).",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (isTransmittingRtty) {
+            Toast.makeText(context, "A-TUNE: no QSY while transmitting.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        qsyFrecventa = null;
+        if (android.os.SystemClock.elapsedRealtime() - qsyCalculatLa > QSY_VALABIL_MS) {
+            Toast.makeText(context, "A-TUNE result is old - tap A-TUNE again.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        // CORECTIE: in RTTY statia e pe AI0 si nu-si mai anunta singura frecventa - o rotire din buton
+        // dupa A-TUNE nu ajungea in StareRadio. Se cere frecventa acum si se muta doar daca e tot cea
+        // de la calcul (raspunsul vine in ~100 ms; daca nu vine, ramane valoarea veche, ca inainte).
+        final long deLa = qsyDeLa;
+        radioManager.trimiteComandaCAT("FA;");
+        btnAutoTune.postDelayed(() -> {
+            if (radioManager == null || !radioManager.isConectat() || isTransmittingRtty) return;
+            if (StareRadio.getFrecventaHz() != deLa) {
+                Toast.makeText(context, "The radio moved since A-TUNE - tap A-TUNE again.",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            mutaStatiaPentruEmisie(noua);
+        }, 400);
+    }
+
+    private void mutaStatiaPentruEmisie(long noua) {
+        radioManager.trimiteComandaCAT(String.format(java.util.Locale.US, "FA%09d;", noua));
+        StareRadio.setFrecventaHz(noua);
+        // semnalul vine acum cu Mark-ul pe 2125 (si pe NORM, si pe REV - frecventaTunedBaza e Mark-ul)
+        demod.frecventaTunedBaza = RttyQsy.MARK_FSK_HZ;
+        sincronizeazaSetariReceptie();
+        Toast.makeText(context, String.format(java.util.Locale.US,
+                "QSY: %.3f kHz - signal Mark on 2125 Hz, TX on its frequency.", noua / 1000.0),
+                Toast.LENGTH_SHORT).show();
     }
 
     private void proceseazaCodBaudot(int code) {
